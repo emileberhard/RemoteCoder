@@ -1513,14 +1513,18 @@ entrypoint linked above.
     its first touch, including during the settle.
   - `DrawerMotion` owns progress: 1:1 drag, a velocity-carrying spring on
     release, and `isOpen` requests from the current position.
-  - Opening first only reveals the drawer: its rows are captured and shown
-    while the chat stays uncovered. Once the motion rests open,
-    `ConversationDrawer` sets `isSettledOpen`, and only then does `ChatScreen`
-    cover the chat (its `SurfaceVisibility`, composer and file-presentation
-    blocks) and mark the window's drawer open for refresh, warming and the
-    transcript-cover policy. Closing uncovers it at once. Keep gesture-begin
-    work to motion, haptics and the reveal: anything added there delays the
-    first moved frame.
+  - `DrawerPresentation` owns the open state: `isOpen` flips when a drag or
+    request begins, `isSettledOpen` once the motion rests open, and closing
+    clears both. Opening first only reveals the drawer: only the drawer and
+    `ConversationHistoryView` read `isOpen`, so its rows are captured and shown
+    while the chat stays uncovered and `ChatScreen`'s body does not run.
+    `ChatScreen` reads `isSettledOpen` (and `isOpen` only for the persistent
+    sidebar) to cover the chat (its `SurfaceVisibility`, composer and
+    file-presentation blocks) and mark the window's drawer open for refresh,
+    warming and the transcript-cover policy; its open-side effects run in the
+    `DrawerOpenChange` modifier. Closing uncovers it at once. Keep
+    gesture-begin work to motion, haptics and the reveal: anything added there
+    delays the first moved frame.
   - Both panels move in whole device pixels (`pixelAligned`). A sub-pixel
     offset re-rounds UIKit-backed descendants by a pixel per frame, which
     re-wraps or truncates text that fits within a pixel during the slide.

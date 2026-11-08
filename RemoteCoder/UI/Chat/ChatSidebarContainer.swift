@@ -2,8 +2,7 @@ import SwiftUI
 
 struct ChatSidebarContainer<Detail: View, Sidebar: View>: View {
     let isPersistent: Bool
-    @Binding var isOpen: Bool
-    @Binding var isSettledOpen: Bool
+    let presentation: DrawerPresentation
     @ViewBuilder let detail: Detail
     @ViewBuilder let sidebar: Sidebar
 
@@ -15,7 +14,7 @@ struct ChatSidebarContainer<Detail: View, Sidebar: View>: View {
             splitView
         } else {
             NavigationStack {
-                ConversationDrawer(isOpen: $isOpen, isSettledOpen: $isSettledOpen) {
+                ConversationDrawer(presentation: presentation) {
                     detail
                 } sidebar: {
                     sidebar
@@ -38,8 +37,8 @@ struct ChatSidebarContainer<Detail: View, Sidebar: View>: View {
 
     private var columnVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
-            get: { isOpen ? .all : .detailOnly },
-            set: { isOpen = $0 != .detailOnly }
+            get: { presentation.isOpen ? .all : .detailOnly },
+            set: { presentation.isOpen = $0 != .detailOnly }
         )
     }
 }

@@ -4,8 +4,7 @@ import UIKit
 import os
 
 struct ConversationDrawer<Content: View, Sidebar: View>: View {
-    @Binding private var isOpen: Bool
-    @Binding private var isSettledOpen: Bool
+    private let presentation: DrawerPresentation
     private let content: Content
     private let sidebar: Sidebar
 
@@ -19,17 +18,15 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
     @Environment(\.displayScale) private var displayScale
 
     init(
-        isOpen: Binding<Bool>,
-        isSettledOpen: Binding<Bool>,
+        presentation: DrawerPresentation,
         @ViewBuilder content: () -> Content,
         @ViewBuilder sidebar: () -> Sidebar
     ) {
-        _isOpen = isOpen
-        _isSettledOpen = isSettledOpen
+        self.presentation = presentation
         self.content = content()
         self.sidebar = sidebar()
-        _motion = State(initialValue: DrawerMotion(isOpen: isOpen.wrappedValue))
-        _committedOpen = State(initialValue: isOpen.wrappedValue)
+        _motion = State(initialValue: DrawerMotion(isOpen: presentation.isOpen))
+        _committedOpen = State(initialValue: presentation.isOpen)
     }
 
     var body: some View {
@@ -41,12 +38,12 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
                 sidebar
                     .frame(width: width, height: geometry.size.height)
                     .offset(x: pixelAligned(-(reduceMotion ? width : 24) * (1 - progress)))
-                    .accessibilityHidden(!isOpen)
-                    .accessibilityAction(.escape) { isOpen = false }
+                    .accessibilityHidden(!presentation.isOpen)
+                    .accessibilityAction(.escape) { presentation.isOpen = false }
 
                 content
                     .frame(width: geometry.size.width, height: geometry.size.height)
-                    .accessibilityHidden(isOpen)
+                    .accessibilityHidden(presentation.isOpen)
                     .overlay { dismissalSurface(coverage: progress) }
                     .animation(reduceMotion ? nil : .smooth(duration: 0.2)) { surface in
                         surface.clipShape(DrawerSurfaceShape(cornerRadius: progress > 0 ? 32 : 0, safeArea: geometry.safeAreaInsets))
@@ -68,17 +65,14 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
             #endif
         }
         .background { ThemedSheetBackground() }
-        .onChange(of: isOpen) { _, open in
+        .onChange(of: presentation.isOpen) { _, open in
             guard open != committedOpen else { return }
             HapticService.shared.cancelInteraction(owner: hapticOwner)
             committedOpen = open
             motion.move(open: open, animated: !reduceMotion)
         }
-        .onChange(of: committedOpen) { _, open in
-            if !open { isSettledOpen = false }
-        }
         .onChange(of: motion.restingOpen, initial: true) { _, resting in
-            if let resting { isSettledOpen = resting && committedOpen }
+            if let resting { presentation.rest(open: resting) }
         }
         .onDisappear {
             HapticService.shared.cancelInteraction(owner: hapticOwner)
@@ -87,7 +81,7 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
 
     private func dismissalSurface(coverage: CGFloat) -> some View {
         Button {
-            isOpen = false
+            presentation.isOpen = false
         } label: {
             Rectangle()
                 .fill(colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.16))
@@ -96,8 +90,8 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
         .buttonStyle(ResponsiveButtonStyle(feedback: nil, pressedScale: 1, pressedOpacity: 1))
         .accessibilityLabel("Close conversations")
         .accessibilityIdentifier("close-conversations")
-        .accessibilityHidden(!isOpen)
-        .allowsHitTesting(isOpen)
+        .accessibilityHidden(!presentation.isOpen)
+        .allowsHitTesting(presentation.isOpen)
         .opacity(coverage)
         .ignoresSafeArea()
     }
@@ -114,7 +108,7 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
         motion.beginTracking()
         guard !committedOpen else { return }
         committedOpen = true
-        isOpen = true
+        presentation.isOpen = true
     }
 
     private func endDragging(velocity: CGFloat) {
@@ -128,7 +122,7 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
         }
         HapticService.shared.finishInteraction(owner: hapticOwner)
         committedOpen = open
-        isOpen = open
+        presentation.isOpen = open
     }
 
     private func cancelDragging() {
@@ -139,8 +133,8 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
     #if RC_PERF_HARNESS
     private func resetMotion() {
         HapticService.shared.cancelInteraction(owner: hapticOwner)
-        committedOpen = isOpen
-        motion.move(open: isOpen, animated: false)
+        committedOpen = presentation.isOpen
+        motion.move(open: presentation.isOpen, animated: false)
     }
     #endif
 }

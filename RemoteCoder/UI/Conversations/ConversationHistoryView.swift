@@ -8,8 +8,8 @@ import SwiftUI
 struct ConversationHistoryView: View {
     var workspace: ChatWorkspaceModel
     let window: ChatWindowModel
-    let isOpen: Bool
-    let isVisible: Bool
+    let presentation: DrawerPresentation
+    let isWindowAvailable: Bool
     @Binding var layout: ConversationDrawerLayout?
     @Binding var notice: DrawerNotice?
 
@@ -27,6 +27,7 @@ struct ConversationHistoryView: View {
     @State private var pinNameDraft = ""
     @State private var windowActivations = 0
     @State private var capturedWindowActivation: Int?
+    @State private var visibility = SurfaceVisibilityState(isVisible: false)
 
     let onSelect: (ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome
     let onOpenDraft: (UnsentDraftAddress) -> Void
@@ -42,7 +43,7 @@ struct ConversationHistoryView: View {
                     .chatPresentationDiagnostics("sheet-move-agent")
             }
             .safeAreaInset(edge: .top) {
-                if isOpen { ClusterCoverageStrip(coverage: workspace.agentCoverage).padding(.horizontal) }
+                if presentation.isOpen { ClusterCoverageStrip(coverage: workspace.agentCoverage).padding(.horizontal) }
             }
             .alert(pinNamePromptTitle, item: $pinNameIntent) { intent in
                 TextField("Pinned chat name", text: $pinNameDraft)
@@ -93,6 +94,12 @@ struct ConversationHistoryView: View {
                 do { try await Task.sleep(for: DrawerUndo.lifetime) } catch { return }
                 undo = nil
             }
+            .onChange(of: isVisible, initial: true) { _, visible in visibility.isVisible = visible }
+            .environment(\.surfaceVisibility, SurfaceVisibility(visibility))
+    }
+
+    private var isVisible: Bool {
+        isWindowAvailable && presentation.isOpen
     }
 
     private var historyList: some View {

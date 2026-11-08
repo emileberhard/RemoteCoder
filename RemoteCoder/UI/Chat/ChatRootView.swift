@@ -257,7 +257,6 @@ private struct ChatScreen: View {
     #endif
     @State private var isWindowVisible = true
     @State private var chatVisibility = SurfaceVisibilityState(isVisible: true)
-    @State private var drawerVisibility = SurfaceVisibilityState(isVisible: false)
     @State private var presentedQuestion: QuestionAddress?
     /// A question the transcript should reveal once its row or pending preview arrives.
     @State private var awaitedQuestionItemID: String?
@@ -270,8 +269,7 @@ private struct ChatScreen: View {
     @Environment(AppThemeStore.self) private var themeStore
 
     // Drawer state
-    @State private var isHistoryOpen = false
-    @State private var isHistoryDrawerSettled = false
+    @State private var drawerPresentation = DrawerPresentation(isOpen: false)
     @State private var viewID = String(UUID().uuidString.prefix(6))
     @State private var drawerLayout: ConversationDrawerLayout?
     @State private var drawerNotice: DrawerNotice?
@@ -290,8 +288,7 @@ private struct ChatScreen: View {
         eventPresenter?.install(for: screen, perform: perform)
         let surface = ChatSidebarContainer(
             isPersistent: usesPersistentSidebar,
-            isOpen: $isHistoryOpen,
-            isSettledOpen: $isHistoryDrawerSettled
+            presentation: drawerPresentation
         ) {
             mainChatSurface
         } sidebar: {
@@ -335,7 +332,7 @@ private struct ChatScreen: View {
                 screen: screen,
                 find: find,
                 drawerLayout: drawerLayout,
-                isSidebarOpen: isHistoryOpen,
+                isSidebarOpen: drawerPresentation.isOpen,
                 isInspectorOpen: isInspectorPresented,
                 isReviewingChanges: isReviewingChanges,
                 newChat: { openNewChatWithKeyboard() },
@@ -360,15 +357,15 @@ private struct ChatScreen: View {
         #endif
         #if RC_PERF_HARNESS
         .background {
-            PerformanceReplaySidebarPublisher(window: window, isOpen: { isHistoryOpen }, toggle: toggleHistory, select: selectConversation)
+            PerformanceReplaySidebarPublisher(window: window, isOpen: { drawerPresentation.isOpen }, toggle: toggleHistory, select: selectConversation)
         }
         #endif
         return surface
-        .onChange(of: usesPersistentSidebar, initial: true) { _, persistent in isHistoryOpen = persistent }
+        .onChange(of: usesPersistentSidebar, initial: true) { _, persistent in drawerPresentation.isOpen = persistent }
         .onAppear {
             VoiceModeDiagnostics.log("chat screen appeared")
             #if os(iOS)
-            layoutRecorder?.drawerChanged(isHistoryOpen)
+            layoutRecorder?.drawerChanged(drawerPresentation.isOpen)
             #endif
         }
         .onChange(of: ObjectIdentifier(screen), initial: true) { _, _ in
@@ -379,7 +376,6 @@ private struct ChatScreen: View {
             workspace.setWindowVisible(window, isVisible: visible)
         }
         .onChange(of: isChatSurfaceVisible, initial: true) { _, visible in chatVisibility.isVisible = visible }
-        .onChange(of: isDrawerSurfaceVisible, initial: true) { _, visible in drawerVisibility.isVisible = visible }
         .onDisappear {
             window.cancelComposerFocus()
             eventPresenter?.remove(screen)
@@ -389,16 +385,7 @@ private struct ChatScreen: View {
             openingEvent = nil
             event.performIfCurrent(in: window, navigationGeneration: workspace.navigationGeneration, perform: perform)
         }
-        .onChange(of: isHistoryOpen) { _, open in
-            logger.notice("drawer state open=\(open) view=\(viewID) window=\(window.logID)")
-            #if os(iOS)
-            layoutRecorder?.drawerChanged(open)
-            #endif
-            if open {
-                dismissComposerFocus()
-                window.collapseDrawerReveals()
-            }
-        }
+        .modifier(DrawerOpenChange(presentation: drawerPresentation, action: drawerOpenChanged))
         .task(id: HistoryDrawerState(isOpen: isHistorySettledOpen, overlaysTranscript: !usesPersistentSidebar)) {
             workspace.setHistoryDrawerOpen(isHistorySettledOpen, overlaysTranscript: !usesPersistentSidebar, in: window)
         }
@@ -556,7 +543,7 @@ private struct ChatScreen: View {
                     onReturnToParent: returnToAgentParent,
                     onOpenConversations: usesPersistentSidebar ? nil : {
                         dismissComposerFocus()
-                        isHistoryOpen = true
+                        drawerPresentation.isOpen = true
                     },
                     onChooseFolder: openDirectoryPickerFromHeader,
                     onNewChatInHome: startNewChatInHome,
@@ -770,21 +757,28 @@ private struct ChatScreen: View {
         }
     }
 
+    private func drawerOpenChanged(_ open: Bool) {
+        logger.notice("drawer state open=\(open) view=\(viewID) window=\(window.logID)")
+        #if os(iOS)
+        layoutRecorder?.drawerChanged(open)
+        #endif
+        if open {
+            dismissComposerFocus()
+            window.collapseDrawerReveals()
+        }
+    }
+
     private func dismissComposerFocus() {
         window.cancelComposerFocus()
         inputFocused = false
     }
 
     private var historyDrawer: some View {
-        historyDrawerContent.environment(\.surfaceVisibility, SurfaceVisibility(drawerVisibility))
-    }
-
-    private var historyDrawerContent: some View {
         ConversationHistoryView(
             workspace: workspace,
             window: window,
-            isOpen: isHistoryOpen,
-            isVisible: isDrawerSurfaceVisible,
+            presentation: drawerPresentation,
+            isWindowAvailable: isWindowVisible && !isVoiceModePresented,
             layout: $drawerLayout,
             notice: $drawerNotice,
             onSelect: selectConversation,
@@ -848,7 +842,7 @@ private struct ChatScreen: View {
     }
 
     private var isHistorySettledOpen: Bool {
-        isHistoryOpen && (usesPersistentSidebar || isHistoryDrawerSettled)
+        usesPersistentSidebar ? drawerPresentation.isOpen : drawerPresentation.isSettledOpen
     }
 
     private var isHistoryCovering: Bool {
@@ -859,13 +853,9 @@ private struct ChatScreen: View {
         isWindowVisible && !isHistoryCovering && !isVoiceModePresented && !isCameraPresented
     }
 
-    private var isDrawerSurfaceVisible: Bool {
-        isWindowVisible && isHistoryOpen && !isVoiceModePresented
-    }
-
     private func toggleHistory() {
         dismissComposerFocus()
-        isHistoryOpen.toggle()
+        drawerPresentation.isOpen.toggle()
     }
 
     private func toggleInspector() {
@@ -966,7 +956,7 @@ private struct ChatScreen: View {
 
     private func closeHistoryDrawer() {
         guard !usesPersistentSidebar else { return }
-        isHistoryOpen = false
+        drawerPresentation.isOpen = false
     }
 
     private func presentDictationRefusal() {
@@ -980,6 +970,15 @@ private struct ChatScreen: View {
         guard showDirectoryPicker == false else { return }
         dismissComposerFocus()
         showDirectoryPicker = true
+    }
+}
+
+private struct DrawerOpenChange: ViewModifier {
+    let presentation: DrawerPresentation
+    let action: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        content.onChange(of: presentation.isOpen) { _, open in action(open) }
     }
 }
 

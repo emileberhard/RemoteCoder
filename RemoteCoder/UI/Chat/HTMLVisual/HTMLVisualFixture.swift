@@ -14,7 +14,7 @@ struct HTMLVisualFixture: View {
     @State private var snapshotsOnly = ProcessInfo.processInfo.arguments.contains("-html-visual-fixture-snapshots-only")
     @State private var dark = false
     @State private var largeText = false
-    @State private var drawerOpen = false
+    @State private var drawer = DrawerPresentation(isOpen: false)
 
     private static let conservesEnergy = ProcessInfo.processInfo.arguments.contains("-html-visual-fixture-conserve-energy")
     private static let displayScale = HTMLVisualFixtureModel.argument("-html-visual-fixture-scale").flatMap(Double.init)
@@ -26,14 +26,14 @@ struct HTMLVisualFixture: View {
     var body: some View {
         Group {
             #if os(iOS)
-            ConversationDrawer(isOpen: $drawerOpen, isSettledOpen: .constant(false)) {
+            ConversationDrawer(presentation: drawer) {
                 content
             } sidebar: {
                 NavigationStack {
                     List(0..<36, id: \.self) { index in
                         Button("Visual \(index + 1)") {
                             fixture.show(index)
-                            drawerOpen = false
+                            drawer.isOpen = false
                         }
                     }
                     .navigationTitle("Conversations")
@@ -87,7 +87,7 @@ struct HTMLVisualFixture: View {
             .toolbar {
                 #if os(iOS)
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Conversations", systemImage: "clock") { drawerOpen.toggle() }
+                    Button("Conversations", systemImage: "clock") { drawer.isOpen.toggle() }
                         .accessibilityIdentifier("open-conversations")
                 }
                 #endif
