@@ -271,6 +271,7 @@ private struct ChatScreen: View {
 
     // Drawer state
     @State private var isHistoryOpen = false
+    @State private var isHistoryDrawerSettled = false
     @State private var viewID = String(UUID().uuidString.prefix(6))
     @State private var drawerLayout: ConversationDrawerLayout?
     @State private var drawerNotice: DrawerNotice?
@@ -290,7 +291,7 @@ private struct ChatScreen: View {
         let surface = ChatSidebarContainer(
             isPersistent: usesPersistentSidebar,
             isOpen: $isHistoryOpen,
-            onBeginOpening: { dismissComposerFocus() }
+            isSettledOpen: $isHistoryDrawerSettled
         ) {
             mainChatSurface
         } sidebar: {
@@ -395,10 +396,11 @@ private struct ChatScreen: View {
             #endif
             if open {
                 dismissComposerFocus()
+                window.collapseDrawerReveals()
             }
         }
-        .task(id: HistoryDrawerState(isOpen: isHistoryOpen, overlaysTranscript: !usesPersistentSidebar)) {
-            workspace.setHistoryDrawerOpen(isHistoryOpen, overlaysTranscript: !usesPersistentSidebar, in: window)
+        .task(id: HistoryDrawerState(isOpen: isHistorySettledOpen, overlaysTranscript: !usesPersistentSidebar)) {
+            workspace.setHistoryDrawerOpen(isHistorySettledOpen, overlaysTranscript: !usesPersistentSidebar, in: window)
         }
         .background {
             ConversationAgentsProbe(screen: screen, isPaused: scenePhase != .active)
@@ -845,8 +847,12 @@ private struct ChatScreen: View {
         SidebarPresentation.isPersistent(sizeClass: horizontalSizeClass)
     }
 
+    private var isHistorySettledOpen: Bool {
+        isHistoryOpen && (usesPersistentSidebar || isHistoryDrawerSettled)
+    }
+
     private var isHistoryCovering: Bool {
-        isHistoryOpen && !usesPersistentSidebar
+        isHistorySettledOpen && !usesPersistentSidebar
     }
 
     private var isChatSurfaceVisible: Bool {

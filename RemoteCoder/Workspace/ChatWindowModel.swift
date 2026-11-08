@@ -100,13 +100,14 @@ final class ChatWindowModel {
 
     func setHistoryDrawerOpen(_ isOpen: Bool, overlaysTranscript: Bool) {
         historyDrawerOverlaysTranscript = overlaysTranscript
-        if isOpen, !isHistoryDrawerOpen {
-            revealedProjects = []
-            revealsAllDrafts = false
-            revealsAllAutomations = false
-            settledRowLimit = ConversationDrawerArrangement.initialSettledRowLimit
-        }
         isHistoryDrawerOpen = isOpen
+    }
+
+    func collapseDrawerReveals() {
+        revealedProjects = []
+        revealsAllDrafts = false
+        revealsAllAutomations = false
+        settledRowLimit = ConversationDrawerArrangement.initialSettledRowLimit
     }
 
     func reveal(project key: String) {

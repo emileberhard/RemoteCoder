@@ -26,7 +26,7 @@ struct HTMLVisualFixture: View {
     var body: some View {
         Group {
             #if os(iOS)
-            ConversationDrawer(isOpen: $drawerOpen, onBeginOpening: {}) {
+            ConversationDrawer(isOpen: $drawerOpen, isSettledOpen: .constant(false)) {
                 content
             } sidebar: {
                 NavigationStack {

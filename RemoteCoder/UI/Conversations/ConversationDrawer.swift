@@ -5,7 +5,7 @@ import os
 
 struct ConversationDrawer<Content: View, Sidebar: View>: View {
     @Binding private var isOpen: Bool
-    private let onBeginOpening: () -> Void
+    @Binding private var isSettledOpen: Bool
     private let content: Content
     private let sidebar: Sidebar
 
@@ -20,12 +20,12 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
 
     init(
         isOpen: Binding<Bool>,
-        onBeginOpening: @escaping () -> Void,
+        isSettledOpen: Binding<Bool>,
         @ViewBuilder content: () -> Content,
         @ViewBuilder sidebar: () -> Sidebar
     ) {
         _isOpen = isOpen
-        self.onBeginOpening = onBeginOpening
+        _isSettledOpen = isSettledOpen
         self.content = content()
         self.sidebar = sidebar()
         _motion = State(initialValue: DrawerMotion(isOpen: isOpen.wrappedValue))
@@ -74,6 +74,12 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
             committedOpen = open
             motion.move(open: open, animated: !reduceMotion)
         }
+        .onChange(of: committedOpen) { _, open in
+            if !open { isSettledOpen = false }
+        }
+        .onChange(of: motion.restingOpen, initial: true) { _, resting in
+            if let resting { isSettledOpen = resting && committedOpen }
+        }
         .onDisappear {
             HapticService.shared.cancelInteraction(owner: hapticOwner)
         }
@@ -108,7 +114,6 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
         motion.beginTracking()
         guard !committedOpen else { return }
         committedOpen = true
-        onBeginOpening()
         isOpen = true
     }
 
@@ -144,6 +149,7 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
 @Observable
 final class DrawerMotion {
     private(set) var progress: CGFloat
+    private(set) var restingOpen: Bool?
 
     @ObservationIgnored private var dragOrigin: CGFloat?
     @ObservationIgnored private var target: CGFloat
@@ -157,13 +163,14 @@ final class DrawerMotion {
     private static let releaseProjectionSeconds: CGFloat = 0.3
 
     #if RC_PERF_HARNESS
-    var isAtRest: Bool { dragOrigin == nil && displayLink == nil }
+    var isAtRest: Bool { restingOpen != nil }
     #endif
 
     init(isOpen: Bool) {
         let resting: CGFloat = isOpen ? 1 : 0
         progress = resting
         target = resting
+        restingOpen = isOpen
     }
 
     static func restsOpen(progress: CGFloat, velocity: CGFloat) -> Bool {
@@ -172,6 +179,7 @@ final class DrawerMotion {
 
     func beginTracking() {
         stopSettling()
+        restingOpen = nil
         movementSignpost = .drawerMovement()
         dragOrigin = progress
     }
@@ -197,6 +205,7 @@ final class DrawerMotion {
             stopSettling()
             progress = open ? 1 : 0
             target = progress
+            restingOpen = open
         }
     }
 
@@ -211,6 +220,7 @@ final class DrawerMotion {
         if reachedTarget || atRest {
             stopSettling()
             progress = target
+            restingOpen = target == 1
         } else {
             progress = value
             velocity = nextVelocity
@@ -222,8 +232,10 @@ final class DrawerMotion {
         self.velocity = velocity
         guard progress != target else {
             stopSettling()
+            restingOpen = open
             return
         }
+        restingOpen = nil
         guard displayLink == nil else { return }
         if movementSignpost == nil { movementSignpost = .drawerMovement() }
         let signposter = AppPerformanceDiagnostics.pointsOfInterest

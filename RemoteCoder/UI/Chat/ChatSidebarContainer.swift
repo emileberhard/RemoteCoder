@@ -3,7 +3,7 @@ import SwiftUI
 struct ChatSidebarContainer<Detail: View, Sidebar: View>: View {
     let isPersistent: Bool
     @Binding var isOpen: Bool
-    let onBeginOpening: () -> Void
+    @Binding var isSettledOpen: Bool
     @ViewBuilder let detail: Detail
     @ViewBuilder let sidebar: Sidebar
 
@@ -15,7 +15,7 @@ struct ChatSidebarContainer<Detail: View, Sidebar: View>: View {
             splitView
         } else {
             NavigationStack {
-                ConversationDrawer(isOpen: $isOpen, onBeginOpening: onBeginOpening) {
+                ConversationDrawer(isOpen: $isOpen, isSettledOpen: $isSettledOpen) {
                     detail
                 } sidebar: {
                     sidebar
