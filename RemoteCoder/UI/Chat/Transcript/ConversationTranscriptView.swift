@@ -47,7 +47,6 @@ struct ConversationTranscriptView: View {
                     ConversationAddress(hostID: screen.hostID, threadID: $0)
                 })
                 #endif
-                .transcriptConversationTransition()
         }
         .environment(\.openURL, openURLAction)
         .environment(\.agentConversationOpener, agentOpener)
@@ -63,7 +62,6 @@ struct ConversationTranscriptView: View {
             }
             agentOpener.hostID = screen.hostID
         }
-        .transcriptConversationAnimation(identity: transcriptIdentity)
         .onAppear {
             screen.markTranscriptFirstAppear()
         }

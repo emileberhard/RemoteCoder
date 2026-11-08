@@ -1317,9 +1317,10 @@ Only user-owned geometry movement leaves following. Tracking without displacemen
 keeps it; layout changes do not change follow mode. No single automatic update
 mounts the whole transcript. An explicit row request prioritizes its own target
 and waits for its current measurement before positioning.
-The transcript owns viewport and bottom-bar heights. Transcript identities
-crossfade over 0.2 seconds on iOS, including under Reduce Motion; Mac switches
-replace content instantly. Send requests animate; find and reveal are instant.
+The transcript owns viewport and bottom-bar heights. A new transcript identity
+replaces the content instantly on both platforms: on iOS a crossfade kept both
+transcripts animating on the main thread while the drawer closed over them.
+Send requests animate; find and reveal are instant.
 
 Each retained `ConversationSession` owns its main-actor reading position and
 follow mode. The recent presentation carries a weak reference to the session,

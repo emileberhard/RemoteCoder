@@ -60,10 +60,6 @@ extension View {
 
     func transcriptHorizontalScrollIndicators() -> some View { scrollIndicators(.automatic) }
 
-    func transcriptConversationTransition() -> some View { transition(.identity) }
-
-    func transcriptConversationAnimation(identity: String) -> some View { self }
-
     func codeBlockActions(code: String, language: String?) -> some View {
         modifier(CodeBlockActions(code: code, language: language))
     }

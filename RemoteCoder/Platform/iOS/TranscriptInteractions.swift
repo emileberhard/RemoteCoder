@@ -73,10 +73,6 @@ extension View {
 
     func transcriptHorizontalScrollIndicators() -> some View { scrollIndicators(.hidden) }
 
-    func transcriptConversationTransition() -> some View { transition(.opacity) }
-
-    func transcriptConversationAnimation(identity: String) -> some View { animation(.smooth(duration: 0.2), value: identity) }
-
     func codeBlockActions(code: String, language: String?) -> some View { self }
 
     func codeBlockDragSource(_ code: String) -> some View { self }
