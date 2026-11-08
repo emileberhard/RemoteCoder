@@ -95,7 +95,7 @@ struct ConversationHistoryView: View {
                 undo = nil
             }
             .task {
-                for await restsClosed in Observations({ @MainActor [presentation] in presentation.restingOpen == false })
+                for await restsClosed in Observations({ @MainActor [presentation] in presentation.isSettledClosed })
                 where restsClosed {
                     prepareForOpening()
                 }
