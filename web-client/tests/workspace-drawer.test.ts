@@ -507,6 +507,8 @@ test("schema 5 pin, rename and settlement undo use the owning host without coupl
     threadId: "shared",
     name: "My name",
   });
+  expect(rows(workspace).find((row) => row.address.threadId === "shared")?.title).toBe("Conversation");
+  harness.emit("thread/name/updated", { threadId: "shared", threadName: "My name" });
   expect(rows(workspace).find((row) => row.address.threadId === "shared")?.title).toBe("My name");
   const undo = workspace.settleConversations([address]);
   expect(workspace.conversationMarks()?.marks?.threads.shared?.pinned).toBe(false);
@@ -522,6 +524,7 @@ test("schema 5 pin, rename and settlement undo use the owning host without coupl
   ]);
   workspace.unpinConversation(address);
   await workspace.renameConversation(address, "Unpinned name");
+  harness.emit("thread/name/updated", { threadId: "shared", threadName: "Unpinned name" });
   expect(rows(workspace).find((row) => row.address.threadId === "shared")?.title).toBe("Unpinned name");
 });
 

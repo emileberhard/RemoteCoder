@@ -434,13 +434,14 @@ test("schema 5 pins use conversation titles for sorting and search, with unknown
     },
   );
   const pinned = project([state]).sections.find((section) => section.kind === "pinned")?.rows;
-  expect(pinned?.map((row) => row.title)).toEqual(["Apple", "Unknown conversation", "Zebra"]);
+  expect(pinned?.map((row) => row.title)).toEqual(["Apple", "Zebra", undefined]);
   expect(pinned?.find((row) => row.address.threadId === "missing")).toMatchObject({
     isLoading: false,
     isUnread: null,
   });
   expect(ids(project([state], { query: "zebra" }))).toEqual(["a"]);
   expect(ids(project([state], { query: "ignored legacy" }))).toEqual([]);
+  expect(ids(project([state], { query: "unknown conversation" }))).toEqual([]);
   for (const row of project([state])
     .sections.flatMap((section) => section.rows)
     .filter((r) => r.address.threadId !== "missing"))

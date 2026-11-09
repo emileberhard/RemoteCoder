@@ -9,7 +9,7 @@ import { type ChatCommand, type ChatWindowActions, chatCommands } from "./chat-c
 type Entry = {
   key: string;
   icon: ReactNode;
-  title: string;
+  title: string | undefined;
   detail: string;
   subtitle?: string;
   current?: boolean;
@@ -85,7 +85,7 @@ export function CommandPalette({ actions, close }: { actions: ChatWindowActions;
     return [...conversations, ...folders, ...models, ...commands];
   });
   const [candidates] = useState(() =>
-    entries.map((entry, index) => ({ id: index, title: entry.title, detail: entry.detail })),
+    entries.map((entry, index) => ({ id: index, title: entry.title ?? "", detail: entry.detail })),
   );
   const results = useMemo(() => commandPaletteResults(query, candidates, resultLimit), [query, candidates]);
   const active = Math.min(selected, Math.max(results.length - 1, 0));
@@ -157,7 +157,7 @@ export function CommandPalette({ actions, close }: { actions: ChatWindowActions;
             >
               <span className="palette-icon">{entry.icon}</span>
               <span className="palette-text">
-                <span>{entry.title}</span>
+                <span>{entry.title ?? "Unknown conversation"}</span>
                 {entry.subtitle && <small>{entry.subtitle}</small>}
               </span>
               {entry.current && <Check size={15} aria-label="Current" />}

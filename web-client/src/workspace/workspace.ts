@@ -931,20 +931,11 @@ export class Workspace {
     const trimmed = name.trim();
     if (!trimmed) throw new Error("Enter a conversation name");
     const host = this.hosts.get(address);
-    const priorName = host.threads.find((thread) => thread.id === address.threadId)?.name;
     await host.rpc.call(
       "thread/name/set",
       { threadId: address.threadId, name: trimmed },
       { signal: host.controller.signal },
     );
-    if (
-      this.hosts.present(host) &&
-      host.threads.find((thread) => thread.id === address.threadId)?.name === priorName
-    )
-      this.event(host.target, {
-        method: "thread/name/updated",
-        params: { threadId: address.threadId, threadName: trimmed },
-      });
   }
   async regenerateTitle(address = this.state.selected) {
     if (!address) return;

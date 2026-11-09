@@ -95,7 +95,7 @@ export function ConversationRow({
           </span>
         </span>
         <span className="history-row-top">
-          <span className="history-title">{row.title}</span>
+          <span className="history-title">{row.title ?? "Unknown conversation"}</span>
           {row.isLoading && <span className="row-spinner" role="progressbar" aria-label="Loading" />}
           {row.timestamp !== null && <small className="history-age">{age(row.timestamp)}</small>}
         </span>
