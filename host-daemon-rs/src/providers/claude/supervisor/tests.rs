@@ -3845,9 +3845,12 @@ async fn replace_runtime(agent: &ClaudeSupervisor) -> tokio::process::Child {
 }
 
 async fn dead_runtime(agent: &ClaudeSupervisor) {
-    let (runtime, mut child) = placeholder_runtime(&request(QUEUE_THREAD, false)).await;
+    let (mut runtime, mut child) = placeholder_runtime(&request(QUEUE_THREAD, false)).await;
     child.kill().await.unwrap();
     child.wait().await.unwrap();
+    let (writer, reader) = tokio::io::duplex(64);
+    drop(reader);
+    runtime.input = InputWriter::spawn(writer);
     agent
         .runtimes
         .lock()
@@ -3875,6 +3878,7 @@ async fn an_input_written_before_its_process_died_settles_from_the_session_trans
         let (home, agent, _events, _group, mut replaced) = queue_agent().await;
         replaced.kill().await.unwrap();
         replaced.wait().await.unwrap();
+        dead_runtime(&agent).await;
         queue(&agent, "first").await;
         queue(&agent, "second").await;
         if recorded {
