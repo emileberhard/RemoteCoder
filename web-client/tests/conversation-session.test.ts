@@ -156,6 +156,25 @@ test("Claude history uses its scoped content route, reads its gateway queue and 
   expect(workspace.getSnapshot().error).toBeUndefined();
 });
 
+test("A held Claude queue exposes its pause reason with its entries", async () => {
+  const { workspace, harness } = await setupClaude();
+  const previous = harness.handler;
+  const entry = {
+    id: "q1",
+    clientUserMessageId: "q1",
+    input: [{ type: "text" as const, text: "Later", text_elements: [] }],
+  };
+  harness.handler = (method, params) =>
+    method === "thread/queue/list"
+      ? { data: [entry], nextCursor: null, hold: { reason: "refused", message: "Start refused" } }
+      : previous?.(method, params);
+  await workspace.selectConversation({ hostId: "mini", threadId: "claude_owned" });
+  expect(workspace.selectedConversation?.queue).toEqual({
+    status: "ready",
+    value: { entries: [entry], hold: "Start refused" },
+  });
+});
+
 test("Claude checkpoint markers reject already included delayed frames and admit their exact continuation", async () => {
   const { workspace, harness } = await setupClaude();
   const pending = deferred<unknown>();

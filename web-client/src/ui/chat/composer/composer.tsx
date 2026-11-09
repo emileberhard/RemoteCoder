@@ -121,9 +121,12 @@ export function Composer({
   return (
     <div className="composer-dock">
       <div className="composer-width">
-        {conversation?.queue.status === "ready" && conversation.queue.value.length > 0 && (
+        {conversation?.queue.status === "ready" && conversation.queue.value.entries.length > 0 && (
           <div className="queued-messages">
-            {conversation.queue.value.map((entry) => (
+            {conversation.queue.value.hold && (
+              <p className="queue-hold">Paused: {conversation.queue.value.hold}</p>
+            )}
+            {conversation.queue.value.entries.map((entry) => (
               <div key={entry.id}>
                 <Clock size={13} />
                 <span>{inputText(entry.input as { type: string; text?: string }[])}</span>

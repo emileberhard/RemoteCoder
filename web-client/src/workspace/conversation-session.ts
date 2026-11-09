@@ -57,7 +57,7 @@ type ConversationState = {
   historyReloadRequired: boolean;
   activeTurnId: string | null | undefined;
   questions: Load<Questions>;
-  queue: Load<QueuedSubmission[]>;
+  queue: Load<{ entries: QueuedSubmission[]; hold: string | null }>;
   usage?: ConversationTokenUsage;
   requests: RequestCard[];
   diff?: string;
@@ -577,7 +577,14 @@ export class ConversationSession {
         conversation.queueRead !== read
       )
         return;
-      conversation.queue = { status: "ready", value: array(result.data, 50) as QueuedSubmission[] };
+      const hold = result.hold === undefined || result.hold === null ? null : object(result.hold).message;
+      conversation.queue = {
+        status: "ready",
+        value: {
+          entries: array(result.data, 50) as QueuedSubmission[],
+          hold: typeof hold === "string" ? hold : null,
+        },
+      };
     } catch (error) {
       if (
         !controller.signal.aborted &&
