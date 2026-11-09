@@ -124,29 +124,29 @@ struct ConversationQueueTests: ConversationHistoryFixtures {
         #expect(ConversationProjection.project(state).messages.last?.delivery == .unconfirmed)
     }
 
-    @Test func aHeldQueueExplainsItsQueuedRowsWithoutReplacingTheirOwnErrors() throws {
+    @Test func aHeldQueueExplainsItselfOnceOnItsFirstLocalRowThatHasNoErrorOfItsOwn() throws {
         var state = try runningState()
         let first = ChatMessage(role: .user, text: "First")
         let second = ChatMessage(role: .user, text: "Second")
-        state.submitToQueue(first, input: first.text)
-        state.submitToQueue(second, input: second.text)
-        state.queued(first.id, submission: queued(first, as: "q1"))
-        state.queued(second.id, submission: queued(second, as: "q2"))
-        _ = state.queueActionFailed(second.id, reason: "Open in another client")
+        let third = ChatMessage(role: .user, text: "Third")
+        for (message, id) in [(first, "q1"), (second, "q2"), (third, "q3")] {
+            state.submitToQueue(message, input: message.text)
+            state.queued(message.id, submission: queued(message, as: id))
+        }
+        _ = state.queueActionFailed(first.id, reason: "Open in another client")
+        let remote = CodexAppServerV2.QueuedSubmission(id: "q0", clientUserMessageId: "other-device")
+        let entries = [remote, queued(first, as: "q1"), queued(second, as: "q2"), queued(third, as: "q3")]
         var memo = ConversationProjection.Memo()
         _ = ConversationProjection.project(state, memo: &memo)
 
-        let held = state.beginQueueRead()
-        state.applyQueue(listing([queued(first, as: "q1"), queued(second, as: "q2")], hold: "Start refused"),
-                         read: held, threadIsIdle: true)
+        state.applyQueue(listing(entries, hold: "Start refused"), read: state.beginQueueRead(), threadIsIdle: true)
         let paused = ConversationProjection.project(state, memo: &memo).messages
-        #expect(paused.map(\.delivery) == [nil, .queued, .queued])
-        #expect(paused.map(\.deliveryError) == [nil, "Paused: Start refused", "Open in another client"])
+        #expect(paused.map(\.delivery) == [nil, .queued, .queued, .queued])
+        #expect(paused.map(\.deliveryError) == [nil, "Open in another client", "Paused: Start refused", nil])
 
-        let released = state.beginQueueRead()
-        state.applyQueue(listing([queued(first, as: "q1"), queued(second, as: "q2")]), read: released, threadIsIdle: false)
+        state.applyQueue(listing(entries), read: state.beginQueueRead(), threadIsIdle: false)
         #expect(ConversationProjection.project(state, memo: &memo).messages.map(\.deliveryError)
-            == [nil, nil, "Open in another client"])
+            == [nil, "Open in another client", nil, nil])
     }
 
     @Test func anUncertainAddIsConfirmedByItsClientMessageID() throws {

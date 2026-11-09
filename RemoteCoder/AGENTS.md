@@ -670,7 +670,10 @@ entrypoint linked above.
   Stop with nothing pending ends the work; retirement cancels the continuation.
 - A queued message lives in its thread's server-owned queue, never in an
   app-side execution queue: Codex's native queue, or the gateway's Claude queue
-  where `host/info.claudeQueue` is true (`ChatTargetModel.supportsQueue`). Its submission carries a queue receipt;
+  where `host/info.claudeQueue` is true (`ChatTargetModel.supportsQueue` for the
+  composer; queue reads and the Stop continuation resolve `host/info` first through
+  `queueSupport`, and a host known not to queue Claude unconfirms its receipts).
+  Its submission carries a queue receipt;
   its row stays in its own `local-` turn below every turn that starts before it
   (`ConversationState.ensureTurn`) and reads "Queueing", "Queued", "Not sent"
   or "Unconfirmed". Codex's `thread/queue/add` is not idempotent, so an
@@ -683,7 +686,8 @@ entrypoint linked above.
   `clientId` moves the row into its turn as an ordinary first message. Stop
   pauses the queue (both providers skip dispatch after an interrupt); a queued row
   offers Send Now (`thread/queue/start`, only while no turn runs) and Remove
-  from Queue (`thread/queue/delete`).
+  from Queue (`thread/queue/delete`). A held Claude queue's reason reads
+  "Paused: …" once, on the first listed local row without its own error.
 - A delivery failure stays on its own row: the label carries the submission's
   `deliveryError`, including a failed Send Now or Remove from Queue on a queued
   row. The transcript has no separate error rows; restore drops the local

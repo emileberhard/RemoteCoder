@@ -240,6 +240,11 @@ struct ConversationState: Sendable {
         let base: HistoryWindow?
     }
 
+    struct QueueHoldNote: Equatable, Sendable {
+        let messageID: UUID
+        let message: String
+    }
+
     struct QueueRead: Sendable {
         let owner: UUID
         let order: UInt64
@@ -299,7 +304,7 @@ struct ConversationState: Sendable {
     private var appliedTailRead: UInt64 = 0
     private var startedQueueReads: UInt64 = 0
     private var appliedQueueRead: UInt64 = 0
-    private(set) var queueHold: String?
+    private(set) var queueHold: QueueHoldNote?
     var questions: QuestionInventory?
     var questionDismissals: [String: QuestionDismissal]?
     private(set) var lastTurnCompletedAt: Int64?
@@ -506,10 +511,6 @@ struct ConversationState: Sendable {
     mutating func applyQueue(_ listing: CodexAppServerV2.QueueListing, read: QueueRead, threadIsIdle: Bool) {
         guard read.owner == ownerID, read.order > appliedQueueRead else { return }
         appliedQueueRead = read.order
-        if queueHold != listing.hold?.message {
-            queueHold = listing.hold?.message
-            revision += 1
-        }
         let listed = Dictionary(listing.entries.map { ($0.clientUserMessageId, $0.id) }, uniquingKeysWith: { first, _ in first })
         var changed = false
         for (id, pending) in submissions where pending.queue != nil {
@@ -525,6 +526,15 @@ struct ConversationState: Sendable {
                 submissions[id]?.deliveryError = "The queue no longer lists this message."
                 changed = true
             }
+        }
+        let hold = listing.hold.flatMap { hold in
+            listing.entries.compactMap { UUID(uuidString: $0.clientUserMessageId) }
+                .first { submissions[$0]?.status == .queued && submissions[$0]?.deliveryError == nil }
+                .map { QueueHoldNote(messageID: $0, message: hold.message) }
+        }
+        if queueHold != hold {
+            queueHold = hold
+            revision += 1
         }
         if changed { markPersistedChange() }
     }
