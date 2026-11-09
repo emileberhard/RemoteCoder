@@ -1,6 +1,7 @@
 #if DEBUG
 import SwiftUI
 
+@MainActor
 private enum RouterAccountFixture {
     static let now = Date.now.timeIntervalSince1970
 
