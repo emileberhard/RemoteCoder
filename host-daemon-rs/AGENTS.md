@@ -1702,37 +1702,56 @@ Claude. The `RC_CLAUDE_*` settings are in
   `queuedSubmissionId`. Growth beyond 1 MiB of encoded input per message
   (`claude/message`'s bound), 100 messages or 8 MiB per thread, 256 threads or
   32 MiB in total is refused with typed `capacity` (`-32001`); nothing is
-  evicted. `host/info.claudeQueue` advertises the path.
+  evicted. `host/info.claudeQueue` advertises the path only once the gateway's
+  Claude notification ingress runs, and `thread/queue/add` is refused with
+  `queueUnsupported` until then. A store read that fails before any write is a
+  definite `-32603`; only a write whose outcome is unknown returns
+  `queueChangeUncertain`. Occupancy reads (`has`, `threads`) use a short
+  in-memory lock and never wait on another thread's file transaction.
   - `thread/queue/add` is idempotent for the same id and input. A different
     input under a queued id, or an id the thread already ran, is running or
     carries in restart recovery, is refused with `-32009` and no new entry.
     `thread/queue/list` pages entries (1–100, an opaque string cursor) and adds
     `hold {message}` while held.
     `thread/queue/start` is Send Now: it starts the named entry, or the first,
-    only while the thread is idle, and answers like Codex
-    (`-32600` "thread already has an active or pending turn" otherwise). It
-    bypasses a Stop and a hold. `thread/queue/delete` returns `{deleted}`; an
+    only while the thread is idle, has no undecided written entry and has no
+    pending restart recovery, and answers like Codex (`-32600` "thread already
+    has an active or pending turn" otherwise). It bypasses a Stop and a hold. `thread/queue/delete` returns `{deleted}`; an
     entry whose start is in flight stays and returns false.
-  - Every committed change emits `thread/queue/changed`, which is stored and
-    routed like other scoped Claude content.
-  - The supervisor requests a drain when a turn completes or its stream fails.
-    The drain owner (`src/gateway/claude_queue.rs`) starts after Claude restart
-    recovery inside the same task slot, so shutdown aborts it, and it runs at
-    most four threads at a time with a 30 s sweep for deferred work. It admits
-    the head through the ordinary `turn/start` admission, dispatch validation
-    and turn-context capture. A head starts only when the thread has no turn,
-    no start reservation and no unconsumed input, so it never folds into a
-    running or agent-initiated turn, and it runs with the thread's recorded
-    model, effort, Fast and cwd. A takeover, compaction or start reservation
-    defers it without counting a failure.
-  - Starting claims the entry under the lifecycle lock. It leaves the queue
-    exactly when its turn opened or the runtime holds its input; otherwise it
-    returns to the queue. A claim found later is settled from the session
-    transcript: a recorded id is dropped, any other is requeued.
-  - Stop (`Parent.stopped`) pauses the queue. A refusal that will persist
-    (invalid params, capacity or an unavailable provider), or three
-    consecutive start failures, holds it and sends one push. A user turn,
-    typed or queue-started, clears the Stop and the hold.
+  - A change emits `thread/queue/changed` only when the listed entries or the
+    hold change; delivery state and failure counts are not listed. It is
+    stored and routed like other scoped Claude content.
+  - The supervisor owns drain coalescing: a turn's completion or stream failure
+    requests a drain. The drain owner (`src/gateway/claude_queue.rs`) runs
+    beside Claude restart recovery in the same task slot, so shutdown aborts
+    it, and never waits for recovery as a whole: each thread drains only once
+    its own restart item is gone, and recovery's end sweeps every queue. It
+    runs at most four threads at a time with a 30 s sweep. It admits the head
+    through the ordinary `turn/start` admission, dispatch validation and
+    turn-context capture. A head starts only when the thread has no turn, no
+    start reservation and no unconsumed input, so it never folds into a running
+    or agent-initiated turn, and it runs with the thread's recorded model,
+    effort, Fast and cwd from one owner (`recorded_selection`), which also
+    names the ledger's cwd. A takeover, compaction or start reservation returns
+    the drain without counting a failure; the next turn end or sweep retries,
+    and the journal records `queued_start_deferred` only when its reason
+    changes.
+  - Each entry has a delivery state: `queued`, `starting` (claimed under the
+    lifecycle lock) and `written` (persisted just before its input reaches the
+    CLI). An entry leaves the queue when its turn opened or the runtime holds
+    its input. A `starting` entry always returns to `queued`. A `written`
+    entry is never requeued while a process that could consume it lives; once
+    none does, the session transcript decides: a recorded id is dropped, any
+    other is requeued. A Stop during the start therefore never runs the
+    message twice.
+  - Stop (`Parent.stopped`) pauses the queue. Each head entry counts its own
+    consecutive start refusals, only for refusals that left it queued; a new
+    head starts at zero. A refusal that will persist (invalid params, capacity
+    or an unavailable provider), or the third counted failure, holds the queue
+    and sends one push. The hold's message is fixed, sentence-case copy for its
+    cause, which clients show as `Paused: <message>`; the raw error goes to the
+    `queued_start_failed` and `queued_held` journal lines. A user turn, typed or
+    queue-started, clears the Stop and the hold.
   - An unheld, non-empty queue counts as pending work, so a job thread is not
     closed as quiescent while it would still run. A queued add records its
     installation as the `take_photo` driver, which the queue-started turn keeps.

@@ -2101,7 +2101,10 @@ and is reported through the same journal, APNs and Live Activity path while the
 app is away. On `claude_` threads the gateway owns the queue (`QueuedMessages`
 beside the thread's identity index) and its drain owner starts each head
 through the ordinary `turn/start` admission and capture path, so the same
-attribution and reporting apply; `host/info.claudeQueue` advertises it.
+attribution and reporting apply; `host/info.claudeQueue` advertises it once the
+drain owner can run. Each thread's drain waits only for that thread's restart
+recovery, and an entry whose input was written is settled from the session
+transcript, never requeued blindly.
 `thread/queue/changed` is stored like other thread notifications; clients read
 `thread/queue/list` after it, on reconnect and after relaunch.
 `host-daemon-rs/AGENTS.md` (*Gateway RPCs*, and *Claude provider* for the
