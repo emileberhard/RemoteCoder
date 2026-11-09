@@ -1508,7 +1508,9 @@ entrypoint linked above.
 - With marks schema 5, pins are flags and titles come from the provider thread's
   `name`, then its `preview`; Rename uses `thread/name/set`, and Regenerate Name
   is available on pinned and unpinned rows. `thread/name/updated` retitles the
-  cached row on its own host. Below schema 5 the pin name remains the title,
+  cached row on its own host, so producers such as automations name their threads
+  through `thread/name/set` instead of teaching the app their prompt format.
+  Below schema 5 the pin name remains the title,
   Rename edits that name, and Regenerate Name is available only when unpinned.
 - There is no close button: the scrim tap or a leftward drag closes the drawer.
 - `ConversationDrawer` is gesture-owned, not a scroll view.
