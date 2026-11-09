@@ -75,6 +75,11 @@ impl Gateway {
                 .record_unretained(),
         };
         self.review.ingest(message, recorded.is_new);
+        if recorded.is_new && method == "thread/name/updated" {
+            self.live_activity_title_revision
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.refresh_live_activity().await;
+        }
         if recorded.is_new
             && let Some(thread_id) = thread_id
         {

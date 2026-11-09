@@ -9,9 +9,10 @@ use tokio::sync::Semaphore;
 
 mod migration;
 
-pub(crate) const SCHEMA_VERSION: u32 = 4;
-pub(crate) const FILE_NAME: &str = "conversation-marks.v4.json";
-pub(crate) const PRIOR_FILE_NAMES: [&str; 3] = [
+pub(crate) const SCHEMA_VERSION: u32 = 5;
+pub(crate) const FILE_NAME: &str = "conversation-marks.v5.json";
+pub(crate) const PRIOR_FILE_NAMES: [&str; 4] = [
+    "conversation-marks.v4.json",
     "conversation-marks.v3.json",
     "conversation-marks.v2.json",
     "conversation-marks.json",
@@ -84,8 +85,10 @@ pub(crate) struct ThreadMarks {
     pub seen_through: Option<i64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub marked_unread: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pin_name: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_name: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purpose: Option<Purpose>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,7 +103,8 @@ impl ThreadMarks {
     fn is_empty(&self) -> bool {
         self.seen_through.is_none()
             && !self.marked_unread
-            && self.pin_name.is_none()
+            && !self.pinned
+            && !self.manual_name
             && self.purpose.is_none()
             && self.settlement.is_none()
             && self.done_through.is_none()
@@ -134,7 +138,8 @@ pub(crate) enum Change {
     },
     Pin {
         thread_id: String,
-        name: String,
+        #[serde(default)]
+        name: Option<String>,
     },
     Unpin {
         thread_id: String,
@@ -191,7 +196,10 @@ impl Change {
         {
             view.validate()?;
         }
-        if let Self::Pin { name, .. } = self {
+        if let Self::Pin {
+            name: Some(name), ..
+        } = self
+        {
             ensure!(
                 !name.trim().is_empty() && name.len() <= MAXIMUM_PIN_NAME_BYTES,
                 "pin name must be nonempty and at most {MAXIMUM_PIN_NAME_BYTES} bytes"
@@ -220,6 +228,13 @@ pub(crate) struct Marks {
     pub threads: BTreeMap<String, ThreadMarks>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PendingRename {
+    pub name: String,
+    pub revision: u64,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Document {
@@ -229,6 +244,8 @@ struct Document {
     threads: BTreeMap<String, ThreadMarks>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pending_native_unarchive: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pending_renames: BTreeMap<String, PendingRename>,
 }
 
 impl Document {
@@ -239,6 +256,7 @@ impl Document {
             read_baseline: now,
             threads: BTreeMap::new(),
             pending_native_unarchive: BTreeSet::new(),
+            pending_renames: BTreeMap::new(),
         }
     }
 
@@ -265,6 +283,16 @@ impl Document {
         for id in &self.pending_native_unarchive {
             validate_thread_id(id)?;
         }
+        for (id, pending) in &self.pending_renames {
+            validate_thread_id(id)?;
+            ensure!(
+                pending.revision > 0
+                    && pending.revision <= self.revision
+                    && !pending.name.trim().is_empty()
+                    && pending.name.len() <= MAXIMUM_PIN_NAME_BYTES,
+                "invalid pending rename"
+            );
+        }
         Ok(())
     }
 }
@@ -274,6 +302,7 @@ struct Transition<'a> {
     revision: u64,
     touched: BTreeMap<String, ThreadMarks>,
     baseline_moved: bool,
+    pending_changed: bool,
 }
 
 impl<'a> Transition<'a> {
@@ -287,6 +316,7 @@ impl<'a> Transition<'a> {
             revision,
             touched: BTreeMap::new(),
             baseline_moved: false,
+            pending_changed: false,
         })
     }
 
@@ -364,16 +394,25 @@ impl<'a> Transition<'a> {
                 }
             }
             Change::Pin { thread_id, name } => {
-                let name = name.trim().to_string();
-                self.update(&thread_id, |marks| marks.pin_name = Some(name));
+                if let Some(name) = name {
+                    self.document.pending_renames.insert(
+                        thread_id.clone(),
+                        PendingRename {
+                            name: name.trim().to_string(),
+                            revision: self.revision,
+                        },
+                    );
+                    self.pending_changed = true;
+                }
+                self.update(&thread_id, |marks| marks.pinned = true);
             }
-            Change::Unpin { thread_id } => self.update(&thread_id, |marks| marks.pin_name = None),
+            Change::Unpin { thread_id } => self.update(&thread_id, |marks| marks.pinned = false),
             Change::SetPurpose { thread_id, purpose } => {
                 self.update(&thread_id, |marks| marks.purpose = Some(purpose))
             }
             Change::Settle { thread_id, through } => self.update(&thread_id, |marks| {
                 marks.mark_read_through(through);
-                marks.pin_name = None;
+                marks.pinned = false;
                 marks.settlement = Some(Settlement {
                     state: SettlementState::Settled,
                     through,
@@ -394,7 +433,7 @@ impl<'a> Transition<'a> {
     }
 
     fn finish(self) -> (Option<Marks>, bool) {
-        let changed = !self.touched.is_empty() || self.baseline_moved;
+        let changed = !self.touched.is_empty() || self.baseline_moved || self.pending_changed;
         if changed {
             self.document.revision = self.revision;
         }
@@ -476,6 +515,7 @@ impl ConversationMarksStore {
     pub(crate) async fn forget(&self, thread_id: String, now: i64) -> Result<Option<Marks>> {
         validate_thread_id(&thread_id)?;
         self.transaction(now, move |document, created| {
+            let pending_removed = document.pending_renames.remove(&thread_id).is_some();
             let mut transition = Transition::new(document)?;
             transition.update(&thread_id, |marks| {
                 *marks = ThreadMarks {
@@ -484,7 +524,7 @@ impl ConversationMarksStore {
                 }
             });
             let (delta, changed) = transition.finish();
-            Ok((delta, changed || created))
+            Ok((delta, changed || pending_removed || created))
         })
         .await
     }
@@ -499,7 +539,7 @@ impl ConversationMarksStore {
         self.transaction(now, move |document, created| {
             let marks = document.threads.get(&thread_id);
             if marks.is_some_and(|marks| {
-                marks.pin_name.is_some()
+                marks.pinned
                     || marks.purpose.is_some()
                     || through.is_some_and(|through| {
                         matches!(marks.settlement, Some(Settlement {
@@ -513,6 +553,89 @@ impl ConversationMarksStore {
             transition.update(&thread_id, |marks| marks.done_through = through);
             let (delta, changed) = transition.finish();
             Ok((delta, changed || created))
+        })
+        .await
+    }
+
+    pub(crate) async fn pending_renames(
+        &self,
+        now: i64,
+    ) -> Result<BTreeMap<String, PendingRename>> {
+        if self.location.is_none() {
+            return Ok(BTreeMap::new());
+        }
+        self.transaction(now, |document, created| {
+            Ok((document.pending_renames.clone(), created))
+        })
+        .await
+    }
+
+    pub(crate) async fn begin_pending_rename(
+        &self,
+        thread_id: String,
+        expected: PendingRename,
+        now: i64,
+    ) -> Result<(bool, Option<Marks>)> {
+        self.transaction(now, move |document, created| {
+            if document.pending_renames.get(&thread_id) != Some(&expected) {
+                return Ok(((false, None), created));
+            }
+            let mut transition = Transition::new(document)?;
+            transition.update(&thread_id, |marks| marks.manual_name = true);
+            let (delta, changed) = transition.finish();
+            Ok(((true, delta), changed || created))
+        })
+        .await
+    }
+
+    pub(crate) async fn cancel_pending_rename(&self, thread_id: String, now: i64) -> Result<()> {
+        self.transaction(now, move |document, created| {
+            let changed = document.pending_renames.remove(&thread_id).is_some();
+            Ok(((), changed || created))
+        })
+        .await
+    }
+
+    pub(crate) async fn clear_manual_name(
+        &self,
+        thread_id: String,
+        now: i64,
+    ) -> Result<Option<Marks>> {
+        self.transaction(now, move |document, created| {
+            let mut transition = Transition::new(document)?;
+            transition.update(&thread_id, |marks| marks.manual_name = false);
+            let (delta, changed) = transition.finish();
+            Ok((delta, changed || created))
+        })
+        .await
+    }
+
+    pub(crate) async fn record_manual_name(
+        &self,
+        thread_id: String,
+        now: i64,
+    ) -> Result<Option<Marks>> {
+        self.transaction(now, move |document, created| {
+            let mut transition = Transition::new(document)?;
+            transition.update(&thread_id, |marks| marks.manual_name = true);
+            let (delta, changed) = transition.finish();
+            Ok((delta, changed || created))
+        })
+        .await
+    }
+
+    pub(crate) async fn complete_pending_rename(
+        &self,
+        thread_id: String,
+        expected: PendingRename,
+        now: i64,
+    ) -> Result<bool> {
+        self.transaction(now, move |document, created| {
+            let matches = document.pending_renames.get(&thread_id) == Some(&expected);
+            if matches {
+                document.pending_renames.remove(&thread_id);
+            }
+            Ok((matches, matches || created))
         })
         .await
     }
@@ -660,6 +783,64 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    #[tokio::test]
+    async fn legacy_names_are_durable_even_when_already_pinned_and_cancel_conditionally() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = store(&directory);
+        store
+            .update(
+                vec![change(serde_json::json!({"op":"pin","threadId":"a"}))],
+                1,
+            )
+            .await
+            .unwrap();
+        assert!(store.read(1).await.unwrap().threads["a"].pinned);
+        store
+            .update(
+                vec![change(
+                    serde_json::json!({"op":"pin","threadId":"a","name":" First "}),
+                )],
+                2,
+            )
+            .await
+            .unwrap();
+        assert_eq!(store.pending_renames(2).await.unwrap()["a"].name, "First");
+        let first = store.pending_renames(2).await.unwrap()["a"].clone();
+        store
+            .update(
+                vec![change(
+                    serde_json::json!({"op":"pin","threadId":"a","name":"First"}),
+                )],
+                2,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .complete_pending_rename("a".into(), first.clone(), 2)
+                .await
+                .unwrap()
+        );
+        store
+            .update(
+                vec![change(
+                    serde_json::json!({"op":"pin","threadId":"a","name":"Second"}),
+                )],
+                3,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .complete_pending_rename("a".into(), first, 4)
+                .await
+                .unwrap()
+        );
+        assert_eq!(store.pending_renames(4).await.unwrap()["a"].name, "Second");
+        store.forget("a".into(), 5).await.unwrap();
+        assert!(store.pending_renames(5).await.unwrap().is_empty());
+    }
+
     #[test]
     fn changes_decode_from_their_wire_names() {
         assert_eq!(
@@ -797,7 +978,7 @@ mod tests {
             vec![
                 Change::Pin {
                     thread_id: "unrelated".into(),
-                    name: "Keep".into(),
+                    name: Some("Keep".into()),
                 },
                 Change::MarkRetiredScopeRead {
                     scope_id: "default".into(),
@@ -940,7 +1121,7 @@ mod tests {
                     },
                     Change::Pin {
                         thread_id: "a".into(),
-                        name: " Release ".into(),
+                        name: Some(" Release ".into()),
                     },
                 ],
                 400,
@@ -954,7 +1135,7 @@ mod tests {
             .unwrap();
         assert_eq!(delta.read_baseline, 500);
         assert_eq!(delta.threads["a"].seen_through, None);
-        assert_eq!(delta.threads["a"].pin_name.as_deref(), Some("Release"));
+        assert!(delta.threads["a"].pinned);
         assert!(delta.threads["b"].is_empty());
         let marks = store.read(600).await.unwrap();
         assert_eq!(marks.threads.keys().collect::<Vec<_>>(), ["a"]);
@@ -976,7 +1157,7 @@ mod tests {
             .update(
                 vec![Change::Pin {
                     thread_id: "a".into(),
-                    name: "Keep".into(),
+                    name: Some("Keep".into()),
                 }],
                 10,
             )
@@ -1000,7 +1181,7 @@ mod tests {
                 vec![
                     Change::Pin {
                         thread_id: "a".into(),
-                        name: "Keep".into(),
+                        name: Some("Keep".into()),
                     },
                     Change::MarkRead {
                         thread_id: "a".into(),
@@ -1081,7 +1262,7 @@ mod tests {
                     },
                     Change::Pin {
                         thread_id: "a".into(),
-                        name: "Again".into(),
+                        name: Some("Again".into()),
                     },
                 ],
                 800,
@@ -1211,7 +1392,7 @@ mod tests {
             vec![],
             vec![Change::Pin {
                 thread_id: "a".into(),
-                name: "  ".into(),
+                name: Some("  ".into()),
             }],
             vec![Change::MarkUnread {
                 thread_id: " a".into(),

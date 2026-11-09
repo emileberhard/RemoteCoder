@@ -173,7 +173,7 @@ impl Gateway {
         }
     }
 
-    async fn marks_rpc(&self, method: &str, params: Value) -> RpcResult {
+    async fn marks_rpc(self: &Arc<Self>, method: &str, params: Value) -> RpcResult {
         #[derive(serde::Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Update {
@@ -190,6 +190,14 @@ impl Gateway {
                 let Update { changes } = decode_params(params)?;
                 crate::conversation_marks::validate(&changes)
                     .map_err(|error| RpcError::new(RpcCode::InvalidParams, format!("{error:#}")))?;
+                if changes.iter().any(|change| {
+                    matches!(
+                        change,
+                        crate::conversation_marks::Change::Pin { name: Some(_), .. }
+                    )
+                }) {
+                    return self.update_named_pins(changes, now).await;
+                }
                 let delta = self.marks.update(changes, now).await?;
                 if let Some(delta) = &delta {
                     self.publish_marks(delta).await;

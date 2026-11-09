@@ -731,37 +731,63 @@ async fn conversation_pages_keep_middle_messages_despite_unrelated_activity() {
 }
 
 #[tokio::test]
-async fn pinned_names_and_automation_or_probe_threads_are_ineligible() {
-    for change in [
-        Change::Pin {
-            thread_id: "11111111-2222-4333-8444-555555555555".into(),
-            name: "My title".into(),
-        },
-        Change::SetPurpose {
-            thread_id: "11111111-2222-4333-8444-555555555555".into(),
-            purpose: Purpose::Automation,
-        },
-        Change::SetPurpose {
-            thread_id: "11111111-2222-4333-8444-555555555555".into(),
-            purpose: Purpose::Probe,
-        },
-    ] {
-        let directory = tempfile::tempdir().unwrap();
-        let gateway = TestGateway::with_native_runtime(directory.path());
-        assert!(
-            gateway
-                .review_exclusion("11111111-2222-4333-8444-555555555555")
-                .await
-                .unwrap()
-                .is_none()
-        );
-        gateway.marks.update(vec![change], 1).await.unwrap();
-        assert!(
-            !gateway
-                .review_exclusion("11111111-2222-4333-8444-555555555555")
-                .await
-                .unwrap()
-                .is_none()
+async fn pins_do_not_exclude_titles_and_manual_names_do_not_exclude_done_review() {
+    let directory = tempfile::tempdir().unwrap();
+    let gateway = TestGateway::with_native_runtime(directory.path());
+    let thread = "11111111-2222-4333-8444-555555555555";
+    gateway
+        .marks
+        .update(
+            vec![Change::Pin {
+                thread_id: thread.into(),
+                name: None,
+            }],
+            1,
+        )
+        .await
+        .unwrap();
+    assert_eq!(gateway.title_exclusion(thread).await.unwrap(), None);
+    assert_eq!(gateway.review_exclusion(thread).await.unwrap(), None);
+    gateway
+        .marks
+        .record_manual_name(thread.into(), 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        gateway.title_exclusion(thread).await.unwrap(),
+        Some("manualName")
+    );
+    assert_eq!(gateway.review_exclusion(thread).await.unwrap(), None);
+    gateway
+        .marks
+        .update(
+            vec![Change::Unpin {
+                thread_id: thread.into(),
+            }],
+            3,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        gateway.title_exclusion(thread).await.unwrap(),
+        Some("manualName")
+    );
+    assert_eq!(gateway.review_exclusion(thread).await.unwrap(), None);
+    for purpose in [Purpose::Automation, Purpose::Probe] {
+        gateway
+            .marks
+            .update(
+                vec![Change::SetPurpose {
+                    thread_id: thread.into(),
+                    purpose,
+                }],
+                4,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            gateway.review_exclusion(thread).await.unwrap(),
+            Some("excludedPurpose")
         );
     }
 }
@@ -936,7 +962,7 @@ async fn codex_rename_applies_only_when_title_turn_activity_and_pin_are_unchange
                                     .update(
                                         vec![Change::Pin {
                                             thread_id: "11111111-2222-4333-8444-555555555555".into(),
-                                            name: "My pinned name".into(),
+                                            name: Some("My pinned name".into()),
                                         }],
                                         1,
                                     )
@@ -1018,8 +1044,8 @@ async fn codex_rename_applies_only_when_title_turn_activity_and_pin_are_unchange
                         response["answers"]["done"]["noul"] = json!("invalid");
                     }
                     if change == "doneWrite" {
-                        std::fs::write(marks_directory.join("conversation-marks.v3.json"),
-                            json!({"schemaVersion":3,"revision":u64::MAX,"readBaseline":0,"threads":{}}).to_string()).unwrap();
+                        std::fs::write(marks_directory.join(crate::conversation_marks::FILE_NAME),
+                            json!({"schemaVersion":crate::conversation_marks::SCHEMA_VERSION,"revision":u64::MAX,"readBaseline":0,"threads":{}}).to_string()).unwrap();
                     }
                     Json(response)
                 }
@@ -1501,7 +1527,7 @@ async fn done_verdicts_survive_read_marks_and_unrelated_activity_but_respect_uns
                                 .update(
                                     vec![Change::Pin {
                                         thread_id: "11111111-2222-4333-8444-555555555555".into(),
-                                        name: "Keep".into(),
+                                        name: Some("Keep".into()),
                                     }],
                                     2000,
                                 )
@@ -1591,7 +1617,14 @@ async fn delegated_completions_are_skipped_before_reading_dialogue_or_calling_je
 
 #[tokio::test]
 async fn early_title_names_only_an_untitled_running_first_turn() {
-    for case in ["eligible", "named", "laterTurn", "completed", "pinned"] {
+    for case in [
+        "eligible",
+        "named",
+        "laterTurn",
+        "completed",
+        "pinned",
+        "manual",
+    ] {
         let directory = tempfile::tempdir().unwrap();
         let logs = directory.path().join("title-logs");
         let journal = crate::observability::journal::Journal::open_in(logs.clone(), 30);
@@ -1602,10 +1635,17 @@ async fn early_title_names_only_an_untitled_running_first_turn() {
                 .update(
                     vec![Change::Pin {
                         thread_id: "11111111-2222-4333-8444-555555555555".into(),
-                        name: "Pinned".into(),
+                        name: None,
                     }],
                     1,
                 )
+                .await
+                .unwrap();
+        }
+        if case == "manual" {
+            gateway
+                .marks
+                .record_manual_name("11111111-2222-4333-8444-555555555555".into(), 1)
                 .await
                 .unwrap();
         }
@@ -1661,7 +1701,7 @@ async fn early_title_names_only_an_untitled_running_first_turn() {
         let records = trace_records(journal, &logs).await;
         let finished = records.iter().find(|record| record["event"] == "finished");
         match case {
-            "eligible" => {
+            "eligible" | "pinned" => {
                 assert_eq!(
                     name,
                     Some(json!("Automatic conversation titles")),
@@ -1672,12 +1712,12 @@ async fn early_title_names_only_an_untitled_running_first_turn() {
                 assert_eq!(finished["trigger"], "earlyTitle");
                 assert!(records.iter().all(|record| record["judgeModel"].is_null()));
             }
-            "pinned" => {
+            "manual" => {
                 assert!(
                     !methods.iter().any(|method| method == "thread/fork"),
                     "{methods:?}"
                 );
-                assert_eq!(finished.unwrap()["reason"], "pinned", "{records:#?}");
+                assert_eq!(finished.unwrap()["reason"], "manualName", "{records:#?}");
             }
             _ => {
                 assert!(

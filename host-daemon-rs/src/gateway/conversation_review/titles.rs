@@ -1,6 +1,6 @@
 use super::{Gateway, Outcome, Snapshot, Trace, bounded, effective_title};
 use crate::gateway::renames::Candidate;
-use anyhow::{Context, Result, anyhow, ensure};
+use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Instant;
@@ -58,7 +58,7 @@ impl Gateway {
             title = repaired;
         }
         let _admission = self.admission.admit(thread)?;
-        if let Some(reason) = self.review_exclusion(thread).await? {
+        if let Some(reason) = self.title_exclusion(thread).await? {
             return Ok(Outcome::skipped(reason));
         }
         trace.event("snapshotStarted", json!({"phase":"revalidation"}));
@@ -97,10 +97,7 @@ impl Gateway {
         let previous = effective_title(header)
             .filter(|title| !title.trim().is_empty())
             .context("the conversation has nothing to name yet")?;
-        let candidate = self
-            .renames
-            .candidate(thread)
-            .map_err(|error| anyhow!("rename admission failed: {error:?}"))?;
+        let candidate = self.prepare_regenerate(thread).await?;
         let mut title = self
             .ask_title(thread, &requested_title_question(previous), previous, trace)
             .await?;
@@ -157,7 +154,7 @@ impl Gateway {
         );
         let started = Instant::now();
         let result = self
-            .rename_automatically(thread, title, previous, candidate)
+            .rename_automatically(thread, title, previous, candidate, turn.is_none())
             .await;
         match result {
             Ok(None) => return Ok(Outcome::skipped("manualRenameOrTitleChanged")),

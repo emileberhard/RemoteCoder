@@ -1561,6 +1561,24 @@ pub(super) fn merge_state(
             )
             .checked_add(1)
             .context("Marks revision exhausted")?;
+        let mut pending = target
+            .get("pendingRenames")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(incoming_pending) = incoming.get("pendingRenames").and_then(Value::as_object) {
+            let target_threads = target["threads"]
+                .as_object()
+                .context("Invalid conversation marks")?;
+            for (thread, name) in incoming_pending {
+                let owner = owners
+                    .get(thread.trim_start_matches("claude_"))
+                    .and_then(|owner| owner.as_deref());
+                if !target_threads.contains_key(thread) || owner == Some(id) {
+                    pending.insert(thread.clone(), name.clone());
+                }
+            }
+        }
         let threads = target["threads"]
             .as_object_mut()
             .context("Invalid conversation marks")?;
@@ -1573,6 +1591,15 @@ pub(super) fn merge_state(
                 .and_then(|owner| owner.as_deref());
             if !threads.contains_key(thread) || owner == Some(id) {
                 threads.insert(thread.clone(), marks.clone());
+                if let Some(name) = incoming
+                    .get("pendingRenames")
+                    .and_then(Value::as_object)
+                    .and_then(|names| names.get(thread))
+                {
+                    pending.insert(thread.clone(), name.clone());
+                } else {
+                    pending.remove(thread);
+                }
             }
         }
         for marks in threads.values_mut() {
@@ -1580,6 +1607,14 @@ pub(super) fn merge_state(
         }
         target["revision"] = revision.into();
         target["readBaseline"] = baseline.into();
+        if pending.is_empty() {
+            target
+                .as_object_mut()
+                .context("Invalid conversation marks")?
+                .remove("pendingRenames");
+        } else {
+            target["pendingRenames"] = Value::Object(pending);
+        }
         return Ok(());
     }
     merge(target, incoming);

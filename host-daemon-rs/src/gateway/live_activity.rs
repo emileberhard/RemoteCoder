@@ -353,6 +353,9 @@ impl Gateway {
         mut rx: watch::Receiver<ActiveTasksLiveActivitySnapshot>,
     ) {
         let mut titles = HashMap::new();
+        let mut title_revision = self
+            .live_activity_title_revision
+            .load(std::sync::atomic::Ordering::Acquire);
         rx.mark_changed();
         let mut retrying = false;
         loop {
@@ -366,6 +369,13 @@ impl Gateway {
             }
             tokio::time::sleep(COALESCE_WINDOW).await;
             let snapshot = rx.borrow_and_update().clone();
+            let current_revision = self
+                .live_activity_title_revision
+                .load(std::sync::atomic::Ordering::Acquire);
+            if current_revision != title_revision {
+                titles.clear();
+                title_revision = current_revision;
+            }
             let probe = rx.clone();
             let projection = tokio::select! {
                 biased;
@@ -495,12 +505,7 @@ impl Gateway {
                     }
                 },
             };
-            row.title = marks
-                .threads
-                .get(&row.thread_id)
-                .and_then(|marks| marks.pin_name.as_deref())
-                .map(attention_title)
-                .or(header);
+            row.title = header;
         }
         Ok(projection)
     }

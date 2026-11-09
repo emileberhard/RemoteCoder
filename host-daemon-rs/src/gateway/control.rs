@@ -282,6 +282,7 @@ impl Gateway {
                                     gateway.drain_pending_native_unarchives().await;
                                     Ok(())
                                 });
+                                self.wake_pending_renames();
                                 self.spawn_stale_voice_shadow_cleanup();
                                 if self.claude_settings.enabled {
                                     self.spawn_default_voice_shadow_prewarm();

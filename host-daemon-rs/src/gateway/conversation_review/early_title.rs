@@ -62,7 +62,7 @@ impl Gateway {
         previous: &str,
         trace: &Trace,
     ) -> Result<Outcome> {
-        if let Some(reason) = self.review_exclusion(thread).await? {
+        if let Some(reason) = self.title_exclusion(thread).await? {
             return Ok(Outcome::skipped(reason));
         }
         if self.is_agent_thread(thread).await? {
@@ -83,7 +83,7 @@ impl Gateway {
             return Ok(Outcome::kept("writerKeptTitle"));
         }
         let _admission = self.admission.admit(thread)?;
-        if let Some(reason) = self.review_exclusion(thread).await? {
+        if let Some(reason) = self.title_exclusion(thread).await? {
             return Ok(Outcome::skipped(reason));
         }
         self.commit_title(thread, Some(turn), &title, previous, candidate, trace)

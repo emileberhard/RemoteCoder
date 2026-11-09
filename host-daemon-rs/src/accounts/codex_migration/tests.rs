@@ -358,6 +358,20 @@ fn merging_marks_preserves_each_profiles_read_baseline_and_explicit_unread_state
 }
 
 #[test]
+fn marks_adoption_keeps_pending_names_and_manual_name_facts_with_their_owner() {
+    let host = json!({"schemaVersion":5,"revision":2,"readBaseline":100,"threads":{"host":{"revision":2,"manualName":true,"pinned":true}},"pendingRenames":{"host":{"name":"Host pending","revision":2}}});
+    let source = json!({"schemaVersion":5,"revision":3,"readBaseline":100,"threads":{"source":{"revision":3,"manualName":true,"pinned":true}},"pendingRenames":{"source":{"name":"Source pending","revision":3}}});
+    let merged = merge_marks(Some(host), source, &["source".into()], &["host".into()]).unwrap();
+    assert_eq!(
+        merged["pendingRenames"],
+        json!({"host":{"name":"Host pending","revision":2},"source":{"name":"Source pending","revision":3}})
+    );
+    assert_eq!(merged["threads"]["host"]["manualName"], true);
+    assert_eq!(merged["threads"]["source"]["manualName"], true);
+    crate::conversation_marks::validate_migration_document(&merged).unwrap();
+}
+
+#[test]
 fn adopting_a_lower_marks_baseline_preserves_implicit_claude_reads_once() {
     let fixture = Fixture::new();
     let thread = crate::providers::claude::claude_thread_id(THREAD);
@@ -1343,8 +1357,8 @@ fn large_marks(prefix: &str, count: usize) -> Value {
     let threads: serde_json::Map<String, Value> = (0..count)
         .map(|index| {
             (
-                format!("{prefix}-{index:05}"),
-                json!({"revision":1,"pinName":"x".repeat(256)}),
+                format!("{prefix}-{index:05}{}", "x".repeat(256)),
+                json!({"revision":1,"pinned":true}),
             )
         })
         .collect();

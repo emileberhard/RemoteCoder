@@ -615,7 +615,7 @@ blocks startup or provider journal retirement.
   (`docs/async-questions.md`).
 - Conversation marks (`src/conversation_marks.rs`) are the host's pins, read
   state, purposes, settlements, done suggestions and changes views, in
-  `conversation-marks.v4.json` beside the turn state (schema version 4, at most 8 MiB, unknown fields rejected). One
+  `conversation-marks.v5.json` beside the turn state (schema version 5, at most 8 MiB, unknown fields rejected). One
   owner serializes every read-modify-write. `conversation/marks/read` returns
   `{schemaVersion, revision, readBaseline, threads, supportsRetiredScopeRead: true}`, creating the document
   with a read baseline of now; `conversation/marks/update` (`{changes}`, at
@@ -637,7 +637,7 @@ blocks startup or provider journal retirement.
   unavailable evidence fails the whole update without writing or acknowledging
   other changes. Never reconstruct an old scope from current history, and keep
   scope evidence after deleting cold profiles while clients can hold old edits.
-  Thread ids are nonempty, trimmed and at most 512 bytes; pin names at most 256.
+  Thread ids are nonempty, trimmed and at most 512 bytes; legacy pin names are at most 256 bytes. A pin is a Boolean independent of the provider name. A legacy named pin atomically records a pending rename, without waiting for the provider. The gateway owns `manualName` and protects user-chosen names from early and automatic titles without suppressing done review. Regeneration clears that protection. Manual rename, regeneration and deletion cancel older pending names.
   Clients apply a delta entry only when its revision is not older than theirs;
   an empty entry is a tombstone that clears the thread and keeps its revision,
   so a late older delta cannot restore it. A `thread/deleted` notification
@@ -670,10 +670,17 @@ blocks startup or provider journal retirement.
   header completion time, matching the drawer's sources. Suggestions never
   change settlement, read state or pins.
 - Marks migration (`src/conversation_marks/migration.rs`): every marks context,
-  the host and each account state directory, imports schema 3
-  `conversation-marks.v3.json`, else schema 2 `conversation-marks.v2.json`, on
-  the first load without a v4 file, preserving marks and pending native
-  unarchives. With neither file it imports schema 1
+  the host and each account state directory, imports schema 4, 3 or 2 in newest-first
+  order on the first load without a v5 file, preserving marks and pending native
+  unarchives. Frozen prior types map each pin name to a pin flag and a durable
+  `pendingRenames` entry. The control-owned drain runs on readiness and new
+  entries, and on a Claude turn start or completion, through the per-thread rename serial
+  owner. It skips the current name, or an untitled pin whose name without a
+  trailing ellipsis appears in the raw or summarized preview. That may discard a
+  typed name that happens to occur in the preview; compatibility owns the trade-off.
+  It retains failures until a later wake. Claude's missing conversation may
+  be a first turn that has not started, so it is not proof of deletion.
+  Adoption retains pending renames and manual-name facts. With no prior file it imports schema 1
   `conversation-marks.json` through the existing settlement conversion. Neither
   older file is written, so a rollback still reads it. An `archivedAt` without a purpose
   becomes `settled` through it; one with a purpose is dropped, and so is one on
@@ -1001,8 +1008,8 @@ blocks startup or provider journal retirement.
   once a newer snapshot is pending it still shows its rows, without marking
   the host unavailable, but it cannot certify empty or send End, at
   publication or at delivery, until the newer report replaces it. Rows are
-  ordered newest completion first; a title is the pin name, then the native
-  name, then the preview. Delegated agent threads fold into their proven root,
+  ordered newest completion first; a title is the native name, then the preview.
+  Name notifications invalidate the cached titles and refresh the projection. Delegated agent threads fold into their proven root,
   including a root on another member: a child names its remote parent address, and an idle
   thread that a peer names as parent reports its own root (`ancestry`, at most
   32) without counting. A hop no current source resolves counts once at the

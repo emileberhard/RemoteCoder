@@ -6,7 +6,8 @@ use serde::Deserialize;
 use tracing::info;
 
 use super::{
-    Document, Location, Purpose, SCHEMA_VERSION, Settlement, SettlementState, ThreadMarks,
+    ChangesView, Document, Location, PendingRename, Purpose, SCHEMA_VERSION, Settlement,
+    SettlementState, ThreadMarks,
 };
 
 const LEGACY_FILE_NAME: &str = "conversation-marks.json";
@@ -38,6 +39,37 @@ struct LegacyThreadMarks {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PriorDocument {
+    schema_version: u32,
+    revision: u64,
+    read_baseline: i64,
+    threads: BTreeMap<String, PriorThreadMarks>,
+    #[serde(default)]
+    pending_native_unarchive: BTreeSet<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PriorThreadMarks {
+    revision: u64,
+    #[serde(default)]
+    seen_through: Option<i64>,
+    #[serde(default)]
+    marked_unread: bool,
+    #[serde(default)]
+    pin_name: Option<String>,
+    #[serde(default)]
+    purpose: Option<Purpose>,
+    #[serde(default)]
+    settlement: Option<Settlement>,
+    #[serde(default)]
+    done_through: Option<i64>,
+    #[serde(default)]
+    changes_view: Option<ChangesView>,
+}
+
+#[derive(Deserialize)]
 struct HandoffRecord {
     #[serde(default)]
     snapshot: Option<RecordedThread>,
@@ -56,10 +88,11 @@ struct RecordedThread {
 
 pub(super) fn import(location: &Location) -> Result<Option<Document>> {
     for (version, name) in [
+        (4, "conversation-marks.v4.json"),
         (3, "conversation-marks.v3.json"),
         (2, "conversation-marks.v2.json"),
     ] {
-        let Some(mut document) = super::read_json::<Document>(
+        let Some(prior) = super::read_json::<PriorDocument>(
             &location.directory.join(name),
             &format!("version {version} conversation marks"),
         )?
@@ -67,17 +100,55 @@ pub(super) fn import(location: &Location) -> Result<Option<Document>> {
             continue;
         };
         ensure!(
-            document.schema_version == version,
+            prior.schema_version == version,
             "unsupported conversation marks version"
         );
         ensure!(
-            document.threads.values().all(|marks| {
-                marks.changes_view.is_none() && (version == 3 || marks.done_through.is_none())
+            prior.threads.values().all(|marks| {
+                (version == 4 || marks.changes_view.is_none())
+                    && (version >= 3 || marks.done_through.is_none())
             }),
             "invalid version {version} conversation marks"
         );
+        let mut pending_renames = BTreeMap::new();
+        let threads = prior
+            .threads
+            .into_iter()
+            .map(|(id, marks)| {
+                if let Some(name) = marks.pin_name.as_ref() {
+                    pending_renames.insert(
+                        id.clone(),
+                        PendingRename {
+                            name: name.clone(),
+                            revision: marks.revision,
+                        },
+                    );
+                }
+                (
+                    id,
+                    ThreadMarks {
+                        revision: marks.revision,
+                        seen_through: marks.seen_through,
+                        marked_unread: marks.marked_unread,
+                        pinned: marks.pin_name.is_some(),
+                        manual_name: false,
+                        purpose: marks.purpose,
+                        settlement: marks.settlement,
+                        done_through: marks.done_through,
+                        changes_view: marks.changes_view,
+                    },
+                )
+            })
+            .collect();
+        let document = Document {
+            schema_version: SCHEMA_VERSION,
+            revision: prior.revision,
+            read_baseline: prior.read_baseline,
+            threads,
+            pending_native_unarchive: prior.pending_native_unarchive,
+            pending_renames,
+        };
         document.validate()?;
-        document.schema_version = SCHEMA_VERSION;
         return Ok(Some(document));
     }
     let Some(legacy) = super::read_json::<LegacyDocument>(
@@ -130,6 +201,7 @@ fn handoff_owned_threads(path: &Path) -> Result<HashSet<String>> {
 
 fn migrate(legacy: LegacyDocument, handoff_owned: &HashSet<String>) -> Document {
     let mut pending_native_unarchive = BTreeSet::new();
+    let mut pending_renames = BTreeMap::new();
     let threads = legacy
         .threads
         .into_iter()
@@ -141,11 +213,21 @@ fn migrate(legacy: LegacyDocument, handoff_owned: &HashSet<String>) -> Document 
             if settled_through.is_some() && codex {
                 pending_native_unarchive.insert(id.clone());
             }
+            if let Some(name) = marks.pin_name.as_ref() {
+                pending_renames.insert(
+                    id.clone(),
+                    PendingRename {
+                        name: name.clone(),
+                        revision: marks.revision,
+                    },
+                );
+            }
             let migrated = ThreadMarks {
                 revision: marks.revision,
                 seen_through: marks.seen_through,
                 marked_unread: marks.marked_unread,
-                pin_name: marks.pin_name,
+                pinned: marks.pin_name.is_some(),
+                manual_name: false,
                 purpose: marks.purpose,
                 settlement: settled_through.map(|through| Settlement {
                     state: SettlementState::Settled,
@@ -163,6 +245,7 @@ fn migrate(legacy: LegacyDocument, handoff_owned: &HashSet<String>) -> Document 
         read_baseline: legacy.read_baseline,
         threads,
         pending_native_unarchive,
+        pending_renames,
     }
 }
 
@@ -171,6 +254,28 @@ mod tests {
     use super::*;
     use crate::conversation_marks::{ConversationMarksStore, FILE_NAME};
     use std::fs;
+
+    #[tokio::test]
+    async fn version_four_pins_become_flags_and_durable_pending_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("conversation-marks.v4.json");
+        let original = serde_json::json!({"schemaVersion":4,"revision":3,"readBaseline":10,
+            "threads":{"a":{"revision":3,"pinName":"My name","changesView":{"kind":"lastTurn"}}}})
+        .to_string();
+        fs::write(&path, &original).unwrap();
+        let store = ConversationMarksStore::new(Some(Location {
+            directory: directory.path().into(),
+            handoff_records: directory.path().join("handoffs"),
+        }));
+        let marks = store.read(100).await.unwrap();
+        assert!(marks.threads["a"].pinned);
+        assert_eq!(
+            store.pending_renames(100).await.unwrap()["a"].name,
+            "My name"
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
+        assert!(marks.threads["a"].changes_view.is_some());
+    }
 
     #[tokio::test]
     async fn version_three_import_keeps_done_suggestions_and_leaves_the_rollback_file_untouched() {
@@ -197,7 +302,7 @@ mod tests {
             (SCHEMA_VERSION, 4)
         );
         assert_eq!(imported.threads["a"].done_through, Some(90));
-        assert_eq!(imported.threads["a"].pin_name.as_deref(), Some("Keep"));
+        assert!(imported.threads["a"].pinned);
         assert_eq!(fs::read_to_string(&path).unwrap(), old);
         assert!(directory.path().join(FILE_NAME).exists());
 
@@ -235,7 +340,7 @@ mod tests {
         assert_eq!(imported.schema_version, SCHEMA_VERSION);
         assert_eq!(imported.revision, 7);
         assert_eq!(imported.read_baseline, 10);
-        assert_eq!(imported.threads["a"].pin_name.as_deref(), Some("Keep"));
+        assert!(imported.threads["a"].pinned);
         assert_eq!(imported.threads["a"].seen_through, Some(30));
         assert!(imported.threads["a"].marked_unread);
         assert_eq!(imported.threads["a"].purpose, Some(Purpose::Automation));
@@ -321,10 +426,7 @@ mod tests {
         assert_eq!(marks.threads["codex-archived"].settlement, settled(50));
         assert_eq!(marks.threads["codex-archived"].seen_through, Some(40));
         assert_eq!(marks.threads["claude_archived"].settlement, settled(60));
-        assert_eq!(
-            marks.threads["claude_archived"].pin_name.as_deref(),
-            Some("Keep")
-        );
+        assert!(marks.threads["claude_archived"].pinned);
         assert_eq!(marks.threads["codex-continued"].settlement, settled(90));
         assert_eq!(marks.threads["codex-probe"].settlement, None);
         assert_eq!(marks.threads["codex-probe"].purpose, Some(Purpose::Probe));
