@@ -588,9 +588,18 @@ impl ConversationMarksStore {
         .await
     }
 
-    pub(crate) async fn cancel_pending_rename(&self, thread_id: String, now: i64) -> Result<()> {
+    pub(crate) async fn cancel_pending_rename(
+        &self,
+        thread_id: String,
+        expected: Option<PendingRename>,
+        now: i64,
+    ) -> Result<()> {
         self.transaction(now, move |document, created| {
-            let changed = document.pending_renames.remove(&thread_id).is_some();
+            let changed =
+                expected.is_some() && document.pending_renames.get(&thread_id) == expected.as_ref();
+            if changed {
+                document.pending_renames.remove(&thread_id);
+            }
             Ok(((), changed || created))
         })
         .await

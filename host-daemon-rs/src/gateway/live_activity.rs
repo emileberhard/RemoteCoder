@@ -386,7 +386,7 @@ impl Gateway {
                     .live_activity_title_invalidations
                     .lock()
                     .expect("Live Activity title invalidations poisoned");
-                std::mem::replace(&mut *pending, Some(Default::default()))
+                pending.replace(Default::default())
             };
             match invalidations {
                 Some(threads) => {

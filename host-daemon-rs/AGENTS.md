@@ -678,7 +678,10 @@ blocks startup or provider journal retirement.
   owner. It skips the current name, or an untitled pin whose name without a
   trailing ellipsis appears in the raw or summarized preview. That may discard a
   typed name that happens to occur in the preview; compatibility owns the trade-off.
-  It retains failures until a later wake. Claude's missing conversation may
+  A 30-second wait bounds each drain attempt; an owned per-thread task keeps its
+  serial fence until a submitted provider write replies, and the drain continues
+  to other entries. Failures and uncertain replies remain queued for a later wake.
+  Claude's missing conversation may
   be a first turn that has not started, so it is not proof of deletion.
   Adoption retains pending renames and manual-name facts. With no prior file it imports schema 1
   `conversation-marks.json` through the existing settlement conversion. Neither
