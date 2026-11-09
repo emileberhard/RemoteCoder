@@ -69,6 +69,14 @@ struct ConversationSidebarProjectionTests {
         #expect(ConversationSidebarProjection.matches(title: rows[0].title, workingDirectory: "", hostName: nil, query: "Alpha"))
     }
 
+    @Test func unloadedPinSearchUsesOnlyKnownTitlesAndHost() {
+        #expect(ConversationSidebarProjection.matches(title: nil, workingDirectory: "", hostName: nil, query: ""))
+        #expect(!ConversationSidebarProjection.matches(title: nil, workingDirectory: "", hostName: nil, query: "unknown"))
+        #expect(!ConversationSidebarProjection.matches(title: nil, workingDirectory: "", hostName: nil, query: "thread-42"))
+        #expect(ConversationSidebarProjection.matches(title: nil, workingDirectory: "", hostName: "Mini", query: "Mini"))
+        #expect(ConversationSidebarProjection.matches(title: "Legacy pin", workingDirectory: "", hostName: nil, query: "legacy"))
+    }
+
     @Test func rowsMergeByPinThenRecencyThenStableAddress() throws {
         let rows = sidebarRows(hosts: [
             host(mini, name: "Mac Mini", threads: [

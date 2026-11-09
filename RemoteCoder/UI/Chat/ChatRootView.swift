@@ -275,7 +275,7 @@ private struct ChatScreen: View {
     @State private var drawerNotice: DrawerNotice?
     @State private var find = TranscriptFind()
     @State private var commandPalette: CommandPaletteCatalog?
-    @State private var renamingPinnedChat: ConversationAddress?
+    @State private var renamingChat: ChatRenameRequest?
     @State private var fileImportRequest = 0
     private let logger = AppLogger(category: "ChatScreen")
 
@@ -310,9 +310,7 @@ private struct ChatScreen: View {
                 CommandPalette(catalog: commandPalette, dismiss: { self.commandPalette = nil })
             }
         }
-        .pinnedChatRenamePrompt($renamingPinnedChat, workspace: workspace) { address in
-            screen.openAddress == address ? screen.openConversationTitle : nil
-        }
+        .chatRenamePrompt($renamingChat, workspace: workspace)
         #if os(iOS)
         .reasoningPickerOverlay()
         #endif
@@ -348,7 +346,7 @@ private struct ChatScreen: View {
                 returnToParent: returnToAgentParent,
                 selectConversation: { selectConversation($0) },
                 fork: forkConversation,
-                renamePinnedChat: { renamingPinnedChat = $0 },
+                renameChat: { renamingChat = ChatRenameRequest(address: $0, title: screen.openConversationTitle) },
                 regenerateName: { address in
                     workspace.regenerateTitle(at: address) { screen.present(.conversation("Could not regenerate name: \($0)")) }
                 },
@@ -712,7 +710,7 @@ private struct ChatScreen: View {
     }
 
     private var blocksComposerFocus: Bool {
-        blocksFilePresentation || renamingPinnedChat != nil
+        blocksFilePresentation || renamingChat != nil
             || isReviewingChangesSheet
             || commandPalette != nil || screen.target.voiceError != nil || composerPresentations.blocksFocus
     }

@@ -252,11 +252,13 @@ final class ConversationList {
 
     func isPinned(_ threadID: String) -> Bool { marks.isPinned(threadID) }
 
+    func pin(threadID: String) {
+        guard marks.usesPinFlag else { return }
+        recordMark(.pinFlag(threadID: threadID))
+    }
+
     func pin(threadID: String, name: String) {
-        if marks.usesPinFlag {
-            recordMark(.pinFlag(threadID: threadID))
-            return
-        }
+        guard !marks.usesPinFlag else { return }
         guard let name = ConversationPinName.normalized(name) else { return }
         recordMark(.pin(threadID: threadID, name: name))
     }
@@ -699,11 +701,13 @@ final class ConversationList {
         return true
     }
 
-    var unloadedPinnedThreads: [String: String] {
+    var unloadedPinnedThreads: [UnloadedPinnedConversation] {
         let loaded = Set(threads.map(\.id))
-        return marks.threads.reduce(into: [:]) { result, entry in
-            if !loaded.contains(entry.key), entry.value.isPinned { result[entry.key] = marks.pinName(for: entry.key) ?? "Unknown title" }
-        }
+        let snapshot = marks
+        return snapshot.threads.compactMap { threadID, marks in
+            guard !loaded.contains(threadID), marks.isPinned else { return nil }
+            return UnloadedPinnedConversation(id: threadID, title: snapshot.pinName(for: threadID))
+        }.sorted { $0.id < $1.id }
     }
 
     func canLoadOlder(query: String) -> Bool {

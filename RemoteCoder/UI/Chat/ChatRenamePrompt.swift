@@ -1,33 +1,37 @@
 import SwiftUI
 
+struct ChatRenameRequest: Identifiable, Equatable {
+    let address: ConversationAddress
+    let title: String?
+    var id: ConversationAddress { address }
+}
+
 extension View {
-    func pinnedChatRenamePrompt(_ address: Binding<ConversationAddress?>, workspace: ChatWorkspaceModel,
-                                currentTitle: @escaping (ConversationAddress) -> String? = { _ in nil }) -> some View {
-        modifier(PinnedChatRenamePrompt(address: address, workspace: workspace, currentTitle: currentTitle))
+    func chatRenamePrompt(_ request: Binding<ChatRenameRequest?>, workspace: ChatWorkspaceModel) -> some View {
+        modifier(ChatRenamePrompt(request: request, workspace: workspace))
     }
 }
 
-private struct PinnedChatRenamePrompt: ViewModifier {
-    @Binding var address: ConversationAddress?
+private struct ChatRenamePrompt: ViewModifier {
+    @Binding var request: ChatRenameRequest?
     let workspace: ChatWorkspaceModel
-    let currentTitle: (ConversationAddress) -> String?
     @State private var name = ""
     @State private var failure: String?
 
     func body(content: Content) -> some View {
         content
-            .alert("Rename chat", item: $address) { address in
+            .alert("Rename chat", item: $request) { request in
                 TextField("Chat name", text: $name)
                     .onChange(of: name) {
-                        if !workspace.supportsIndependentNames(address) { name = ConversationPinName.clamped(name) }
+                        if !workspace.supportsIndependentNames(request.address) { name = ConversationPinName.clamped(name) }
                     }
-                Button("Rename") { commit(address) }
+                Button("Rename") { commit(request.address) }
                     .disabled(trimmedName.isEmpty)
                 Button("Cancel", role: .cancel) { name = "" }
             }
-            .onChange(of: address) {
-                guard let address else { return }
-                name = workspace.conversationTitle(address) ?? currentTitle(address) ?? ""
+            .onChange(of: request) {
+                guard let request else { return }
+                name = request.title ?? ""
             }
             .alert("Could not rename chat", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
                 Button("OK", role: .cancel) { failure = nil }
@@ -43,6 +47,5 @@ private struct PinnedChatRenamePrompt: ViewModifier {
         self.name = ""
         guard !name.isEmpty else { return }
         workspace.rename(address, name: name) { failure = $0 }
-        HapticService.shared.play(.commit)
     }
 }

@@ -256,7 +256,7 @@ struct ChatWindowActionsPublisher: View {
     let returnToParent: () -> Void
     let selectConversation: (ConversationAddress) -> Void
     let fork: (ConversationAddress) -> Void
-    let renamePinnedChat: (ConversationAddress) -> Void
+    let renameChat: (ConversationAddress) -> Void
     let regenerateName: (ConversationAddress) -> Void
     let toggleAgents: () -> Void
     let attachFile: () -> Void
@@ -295,7 +295,7 @@ struct ChatWindowActionsPublisher: View {
             returnToParent: returnToParent,
             selectConversation: selectConversation,
             fork: fork,
-            renamePinnedChat: renamePinnedChat,
+            renameChat: renameChat,
             regenerateName: regenerateName,
             toggleAgents: toggleAgents,
             attachFile: attachFile,
@@ -327,7 +327,7 @@ fileprivate struct ChatWindowActionContext {
     let returnToParent: () -> Void
     let selectConversation: (ConversationAddress) -> Void
     let fork: (ConversationAddress) -> Void
-    let renamePinnedChat: (ConversationAddress) -> Void
+    let renameChat: (ConversationAddress) -> Void
     let regenerateName: (ConversationAddress) -> Void
     let toggleAgents: () -> Void
     let attachFile: () -> Void
@@ -338,6 +338,7 @@ fileprivate struct ChatWindowActionContext {
     var commandState: ChatWindowCommandState {
         let conversation = screen.openAddress
         let isPinned = conversation.map(workspace.isPinned) == true
+        let supportsIndependentNames = conversation.map(workspace.supportsIndependentNames) == true
         let settlement = conversationSettlement(conversation)
         let settingsModel = showsConversationSettings ? screen.selectedModel : nil
         let fastModel = settingsModel.flatMap { $0.supportsFastMode ? $0 : nil }
@@ -345,9 +346,9 @@ fileprivate struct ChatWindowActionContext {
         if conversation == nil {
             enabled.subtract([.fork, .togglePin, .copyReference, .markUnread])
         }
-        if !isPinned && screen.openConversationTitle == nil && conversation.map(workspace.supportsIndependentNames) != true { enabled.remove(.togglePin) }
-        if conversation == nil || (!isPinned && conversation.map(workspace.supportsIndependentNames) != true) { enabled.remove(.rename) }
-        if conversation == nil || (isPinned && conversation.map(workspace.supportsIndependentNames) != true) { enabled.remove(.regenerateName) }
+        if !isPinned && screen.openConversationTitle == nil && !supportsIndependentNames { enabled.remove(.togglePin) }
+        if conversation == nil || (!isPinned && !supportsIndependentNames) { enabled.remove(.rename) }
+        if conversation == nil || (isPinned && !supportsIndependentNames) { enabled.remove(.regenerateName) }
         if !find.hasMatches { enabled.subtract([.findNext, .findPrevious]) }
         if !screen.composerSendState.canSend { enabled.remove(.send) }
         if screen.composerStopState.readyTurn == nil { enabled.remove(.stop) }
@@ -408,13 +409,13 @@ fileprivate struct ChatWindowActionContext {
                 if workspace.isPinned(address) {
                     workspace.unpin(address)
                     HapticService.shared.play(.toggleOff)
-                } else if let title = screen.openConversationTitle ?? (workspace.supportsIndependentNames(address) ? "" : nil) {
-                    workspace.pin(address, name: title)
+                } else {
+                    workspace.pin(address, displayedTitle: screen.openConversationTitle)
                     HapticService.shared.play(.toggleOn)
                 }
             }
         case .rename:
-            if let address = screen.openAddress { renamePinnedChat(address) }
+            if let address = screen.openAddress { renameChat(address) }
         case .regenerateName:
             if let address = screen.openAddress { regenerateName(address) }
         case .copyReference:

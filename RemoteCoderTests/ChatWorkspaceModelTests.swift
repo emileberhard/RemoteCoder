@@ -423,16 +423,16 @@ struct ChatWorkspaceModelTests {
         let miniAddress = ConversationAddress(hostID: fixture.mini.id, threadID: shared)
         let bookAddress = ConversationAddress(hostID: fixture.book.id, threadID: shared)
 
-        fixture.workspace.pin(miniAddress, name: "Mini side")
-        #expect(fixture.workspace.pinnedName(for: miniAddress) == "Mini side")
+        fixture.workspace.pin(miniAddress, displayedTitle: "Mini side")
+        #expect(mini.target.conversationList.pinnedName(for: shared) == "Mini side")
         // The same thread id on the other host is a different conversation.
-        #expect(fixture.workspace.pinnedName(for: bookAddress) == nil)
+        #expect(book.target.conversationList.pinnedName(for: shared) == nil)
         #expect(book.target.conversationList.marks.pinNames.isEmpty)
 
-        fixture.workspace.pin(miniAddress, name: "Mini renamed")
+        fixture.workspace.pin(miniAddress, displayedTitle: "Mini renamed")
         #expect(mini.target.conversationList.marks.pinName(for: shared) == "Mini renamed")
         fixture.workspace.unpin(miniAddress)
-        #expect(fixture.workspace.pinnedName(for: miniAddress) == nil)
+        #expect(mini.target.conversationList.pinnedName(for: shared) == nil)
 
         // Selecting a row that host already has open only changes the visible
         // host; it must not re-resume anything.
@@ -666,7 +666,7 @@ struct ChatWorkspaceModelTests {
         }
         #expect(titles() == [fixture.mini.id: "minne-memory", fixture.book.id: "Test"])
 
-        fixture.workspace.pin(ConversationAddress(hostID: fixture.mini.id, threadID: "shared"), name: "Pinned")
+        fixture.workspace.pin(ConversationAddress(hostID: fixture.mini.id, threadID: "shared"), displayedTitle: "Pinned")
         #expect(titles()[fixture.mini.id] == "Pinned")
     }
 

@@ -23,7 +23,7 @@ struct ConversationHistoryView: View {
     @State private var pending: ConversationSidebarSnapshot?
     @State private var isInteracting = false
     @State private var undo: DrawerUndo?
-    @State private var renamingPinnedChat: ConversationAddress?
+    @State private var renamingChat: ChatRenameRequest?
     @State private var windowActivations = 0
     @State private var capturedWindowActivation: Int?
     @State private var visibility = SurfaceVisibilityState(isVisible: false)
@@ -44,7 +44,7 @@ struct ConversationHistoryView: View {
             .safeAreaInset(edge: .top) {
                 if isVisible { ClusterCoverageStrip(coverage: workspace.agentCoverage).padding(.horizontal) }
             }
-            .pinnedChatRenamePrompt($renamingPinnedChat, workspace: workspace)
+            .chatRenamePrompt($renamingChat, workspace: workspace)
             .modifier(WindowActivations(count: $windowActivations))
             .task(id: Arrangement(isVisible: isVisible, windowActivations: windowActivations)) {
                 guard isVisible else { capturedWindowActivation = nil; return }
@@ -178,7 +178,7 @@ struct ConversationHistoryView: View {
         ConversationHistoryActions(
             open: onSelect,
             pin: pin,
-            rename: { renamingPinnedChat = $0.address },
+            rename: { renamingChat = ChatRenameRequest(address: $0.address, title: $0.title) },
             regenerateName: { address in
                 HapticService.shared.play(.commit)
                 workspace.regenerateTitle(at: address) { message in
@@ -252,7 +252,7 @@ struct ConversationHistoryView: View {
 
 extension ConversationHistoryView {
     private func pin(_ row: ConversationSidebarRow) {
-        rearrange { workspace.pin(row.address, name: row.title) }
+        rearrange { workspace.pin(row.address, displayedTitle: row.title) }
         HapticService.shared.play(.toggleOn)
     }
 

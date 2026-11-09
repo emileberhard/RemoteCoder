@@ -146,6 +146,11 @@ enum ConversationSidebarHostStatus: Equatable, Sendable {
     case failed(String)
 }
 
+struct UnloadedPinnedConversation: Identifiable, Equatable, Sendable {
+    let id: String
+    let title: String?
+}
+
 /// A host's own loading/error state, so an unreachable gateway is attributable
 /// instead of silently missing from the merged list.
 struct ConversationSidebarHostState: Identifiable, Equatable, Sendable {
@@ -156,7 +161,7 @@ struct ConversationSidebarHostState: Identifiable, Equatable, Sendable {
     let rowCount: Int
     var canLoadMore = false
     var hasDiscardedHeaders = false
-    var unloadedPins: [String: String] = [:]
+    var unloadedPins: [UnloadedPinnedConversation] = []
     var showsHostLabel = false
 
     var id: String { ExecutionTarget(hostID: hostID).id }
@@ -194,7 +199,7 @@ struct ConversationSidebarHostInput {
     var settlementEdits: [String: Int] = [:]
     var canLoadMore = false
     var hasDiscardedHeaders = false
-    var unloadedPins: [String: String] = [:]
+    var unloadedPins: [UnloadedPinnedConversation] = []
 
     var target: ExecutionTarget { ExecutionTarget(hostID: hostID) }
 }
@@ -454,7 +459,7 @@ enum ConversationSidebarProjection {
         }
     }
 
-    static func matches(title: String, workingDirectory: String, hostName: String?, query: String) -> Bool {
+    static func matches(title: String?, workingDirectory: String, hostName: String?, query: String) -> Bool {
         matches(title: title, workingDirectory: workingDirectory, hostName: hostName,
                 terms: query.split(whereSeparator: \.isWhitespace).map(String.init))
     }
@@ -464,9 +469,9 @@ enum ConversationSidebarProjection {
                 hostName: row.showsHostLabel ? row.hostName : nil, terms: terms)
     }
 
-    private static func matches(title: String, workingDirectory: String, hostName: String?, terms: [String]) -> Bool {
+    private static func matches(title: String?, workingDirectory: String, hostName: String?, terms: [String]) -> Bool {
         terms.allSatisfy { term in
-            title.localizedStandardContains(term)
+            title?.localizedStandardContains(term) == true
                 || workingDirectory.localizedStandardContains(term)
                 || hostName?.localizedStandardContains(term) == true
         }

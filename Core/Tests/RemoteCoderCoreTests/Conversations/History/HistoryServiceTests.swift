@@ -243,11 +243,11 @@ struct HistoryServiceTests {
         await model.loadOlder(query: "", including: { _ in true })
         #expect(model.header(id: browsed.id) == nil)
         #expect(model.hasDiscardedHeaders)
-        #expect(Array(model.unloadedPinnedThreads.keys) == [pins[0].id])
+        #expect(model.unloadedPinnedThreads.map(\.id) == [pins[0].id])
         await gateway.setCodexHeaders(pins)
         await model.recoverProtectedHeaders(now: Date(timeIntervalSince1970: 1_000))
         #expect(model.threads.count == ConversationHeaderRetention.countLimit)
-        #expect(Array(model.unloadedPinnedThreads.keys) == [pins[0].id])
+        #expect(model.unloadedPinnedThreads.map(\.id) == [pins[0].id])
         #expect(await gateway.headerReads.count == 1)
     }
 
@@ -273,7 +273,7 @@ struct HistoryServiceTests {
             await model.recoverProtectedHeaders(now: date.addingTimeInterval(TimeInterval(offset + 29)))
             #expect(await gateway.headerReads.count == count)
             #expect(model.threads.isEmpty)
-            #expect(model.unloadedPinnedThreads == ["missing": flagPin ? "Unknown title" : "Unloaded pin"])
+            #expect(model.unloadedPinnedThreads == [UnloadedPinnedConversation(id: "missing", title: flagPin ? nil : "Unloaded pin")])
         }
         #expect(await gateway.headerReads == Array(repeating: "missing", count: 7))
         await gateway.setCodexHeaders(try [header("missing", time: 1)])
@@ -281,6 +281,15 @@ struct HistoryServiceTests {
         #expect(model.header(id: "missing") != nil)
         #expect(model.unloadedPinnedThreads.isEmpty)
         #expect(await gateway.headerReads.count == 8)
+        if flagPin {
+            model.pin(threadID: "new")
+            #expect(model.isPinned("new"))
+            #expect(model.marksReplica.pending.contains { $0.change == .pinFlag(threadID: "new") })
+        } else {
+            model.pin(threadID: "new", name: "Legacy title")
+            #expect(model.marksReplica.pending.contains { $0.change == .pin(threadID: "new", name: "Legacy title") })
+        }
+
     }
 
     @MainActor @Test func boundedHeaderWindowReloadsPinsAndLiveIDsAndSearchFindsAnEvictedOlderMatch() async throws {

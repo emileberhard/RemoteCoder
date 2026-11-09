@@ -1663,9 +1663,16 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         model(for: address.hostID)?.regenerateTitle(threadID: address.threadID, onFailure: onFailure)
     }
 
-    func pin(_ address: ConversationAddress, name: String) {
+    func pin(_ address: ConversationAddress, displayedTitle: String?) {
+        guard let list = model(for: address.hostID)?.conversationList else { return }
+        if list.marks.usesPinFlag {
+            list.pin(threadID: address.threadID)
+        } else if let displayedTitle {
+            list.pin(threadID: address.threadID, name: displayedTitle)
+        } else {
+            return
+        }
         drawerPreferences.isPinnedFolded = false
-        model(for: address.hostID)?.conversationList.pin(threadID: address.threadID, name: name)
     }
 
     func unpin(_ address: ConversationAddress) {
@@ -1680,23 +1687,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         model(for: address.hostID)?.conversationList.marks.usesPinFlag == true
     }
 
-    func conversationTitle(_ address: ConversationAddress) -> String? {
-        guard let list = model(for: address.hostID)?.conversationList,
-              let header = list.header(id: address.threadID) else { return nil }
-        return list.pinnedName(for: address.threadID) ?? header.displayTitle
-    }
-
     func rename(_ address: ConversationAddress, name: String, onFailure: @escaping @MainActor (String) -> Void) {
         guard let owner = model(for: address.hostID) else { return }
         if owner.conversationList.marks.usesPinFlag {
             owner.renameThread(threadID: address.threadID, name: name, onFailure: onFailure)
         } else if owner.conversationList.isPinned(address.threadID) {
             owner.conversationList.pin(threadID: address.threadID, name: name)
+            HapticService.shared.play(.success)
         }
-    }
-
-    func pinnedName(for address: ConversationAddress) -> String? {
-        return model(for: address.hostID)?.conversationList.pinnedName(for: address.threadID)
     }
 
     // MARK: - Completion notifications
