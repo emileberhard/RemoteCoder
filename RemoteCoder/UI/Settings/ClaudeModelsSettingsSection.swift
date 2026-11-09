@@ -40,7 +40,7 @@ private struct ClaudeModelsSettingsPage: View {
                 Text("New models appear automatically. Conversations keep their model even when you hide it.")
             }
             HostModelsSection(entries: hostEntries, header: "From the Host",
-                              footer: "Claude models the host offers through other providers.", preferences: preferences)
+                              footer: "Models the host runs in Claude Code through other providers.", preferences: preferences)
             ReasoningLevelsSection(provider: .claude, models: ClaudeModelCatalog.models + hostEntries.map(\.option),
                                    preferences: preferences)
         }

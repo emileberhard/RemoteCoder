@@ -101,18 +101,16 @@ struct GatewayHostsSettingsSection: View {
                 invalidHostRow(for: host)
             }
 
-            Button("Add host", systemImage: "plus") {
+            Button("Add Host", systemImage: "plus") {
                 HapticService.shared.play(.buttonPress)
                 editor = .new
             }
-            Button("Create installation credentials") {
+            Button("Create Installation Credentials") {
                 HapticService.shared.play(.buttonPress)
                 Task {
                     await workspace.enrollInstallationCredentials()
                 }
             }
-        } header: {
-            Text("Gateway hosts")
         }
     }
 

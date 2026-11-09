@@ -1,41 +1,45 @@
 import SwiftUI
 
 struct ThirdPartyLicensesView: View {
-    @State private var document: String?
-    @State private var files: [URL] = []
+    private struct Listing {
+        let notices: URL
+        let files: [URL]
+    }
+
+    @State private var listing: Listing?
     @State private var failure: String?
 
     var body: some View {
-        Form {
-            Section {
-                if let document {
-                    Text(document)
-                        .scaledFont(.caption.monospaced())
-                        .textSelection(.enabled)
-                } else if let failure {
-                    Text(failure)
-                } else {
-                    ProgressView()
+        SettingsPage(title: "Licenses") {
+            if let listing {
+                Section {
+                    NavigationLink("Third-Party Notices") {
+                        LicenseTextView(title: "Third-Party Notices", file: listing.notices)
+                    }
                 }
-            }
-            Section("License Texts") {
-                ForEach(files, id: \.self) { file in
-                    NavigationLink(file.lastPathComponent) { LicenseTextView(file: file) }
+                Section("License Texts") {
+                    ForEach(listing.files, id: \.self) { file in
+                        NavigationLink(file.lastPathComponent) {
+                            LicenseTextView(title: file.lastPathComponent, file: file)
+                        }
+                    }
+                    #if os(iOS)
+                    NavigationLink("Google Maps and Navigation") { GoogleNavigationLicensesView() }
+                    #endif
                 }
-                #if os(iOS)
-                NavigationLink("Google Maps and Navigation") { GoogleNavigationLicensesView() }
-                #endif
+            } else if let failure {
+                Text(failure)
+            } else {
+                ProgressView()
             }
         }
-        .navigationTitle("Licenses")
-        .inlineNavigationTitle()
         .task {
-            do { (document, files) = try await Self.readNotices() }
+            do { listing = try await Self.readListing() }
             catch { failure = "Licenses could not be read: \(error.localizedDescription)" }
         }
     }
 
-    @concurrent private static func readNotices() async throws -> (String, [URL]) {
+    @concurrent private static func readListing() async throws -> Listing {
         guard let notices = Bundle.main.url(forResource: "THIRD_PARTY_NOTICES", withExtension: "md"),
               let directory = Bundle.main.resourceURL?.appending(path: "LICENSES") else {
             throw CocoaError(.fileNoSuchFile)
@@ -43,11 +47,12 @@ struct ThirdPartyLicensesView: View {
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
             .filter { try $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        return (try String(contentsOf: notices, encoding: .utf8), files)
+        return Listing(notices: notices, files: files)
     }
 }
 
 private struct LicenseTextView: View {
+    let title: String
     let file: URL
     @State private var blocks: [String]?
     @State private var failure: String?
@@ -70,7 +75,7 @@ private struct LicenseTextView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding()
         }
-        .navigationTitle(file.lastPathComponent)
+        .navigationTitle(title)
         .inlineNavigationTitle()
         .task {
             do { blocks = try await Self.read(file) }
