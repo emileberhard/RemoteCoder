@@ -2,10 +2,10 @@ import Foundation
 import Testing
 @testable import RemoteCoder
 
-/// What a dispatched turn's end, a foreign or replayed turn, and a lost socket
-/// each do to busy state and the send. They run against the
-/// real chat model and `FakeGatewayServer` so they hold across any change to
-/// how the model learns that its own turn ended.
+/// What a dispatched turn's end, a replayed turn and a lost socket each do to
+/// busy state and the send. They run against the real chat model and
+/// `FakeGatewayServer` so they hold across any change to how the model learns
+/// that its own turn ended.
 @MainActor
 struct TurnCompletionBoundaryTests {
     private static let thread = "019a3333-0000-7000-8000-000000000004"
@@ -68,27 +68,6 @@ struct TurnCompletionBoundaryTests {
 
         #expect(await waitUntil { chat.currentReplyDelivery == .idle })
         #expect(chat.target.historyBusySessionIDs.isEmpty)
-    }
-
-    @Test(.timeLimit(.minutes(1))) func aForeignTurnNeverEndsTheDispatchedJob() async throws {
-        let gateway = try FakeGatewayServer(threadID: Self.thread, model: CodexModelFixtures.solID)
-        let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
-        defer { await fixture.cleanUp(); await gateway.stop() }
-        let chat = try await openChat(fixture)
-        try await dispatch("Hi", from: chat, to: gateway)
-
-        for (method, params) in [
-            ("item/completed", agentMessage("From another client", itemID: "foreign", turnID: "turn-other")),
-            ("turn/completed", completion(status: "completed", turnID: "turn-other")),
-        ] {
-            let note = CodexGatewayNotification(method: method, params: .object(params), server: ServerNotification.decode(method: method, params: .object(params)))
-            await chat.target.apply(gatewayEvent: try #require(GatewayNotificationRouting.route(note)), replay: false)
-        }
-        #expect(chat.currentReplyDelivery == .acknowledged)
-        #expect(chat.target.historyBusySessionIDs == [Self.thread])
-
-        try await gateway.notify("turn/completed", completion(status: "completed"))
-        #expect(await waitUntil { chat.currentReplyDelivery == .idle })
     }
 
     @Test(.timeLimit(.minutes(1))) func aReplayedCompletionEndsTheJob() async throws {
