@@ -3567,7 +3567,12 @@ async fn queue_agent() -> (
 ) {
     let (tx, rx) = mpsc::channel(256);
     let (home, agent) = isolated_agent(tx);
-    let (runtime, child) = placeholder_runtime(&request(QUEUE_THREAD, false)).await;
+    let started = request(QUEUE_THREAD, false);
+    agent
+        .record_initial_selection(QUEUE_THREAD, &started.cwd, &started.selection)
+        .await
+        .unwrap();
+    let (runtime, child) = placeholder_runtime(&started).await;
     let group = runtime.process_group_id;
     agent
         .runtimes
