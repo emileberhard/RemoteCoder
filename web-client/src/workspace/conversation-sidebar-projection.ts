@@ -170,7 +170,7 @@ function rowMarkState(
     canSettle: settlement === "unsettled" && activity !== "working",
   };
 }
-function conversationTitle(thread: ConversationHeader, pinName: string | undefined) {
+export function conversationTitle(thread: ConversationHeader, pinName: string | undefined) {
   return pinName ?? (thread.name?.trim() ? thread.name : thread.preview.trim() || "(untitled)");
 }
 export function conversationRowMarkState(

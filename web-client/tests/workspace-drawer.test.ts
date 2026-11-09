@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
+import { targetKey } from "../src/execution-context";
 import { object } from "../src/protocol/boundary";
 import { favoriteFolders } from "../src/workspace/favorite-folder";
-import { deferred, header, host, MemoryStorage, setup, workspaces } from "./fixtures/workspace";
+import { Workspace } from "../src/workspace/workspace";
+import { deferred, Harness, header, host, MemoryStorage, setup, workspaces } from "./fixtures/workspace";
 
 afterEach(() => {
   for (const workspace of workspaces.splice(0)) workspace.dispose();
@@ -536,4 +538,69 @@ test("legacy rename changes only a pinned name and refuses unpinned rename", asy
   await workspace.renameConversation(address, "  Chosen name  ");
   expect(rows(workspace).find((row) => row.address.threadId === "shared")?.title).toBe("Chosen name");
   expect(harness.calls.some((call) => call.method === "thread/name/set")).toBe(false);
+});
+
+test("rollback repairs persisted nameless pins before delivering subsequent marks", async () => {
+  const disk = new MemoryStorage();
+  const key = `remotecoder.web.marks.v1:${targetKey({ hostId: "mini" })}`;
+  disk.setItem(
+    key,
+    JSON.stringify({
+      acknowledged: { schemaVersion: 5, revision: 0, readBaseline: 0, threads: {} },
+      pending: [
+        { id: "known", change: { op: "pin", threadId: "shared" } },
+        { id: "missing", change: { op: "pin", threadId: "unknown" } },
+        { id: "preview", change: { op: "pin", threadId: "preview" } },
+        { id: "old", change: { op: "pin", threadId: "shared", name: "Earlier named pin" } },
+        { id: "again", change: { op: "pin", threadId: "shared" } },
+        { id: "unread", change: { op: "markUnread", threadId: "shared" } },
+      ],
+    }),
+  );
+  const dispatched = deferred<unknown>();
+  const ack = deferred<unknown>();
+  let harness: Harness | undefined;
+  const workspace = new Workspace((_host, event) => {
+    harness = new Harness(event);
+    harness.marks = { schemaVersion: 4, revision: 0, readBaseline: 0, threads: {} };
+    harness.handler = (method, params) => {
+      if (method === "thread/list")
+        return {
+          data: [header(), { ...header("preview"), name: null, preview: "å".repeat(129) }],
+          nextCursor: null,
+        };
+      if (method !== "conversation/marks/update") return undefined;
+      dispatched.resolve(params);
+      return ack.promise;
+    };
+    return harness;
+  }, disk);
+  workspaces.push(workspace);
+  workspace.configureHosts([host("mini")]);
+  const refresh = workspace.refreshHost("mini");
+  const params = await dispatched.promise;
+  expect(params).toEqual({
+    changes: [
+      { op: "pin", threadId: "shared", name: "Conversation" },
+      { op: "pin", threadId: "preview", name: "å".repeat(128) },
+      { op: "pin", threadId: "shared", name: "Earlier named pin" },
+      { op: "pin", threadId: "shared", name: "Earlier named pin" },
+      { op: "markUnread", threadId: "shared" },
+    ],
+  });
+  const saved = JSON.parse(disk.getItem(key) ?? "{}");
+  expect(saved.pending.map((entry: { id: string }) => entry.id)).toEqual([
+    "known",
+    "preview",
+    "old",
+    "again",
+    "unread",
+  ]);
+  expect(saved.pending.map((entry: { change: unknown }) => entry.change)).toEqual(
+    (params as { changes: unknown }).changes,
+  );
+  ack.resolve({ delta: null });
+  await refresh;
+  expect(workspace.conversationMarks()?.pendingCount).toBe(0);
+  expect(workspace.conversationMarks()?.status).toBe("ready");
 });

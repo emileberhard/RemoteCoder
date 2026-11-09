@@ -50,6 +50,7 @@ test("notifications do not establish coverage; in-flight notifications survive a
     rpc(() => read.promise),
     undefined,
     () => {},
+    () => undefined,
   );
   store.receive(snapshot(2, { t: { revision: 2, pinName: "Before read" } }));
   expect(store.marks).toBeUndefined();
@@ -74,7 +75,13 @@ test("captured acknowledgments preserve later local edits and serialize batches"
     if (updates.length === 1) return first.promise;
     return { delta: snapshot(3, { t: { revision: 3, pinName: "Second" } }) };
   });
-  const store = new ConversationMarksStore({ hostId: "mini" }, remote, disk.value, () => {});
+  const store = new ConversationMarksStore(
+    { hostId: "mini" },
+    remote,
+    disk.value,
+    () => {},
+    () => undefined,
+  );
   await store.sync();
   store.recordChanges([{ op: "pin", threadId: "t", name: "First" }]);
   await tick();
@@ -98,20 +105,38 @@ test("disk failure prevents dispatch and retains pending changes after RPC failu
     updates++;
     throw new Error("offline");
   });
-  const store = new ConversationMarksStore({ hostId: "mini" }, remote, disk.value, () => {});
+  const store = new ConversationMarksStore(
+    { hostId: "mini" },
+    remote,
+    disk.value,
+    () => {},
+    () => undefined,
+  );
   await store.sync();
   disk.break();
   expect(() => store.recordChanges([{ op: "markUnread", threadId: "t" }])).toThrow("disk full");
   await tick();
   expect(updates).toBe(0);
   const goodDisk = storage();
-  const other = new ConversationMarksStore({ hostId: "mini" }, remote, goodDisk.value, () => {});
+  const other = new ConversationMarksStore(
+    { hostId: "mini" },
+    remote,
+    goodDisk.value,
+    () => {},
+    () => undefined,
+  );
   await other.sync();
   other.recordChanges([{ op: "markUnread", threadId: "t" }]);
   await tick();
   expect(other.pendingCount).toBe(1);
   expect(other.status).toBe("failed");
-  const restored = new ConversationMarksStore({ hostId: "mini" }, remote, goodDisk.value, () => {});
+  const restored = new ConversationMarksStore(
+    { hostId: "mini" },
+    remote,
+    goodDisk.value,
+    () => {},
+    () => undefined,
+  );
   expect(restored.pendingCount).toBe(1);
   expect(restored.marks?.threads.t?.markedUnread).toBe(true);
   store.dispose();
@@ -127,7 +152,13 @@ test("exact enrollment generation isolates storage and disposed reads cannot pub
     enrollment: { accountId: "00000000-0000-0000-0000-000000000001", generation: 1 },
   };
   const remote = rpc(async () => snapshot());
-  const old = new ConversationMarksStore(target, remote, disk.value, () => {});
+  const old = new ConversationMarksStore(
+    target,
+    remote,
+    disk.value,
+    () => {},
+    () => undefined,
+  );
   await old.sync();
   old.recordChanges([{ op: "markUnread", threadId: "t" }]);
   old.dispose();
@@ -136,6 +167,7 @@ test("exact enrollment generation isolates storage and disposed reads cannot pub
     rpc(() => read.promise),
     disk.value,
     () => {},
+    () => undefined,
   );
   expect(next.marks).toBeUndefined();
   const syncing = next.sync();
@@ -156,7 +188,13 @@ test("bounded pending queue rejects overflow without dropping saved changes; bat
     if (sizes.length === 1) await gate.promise;
     return { delta: null };
   });
-  const store = new ConversationMarksStore({ hostId: "mini" }, remote, disk.value, () => {});
+  const store = new ConversationMarksStore(
+    { hostId: "mini" },
+    remote,
+    disk.value,
+    () => {},
+    () => undefined,
+  );
   await store.sync();
   store.recordChanges(
     Array.from({ length: 2000 }, (_, index) => ({ op: "markUnread" as const, threadId: `t${index}` })),
@@ -180,6 +218,7 @@ test("undecodable saved marks are quarantined once and fresh authoritative cover
     rpc(async () => snapshot()),
     disk.value,
     () => {},
+    () => undefined,
   );
   expect(store.status).toBe("unread");
   expect(store.restoreWarning).toContain("set aside");
@@ -195,6 +234,7 @@ test("undecodable saved marks are quarantined once and fresh authoritative cover
     rpc(async () => snapshot()),
     disk.value,
     () => {},
+    () => undefined,
   );
   expect(restored.restoreWarning).toBeUndefined();
   restored.dispose();
@@ -204,6 +244,7 @@ test("undecodable saved marks are quarantined once and fresh authoritative cover
     rpc(async () => snapshot()),
     disk.value,
     () => {},
+    () => undefined,
   );
   expect(disk.data.get(`${key}.quarantine`)).toBe("another broken value");
   expect([...disk.data.keys()].filter((key) => key.endsWith(".quarantine"))).toHaveLength(1);
@@ -224,6 +265,7 @@ test("a failed quarantine write retains the original raw marks and blocks dispat
     }),
     disk.value,
     () => {},
+    () => undefined,
   );
   expect(store.status).toBe("failed");
   expect(() => store.recordChanges([{ op: "markUnread", threadId: "t" }])).toThrow("unavailable");
@@ -260,6 +302,7 @@ for (const reentrant of [false, true]) {
         if (reentrant) enqueue();
         else queueMicrotask(enqueue);
       },
+      () => undefined,
     );
     await store.sync();
     await again;
@@ -284,6 +327,7 @@ test("known no-op edits do not consume pending capacity or send repeated acknowl
     }),
     storage().value,
     () => {},
+    () => undefined,
   );
   await store.sync();
   store.recordChanges([
@@ -331,6 +375,7 @@ test("older gateway schema drops unsupported pending settlements and still synch
     }),
     disk.value,
     () => {},
+    () => undefined,
   );
   await store.sync();
   expect(sent).toEqual([
@@ -359,7 +404,13 @@ test("saved legacy named pins survive a schema 5 read and dispatch unchanged", a
     sent.push(params);
     return { delta: { ...next, revision: 2, threads: { t: { revision: 2, pinned: true } } } };
   });
-  const store = new ConversationMarksStore({ hostId: "mini" }, remote, disk.value, () => {});
+  const store = new ConversationMarksStore(
+    { hostId: "mini" },
+    remote,
+    disk.value,
+    () => {},
+    () => undefined,
+  );
   await store.sync();
   expect(sent).toEqual([{ changes: [change] }]);
   expect(store.pendingCount).toBe(0);

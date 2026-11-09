@@ -23,6 +23,7 @@ import {
   type ConversationSidebarSnapshot,
   captureDrawerLayout,
   conversationRowMarkState,
+  conversationTitle,
   projectConversationSidebar,
 } from "./conversation-sidebar-projection";
 import { type DrawerUndo, drawerUndo } from "./drawer-undo";
@@ -77,10 +78,19 @@ export class ConversationSidebarModel {
     if (!state) {
       state = {
         host,
-        marks: new ConversationMarksStore(host.target, host.rpc, this.storage, () => {
-          void this.recoverPins(host);
-          this.publish();
-        }),
+        marks: new ConversationMarksStore(
+          host.target,
+          host.rpc,
+          this.storage,
+          () => {
+            void this.recoverPins(host);
+            this.publish();
+          },
+          (threadId) => {
+            const header = host.threads.find((thread) => thread.id === threadId);
+            return header ? conversationTitle(header, undefined) : undefined;
+          },
+        ),
         projects: new ConversationProjects(host.rpc, this.publish),
         activity: { states: new Map(), waitingSince: new Map() },
         activityRead: 0,
