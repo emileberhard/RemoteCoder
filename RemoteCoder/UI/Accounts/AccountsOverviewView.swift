@@ -17,22 +17,22 @@ struct AccountsOverviewView: View {
 
     var body: some View {
         List {
-            if !workspace.accountDirectory.claude.accounts.isEmpty {
+            if !workspace.accountDirectory.router.accounts.isEmpty {
                 Section("Claude") {
                     Button {
                         HapticService.shared.play(.selection)
-                        Task { await workspace.accountDirectory.claude.setPreference(nil) }
+                        Task { await workspace.accountDirectory.router.setPreference(nil) }
                     } label: {
-                        Label("Automatic", systemImage: workspace.accountDirectory.claude.state.preference == nil ? "checkmark.circle.fill" : "circle")
+                        Label("Automatic", systemImage: workspace.accountDirectory.router.state.preference == nil ? "checkmark.circle.fill" : "circle")
                     }
-                    .disabled(!workspace.accountDirectory.claude.canSelect)
-                    ForEach(workspace.accountDirectory.claude.accounts) { account in
-                        ClaudeAccountSummaryRow(directory: workspace.accountDirectory.claude, account: account,
+                    .disabled(!workspace.accountDirectory.router.canSelect)
+                    ForEach(workspace.accountDirectory.router.accounts) { account in
+                        ClaudeAccountSummaryRow(directory: workspace.accountDirectory.router, account: account,
                                                 onDetails: { detailClaudeAccountID = account.id })
                     }
                 }
             }
-            if let error = workspace.accountDirectory.claude.error {
+            if let error = workspace.accountDirectory.router.error {
                 Section { Text(error).scaledFont(.footnote).foregroundStyle(.secondary) }
             }
             ForEach([AgentProvider.codex].filter { provider in
@@ -64,10 +64,10 @@ struct AccountsOverviewView: View {
             OrphanedAccountResetsView(redemptions: workspace.accountDirectory.resetRedemptions,
                 accountIDs: Set(workspace.accountDirectory.groups.map(\.id)),
                 onRetry: { id in Task { await workspace.accountDirectory.retryReset(groupID: id) } })
-            OrphanedAccountResetsView(redemptions: workspace.accountDirectory.claude.resetRedemptions,
-                accountIDs: Set(workspace.accountDirectory.claude.accounts.map(\.id)),
-                onRetry: { id in Task { await workspace.accountDirectory.claude.retryReset(accountID: id) } })
-            if workspace.accountDirectory.groups.filter({ $0.provider == .codex }).isEmpty, workspace.accountDirectory.claude.accounts.isEmpty {
+            OrphanedAccountResetsView(redemptions: workspace.accountDirectory.router.resetRedemptions,
+                accountIDs: Set(workspace.accountDirectory.router.accounts.map(\.id)),
+                onRetry: { id in Task { await workspace.accountDirectory.router.retryReset(accountID: id) } })
+            if workspace.accountDirectory.groups.filter({ $0.provider == .codex }).isEmpty, workspace.accountDirectory.router.accounts.isEmpty {
                 Section {
                     if workspace.accountDirectory.hosts.contains(where: \.isRefreshing) {
                         ProgressView("Loading accounts…")
@@ -101,7 +101,7 @@ struct AccountsOverviewView: View {
             AccountUsageDetailView(workspace: workspace, accountID: id)
         }
         .navigationDestination(item: $detailClaudeAccountID) { id in
-            ClaudeAccountDetailView(directory: workspace.accountDirectory.claude, accountID: id)
+            ClaudeAccountDetailView(directory: workspace.accountDirectory.router, accountID: id)
         }
         .alert("Rename account", item: $renaming) { target in
             TextField(names.defaultName(provider: target.provider, identity: target.identity), text: $nameDraft)

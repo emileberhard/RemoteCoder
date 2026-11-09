@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 @Observable @MainActor
-final class ClaudeAccountDirectory {
+final class RouterAccountDirectory {
     private(set) var state = ClaudeRouterAccountState()
     private(set) var isRefreshing = false
     private(set) var isSelecting = false

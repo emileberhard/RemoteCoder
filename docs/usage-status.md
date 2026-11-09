@@ -158,7 +158,7 @@ Opening the overview or Claude details requests an interactive refresh; the
 router owns provider-read throttling. Sign-in failures
 name the account and ask for an agent to reconnect its router grant.
 
-`AccountDirectory` owns Codex redemption and `ClaudeAccountDirectory` owns
+`AccountDirectory` owns Codex redemption and `RouterAccountDirectory` owns
 Claude redemption, independently of account preference selection. Their
 `AccountResetRedemptions` saves one unresolved attempt per subscription in a
 device-local provider ledger before submission. It records the account name,

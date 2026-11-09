@@ -293,7 +293,7 @@ across hosts are grouped without adding their allowances. It chooses a fresh, id
 retains per-host authentication/availability. Account groups have stable ordering
 across quota refreshes. `AccountDirectory` stores Codex groups and rebuilds them
 only when host configuration, accounts or names change. Its
-`ClaudeAccountDirectory` owns router reads and the preference, fences
+`RouterAccountDirectory` owns router reads and the preference, fences
 results when hosts change and cancels its work on teardown. Periodic reads use
 GET. Only the Claude ring, its popover and All Accounts request quota probes;
 Codex notification, automation and account-detail work refresh Codex separately.

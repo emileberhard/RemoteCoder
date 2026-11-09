@@ -26,7 +26,7 @@ final class AccountDirectory {
 
     private(set) var hosts: [HostAccounts] = []
     private(set) var groups: [AccountGroup] = []
-    let claude: ClaudeAccountDirectory
+    let router: RouterAccountDirectory
     let names: AccountNameStore
     let resetRedemptions: AccountResetRedemptions
     @ObservationIgnored private let store: AccountDirectoryStore
@@ -42,7 +42,7 @@ final class AccountDirectory {
          beginBackgroundExecution: @escaping AccountResetRedemptions.BeginBackgroundExecution,
          routes: @escaping @MainActor @Sendable (GatewayHostConfiguration) -> GatewayRoutes?) {
         self.routes = routes
-        claude = ClaudeAccountDirectory(storage: storage, beginBackgroundExecution: beginBackgroundExecution, routes: routes)
+        router = RouterAccountDirectory(storage: storage, beginBackgroundExecution: beginBackgroundExecution, routes: routes)
         resetRedemptions = AccountResetRedemptions(storage: storage, provider: .codex, beginBackgroundExecution: beginBackgroundExecution)
         store = AccountDirectoryStore(storage: storage)
         names = AccountNameStore(defaults: defaults)
@@ -85,7 +85,7 @@ final class AccountDirectory {
             resetRedemptions.retire(hostID: previous.id)
         }
         resetRedemptions.retainHosts(Set(configured.map(\.id)))
-        if claude.reconcile(configured), foreground != nil { claude.requestRead() }
+        if router.reconcile(configured), foreground != nil { router.requestRead() }
         let ids = Set(configured.map(\.id))
         for host in hosts where !ids.contains(host.id) {
             tasks.removeValue(forKey: host.id)?.cancel()
@@ -109,7 +109,7 @@ final class AccountDirectory {
 
     func restore() async {
         await resetRedemptions.restore()
-        await claude.resetRedemptions.restore()
+        await router.resetRedemptions.restore()
         for hostID in hosts.map(\.id) {
             let epoch = epochs[hostID]
             guard let cached = await store.load(hostID: hostID), epochs[hostID] == epoch,
@@ -170,9 +170,9 @@ final class AccountDirectory {
     }
 
     func refresh(interactive: Bool = false) async {
-        async let claudeRefresh: Void = claude.refresh(interactive: interactive)
+        async let routerRefresh: Void = router.refresh(interactive: interactive)
         await refreshCodex(interactive: interactive)
-        await claudeRefresh
+        await routerRefresh
     }
 
     func refreshCodex(interactive: Bool) async {
@@ -261,11 +261,11 @@ final class AccountDirectory {
     func stop() {
         stopForeground()
         resetRedemptions.stop()
-        claude.resetRedemptions.stop()
+        router.resetRedemptions.stop()
     }
 
     func stopForeground() {
-        claude.stopReading()
+        router.stopReading()
         foreground?.cancel(); foreground = nil
         for task in tasks.values { task.cancel() }
         tasks.removeAll()

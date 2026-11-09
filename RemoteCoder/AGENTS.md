@@ -1558,7 +1558,7 @@ entrypoint linked above.
     A provider the selected host's gateway reports broken dims its logo and
     adds a warning badge; its popover states the reason. Unreported health
     shows nothing.
-  - `AccountDirectory` owns Codex reset redemption; `ClaudeAccountDirectory`
+  - `AccountDirectory` owns Codex reset redemption; `RouterAccountDirectory`
     owns Claude redemption. Their `AccountResetRedemptions` persists one pending
     attempt per subscription before submission. Retry retains its host, offer
     and host-default gateway account ID across restarts; keys serialize as lowercase

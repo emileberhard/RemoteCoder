@@ -6,7 +6,7 @@ struct ClaudeUsageRingButton: View {
     @State private var presentation: Presentation?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private enum Presentation { case usage, leavingUsageForAccounts, accounts }
-    private var directory: ClaudeAccountDirectory { workspace.accountDirectory.claude }
+    private var directory: RouterAccountDirectory { workspace.accountDirectory.router }
 
     var body: some View {
         let selected = directory.effectiveAccount
@@ -54,7 +54,7 @@ struct ClaudeUsageRingButton: View {
 }
 
 struct ClaudeUsageDetailsView: View {
-    var directory: ClaudeAccountDirectory
+    var directory: RouterAccountDirectory
     let providerReason: String?
     let onShowAllAccounts: () -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -125,7 +125,7 @@ struct ClaudeUsageDetailsView: View {
 }
 
 struct ClaudeAccountSummaryRow: View {
-    var directory: ClaudeAccountDirectory
+    var directory: RouterAccountDirectory
     let account: ClaudeRouterAccount
     let onDetails: () -> Void
 
@@ -172,7 +172,7 @@ struct ClaudeAccountSummaryRow: View {
 }
 
 struct ClaudeAccountDetailView: View {
-    var directory: ClaudeAccountDirectory
+    var directory: RouterAccountDirectory
     let accountID: String
 
     var body: some View {
