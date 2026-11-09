@@ -2999,8 +2999,10 @@ carry `schemaVersion`; a missing value means 1. The
 document's read baseline is set when it is first created, so existing history
 starts read. Schema 5 imports v4, v3 or v2 on first load, or v1 through the
 settlement conversion, leaving every older file untouched for rollback. A legacy
-pin name becomes a pin and a pending rename; the control-owned drain skips names
-already shown by the thread and retains failures for retry. Manual rename,
+pin name becomes a pin and a pending rename; the control-owned drain skips a
+name equal to the thread's current name, or for an untitled thread a name found
+in its raw preview after trimming whitespace and a trailing ellipsis. It retains
+other failures for retry. Manual rename,
 regeneration and forgetting a thread cancel its pending carry-over. A schema 5
 pin is a flag; the provider thread's name, then preview, supplies its title.
 Clients retain the old named-pin behavior against gateways below schema 5.
