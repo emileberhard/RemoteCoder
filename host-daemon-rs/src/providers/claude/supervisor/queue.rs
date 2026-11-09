@@ -6,7 +6,9 @@ use serde_json::{Value, json};
 use tracing::warn;
 
 use super::{ClaudeSupervisor, TurnErrorData, TurnOrigin, TurnStartError};
-use crate::providers::claude::queued_messages::{Queue, QueueHold, QueuedMessage};
+use crate::providers::claude::queued_messages::{
+    Queue, QueueHold, QueueWriteUncertain, QueuedMessage,
+};
 use crate::providers::claude::{ClaudeTurnRequest, ClaudeUserInput, session_uuid_from_thread_id};
 use crate::rpc::error::RpcCode;
 
@@ -114,7 +116,7 @@ impl ClaudeSupervisor {
             })
         })
         .await
-        .context("Claude queue worker failed")??;
+        .map_err(|error| anyhow::Error::from(error).context(QueueWriteUncertain))??;
         if changed {
             let _ = self
                 .deliver(json!({"method":"thread/queue/changed","params":{"threadId":thread_id}}))

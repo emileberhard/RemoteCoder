@@ -8,7 +8,7 @@ use tracing::warn;
 
 use super::Gateway;
 use super::admission::ConversationBusy;
-use crate::providers::claude::queued_messages::QueuedMessage;
+use crate::providers::claude::queued_messages::{QueueWriteUncertain, QueuedMessage};
 use crate::providers::claude::{
     ClaudeSupervisor, QueueAddError, QueuedOutcome, QueuedStart, TurnStartError,
 };
@@ -101,7 +101,7 @@ impl Gateway {
             .claude_restart
             .carries_input(thread, id)
             .await
-            .map_err(|error| RpcError::queue_change_uncertain(thread, &error))?
+            .map_err(|error| queue_unread(&error))?
         {
             return Err(already_started());
         }
@@ -438,8 +438,71 @@ fn already_started() -> RpcError {
 }
 
 fn queue_error(thread: &str, error: anyhow::Error) -> RpcError {
+    if error.is::<QueueWriteUncertain>() {
+        return RpcError::queue_change_uncertain(thread, &error);
+    }
     match error.downcast::<crate::providers::claude::CapacityExceeded>() {
         Ok(capacity) => capacity.into(),
-        Err(error) => RpcError::queue_change_uncertain(thread, &error),
+        Err(error) => queue_unread(&error),
+    }
+}
+
+fn queue_unread(error: &anyhow::Error) -> RpcError {
+    RpcError::new(
+        RpcCode::Internal,
+        format!("The queue could not be read, so nothing changed: {error:#}"),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::mcp::McpTokens;
+    use crate::observability::journal::Journal;
+    use crate::providers::claude::ClaudeNotification;
+    use crate::test_support::TestGateway;
+    use tokio::sync::mpsc;
+
+    const THREAD: &str = "claude_11111111-2222-4333-8444-555555555555";
+
+    fn claude_gateway() -> (TestGateway, mpsc::Receiver<ClaudeNotification>) {
+        let gateway = TestGateway::new();
+        let (sender, events) = mpsc::channel(64);
+        gateway.set_claude_agent(ClaudeSupervisor::new(
+            gateway.claude_settings.clone(),
+            sender,
+            Journal::disabled(),
+            McpTokens::new(),
+        ));
+        (gateway, events)
+    }
+
+    fn add(id: &str) -> Value {
+        json!({"threadId": THREAD, "clientUserMessageId": id,
+            "input": [{"type": "text", "text": format!("queued {id}")}]})
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_queue_refuses_an_add_definitely() {
+        let (gateway, _events) = claude_gateway();
+        let file = crate::providers::claude::queued_messages::path(
+            &gateway.claude_settings.claude_home,
+            THREAD,
+        );
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            json!({"version": 2, "threadId": THREAD, "entries": []}).to_string(),
+        )
+        .unwrap();
+        let error = gateway.claude_queue_add(&add("m")).await.unwrap_err();
+        assert_eq!(error.code, RpcCode::Internal, "{error:?}");
+        assert_eq!(error.kind(), None, "nothing was written, so nothing is uncertain");
+        let error = gateway
+            .claude_queue_delete(&json!({"threadId": THREAD, "queuedSubmissionId": "m"}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, RpcCode::Internal, "{error:?}");
+        assert_eq!(error.kind(), None);
     }
 }
