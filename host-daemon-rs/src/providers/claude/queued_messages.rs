@@ -70,9 +70,26 @@ struct Document {
     hold: Option<QueueHold>,
 }
 
+#[derive(Default)]
 struct Occupant {
     thread: Option<String>,
-    bytes: u64,
+    stored: Option<u64>,
+    reserved: Option<u64>,
+}
+
+impl Occupant {
+    fn bytes(&self) -> u64 {
+        self.stored.max(self.reserved).unwrap_or(0)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct QueueWriteUncertain;
+
+impl std::fmt::Display for QueueWriteUncertain {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the Claude queue file change could not be confirmed")
+    }
 }
 
 pub(crate) struct QueuedMessages {
@@ -105,7 +122,14 @@ impl QueuedMessages {
                             None
                         }
                     };
-                    occupants.insert(file, Occupant { thread, bytes });
+                    occupants.insert(
+                        file,
+                        Occupant {
+                            thread,
+                            stored: Some(bytes),
+                            reserved: None,
+                        },
+                    );
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -119,20 +143,24 @@ impl QueuedMessages {
         }
     }
 
-    pub(crate) fn threads(&self) -> Vec<String> {
+    fn occupants(&self) -> std::sync::MutexGuard<'_, HashMap<PathBuf, Occupant>> {
         self.occupants
             .lock()
             .expect("queued message occupancy poisoned")
+    }
+
+    pub(crate) fn threads(&self) -> Vec<String> {
+        self.occupants()
             .values()
+            .filter(|occupant| occupant.stored.is_some())
             .filter_map(|occupant| occupant.thread.clone())
             .collect()
     }
 
     pub(crate) fn has(&self, thread_id: &str) -> bool {
-        self.occupants
-            .lock()
-            .expect("queued message occupancy poisoned")
-            .contains_key(&path(&self.home, thread_id))
+        self.occupants()
+            .get(&path(&self.home, thread_id))
+            .is_some_and(|occupant| occupant.stored.is_some())
     }
 
     pub(crate) fn load(&self, thread_id: &str) -> Result<Queue> {
@@ -145,13 +173,8 @@ impl QueuedMessages {
         thread_id: &str,
         operation: impl FnOnce(&mut Queue) -> Result<T>,
     ) -> Result<T> {
-        let file = path(&self.home, thread_id);
-        let mut occupants = self
-            .occupants
-            .lock()
-            .expect("queued message occupancy poisoned");
         private_state::transaction(
-            &file,
+            &path(&self.home, thread_id),
             "Claude queued messages have no parent directory",
             |file| Ok(read_queue(file, thread_id)?.unwrap_or_default()),
             |queue| {
@@ -159,51 +182,67 @@ impl QueuedMessages {
                 let result = operation(queue)?;
                 Ok((result, *queue != previous))
             },
-            |file, queue| {
-                if queue.is_empty() {
-                    match std::fs::remove_file(file) {
-                        Ok(()) => {}
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(error) => return Err(error.into()),
-                    }
-                    occupants.remove(file);
-                    return Ok(());
-                }
-                let encoded = encode(thread_id, queue)?;
-                let others = occupants
-                    .iter()
-                    .filter(|(path, _)| path.as_path() != file)
-                    .collect::<Vec<_>>();
-                if !occupants.contains_key(file) && others.len() >= MAX_THREADS {
-                    return Err(CapacityExceeded {
-                        resource: "conversations with queued messages",
-                        limit: MAX_THREADS,
-                    }
-                    .into());
-                }
-                let total = others
-                    .iter()
-                    .map(|(_, occupant)| occupant.bytes)
-                    .sum::<u64>()
-                    + encoded.len() as u64;
-                if total > MAX_TOTAL_BYTES {
-                    return Err(CapacityExceeded {
-                        resource: "queued message bytes",
-                        limit: MAX_TOTAL_BYTES as usize,
-                    }
-                    .into());
-                }
-                private_state::replace(file, &encoded)?;
-                occupants.insert(
-                    file.to_owned(),
-                    Occupant {
-                        thread: Some(thread_id.to_owned()),
-                        bytes: encoded.len() as u64,
-                    },
-                );
-                Ok(())
-            },
+            |file, queue| self.save(thread_id, file, queue),
         )
+    }
+
+    fn save(&self, thread_id: &str, file: &Path, queue: &Queue) -> Result<()> {
+        if queue.is_empty() {
+            match std::fs::remove_file(file) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(anyhow::Error::from(error).context(QueueWriteUncertain)),
+            }
+            self.occupants().remove(file);
+            return Ok(());
+        }
+        let encoded = encode(thread_id, queue)?;
+        self.reserve(thread_id, file, encoded.len() as u64)?;
+        let written = private_state::replace(file, &encoded);
+        let stored = match &written {
+            Ok(()) => Some(encoded.len() as u64),
+            Err(_) => std::fs::metadata(file).ok().map(|metadata| metadata.len()),
+        };
+        let mut occupants = self.occupants();
+        match stored {
+            Some(bytes) => {
+                let occupant = occupants.entry(file.to_owned()).or_default();
+                occupant.thread = Some(thread_id.to_owned());
+                occupant.stored = Some(bytes);
+                occupant.reserved = None;
+            }
+            None => {
+                occupants.remove(file);
+            }
+        }
+        written.context(QueueWriteUncertain)
+    }
+
+    fn reserve(&self, thread_id: &str, file: &Path, bytes: u64) -> Result<()> {
+        let mut occupants = self.occupants();
+        let others = occupants
+            .iter()
+            .filter(|(path, _)| path.as_path() != file)
+            .map(|(_, occupant)| occupant.bytes())
+            .collect::<Vec<_>>();
+        if !occupants.contains_key(file) && others.len() >= MAX_THREADS {
+            return Err(CapacityExceeded {
+                resource: "conversations with queued messages",
+                limit: MAX_THREADS,
+            }
+            .into());
+        }
+        if others.iter().sum::<u64>() + bytes > MAX_TOTAL_BYTES {
+            return Err(CapacityExceeded {
+                resource: "queued message bytes",
+                limit: MAX_TOTAL_BYTES as usize,
+            }
+            .into());
+        }
+        let occupant = occupants.entry(file.to_owned()).or_default();
+        occupant.thread = Some(thread_id.to_owned());
+        occupant.reserved = Some(bytes);
+        Ok(())
     }
 }
 
@@ -327,6 +366,49 @@ mod tests {
                 .threads()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn occupancy_reads_never_wait_for_another_threads_queue_transaction() {
+        let (_home, store) = store();
+        let store = std::sync::Arc::new(store);
+        store
+            .update("claude_a", |queue| {
+                queue.entries.push(message("first", "one"));
+                Ok(())
+            })
+            .unwrap();
+        let (inside, entered) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let writer = {
+            let store = std::sync::Arc::clone(&store);
+            std::thread::spawn(move || {
+                store.update("claude_b", move |queue| {
+                    inside.send(()).unwrap();
+                    released.recv().unwrap();
+                    queue.entries.push(message("second", "two"));
+                    Ok(())
+                })
+            })
+        };
+        entered.recv().unwrap();
+        let (answer, answered) = std::sync::mpsc::channel();
+        {
+            let store = std::sync::Arc::clone(&store);
+            std::thread::spawn(move || {
+                answer
+                    .send((store.has("claude_a"), store.has("claude_b"), store.threads()))
+                    .unwrap();
+            });
+        }
+        let observed = answered.recv_timeout(std::time::Duration::from_secs(5));
+        release.send(()).unwrap();
+        writer.join().unwrap().unwrap();
+        assert_eq!(
+            observed.expect("an occupancy read waited for a queue file transaction"),
+            (true, false, vec!["claude_a".to_owned()])
+        );
+        assert!(store.has("claude_b"));
     }
 
     #[test]
