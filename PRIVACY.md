@@ -44,8 +44,7 @@ Do not assume a displayed visual runs offline.
 ## Audio and calls
 
 Dictation sends microphone audio through the configured gateway speech relay
-to the selected speech provider. Spoken replies send reply text to the selected
-speech provider. Supported configurations include OpenAI, Google Gemini,
+to the selected speech provider. Supported configurations include OpenAI, Google Gemini,
 ElevenLabs, AssemblyAI and Azure Speech; only the configured feature/provider
 receives the corresponding request. Provider keys stay on the host/router.
 

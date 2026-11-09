@@ -13,7 +13,7 @@ struct VoiceModePresentationTests {
 
     @Test
     func presentingAnEndedCallClosesTheCoverWithoutStartingACall() async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let workspace = fixture.workspace
         let window = workspace.attachWindow(opening: nil)

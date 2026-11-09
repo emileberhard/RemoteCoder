@@ -10,7 +10,7 @@ struct NewChatFocusTests {
 
     @Test(arguments: [Navigation.host, .newChat, .selectionMirror])
     func newChatFocusRespectsNavigation(navigation: Navigation) async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let hosted = HostedWindow(scene: scene)

@@ -8,24 +8,10 @@ final class CompletionNotificationCenter {
     private static let ledgerKey = "remoteCoder.presentedNotificationEvents.v1"
 
     private(set) var banner: ForegroundNotificationPresentation.Banner?
-    var isEnabled: Bool {
-        didSet {
-            guard isEnabled != oldValue else { return }
-            if !isEnabled { dismiss() }
-            defaults.set(isEnabled, forKey: TaskCompletionNotificationConstants.completionNotificationsEnabledDefaultsKey)
-            authorizationTask?.cancel()
-            guard isEnabled else { return }
-            authorizationTask = Task { @MainActor [weak self] in
-                _ = await self?.authorization.ensureAuthorizedIfNeeded()
-                self?.authorizationTask = nil
-            }
-        }
-    }
 
     @ObservationIgnored let authorization: NotificationAuthorization
     @ObservationIgnored private var ledger: ForegroundNotificationPresentation.Ledger
     @ObservationIgnored private var dismissTask: Task<Void, Never>?
-    @ObservationIgnored private var authorizationTask: Task<Void, Never>?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let logger = AppLogger(category: "CompletionNotifications")
 
@@ -33,17 +19,6 @@ final class CompletionNotificationCenter {
         self.defaults = defaults
         self.authorization = authorization
         ledger = .init(eventIDs: defaults.stringArray(forKey: Self.ledgerKey) ?? [])
-        if defaults.object(
-            forKey: TaskCompletionNotificationConstants.completionNotificationsEnabledDefaultsKey
-        ) == nil {
-            defaults.set(
-                true,
-                forKey: TaskCompletionNotificationConstants.completionNotificationsEnabledDefaultsKey
-            )
-        }
-        isEnabled = defaults.bool(
-            forKey: TaskCompletionNotificationConstants.completionNotificationsEnabledDefaultsKey
-        )
     }
 
     func consume(_ payload: TaskCompletionNotificationPayload) -> Bool {
@@ -55,9 +30,6 @@ final class CompletionNotificationCenter {
     func receive(_ delivery: ForegroundNotificationPresentation.Delivery, applicationIsActive: Bool,
                  isOpen: (TaskCompletionNotificationPayload) -> Bool) -> ForegroundNotificationPresentation.Disposition {
         if let payload = delivery.payload, !consume(payload) { return .suppressed }
-        // The setting controls automatic conversation alerts. Explicit generic
-        // notifications retain their independent user-requested delivery semantics.
-        if delivery.isConversationAlert, !isEnabled { return .suppressed }
         guard applicationIsActive else { return .system }
         if let payload = delivery.payload, isOpen(payload) {
             logger.notice("notification suppressed for open conversation event=\(payload.eventID)")
@@ -104,11 +76,5 @@ final class CompletionNotificationCenter {
 
     func dismissIfOpen(_ isOpen: (TaskCompletionNotificationPayload) -> Bool) {
         if let payload = banner?.payload, isOpen(payload) { dismiss() }
-    }
-
-    func stop() {
-        dismiss()
-        authorizationTask?.cancel()
-        authorizationTask = nil
     }
 }

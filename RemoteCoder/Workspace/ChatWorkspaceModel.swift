@@ -561,13 +561,6 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         for screen in allScreens where !screen.showsUnsentContent { screen.refreshNewChatDefaults() }
     }
 
-    func setAutoSpeakEnabled(_ enabled: Bool) {
-        SpeechPreferences.shared.isAutoSpeakEnabled = enabled
-        if !enabled {
-            for model in models { model.speech.cancel() }
-        }
-    }
-
     var models: [ChatTargetModel] { targets.models }
 
     func model(for hostID: UUID) -> ChatTargetModel? {
@@ -908,7 +901,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         clusterRefreshTask?.cancel()
         clusterRefreshTask = nil
         identityRetryTask?.cancel()
-        notifications.stop()
+        notifications.dismiss()
         for model in models {
             model.hostServices.beginFileRetirement()
             model.beginRetirement()
@@ -965,7 +958,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     var registrationCredentials: DeviceCredentials? {
-        pushTokens.credentials(alertsEnabled: notifications.isEnabled)
+        pushTokens.credentials()
     }
 
     func registerDeviceOnAllHosts() async {
@@ -1351,7 +1344,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         .union(TranscriptionSettings.syncedKeys)
         .union(ConversationDrawerPreferences.syncedKeys)
         .union(VoiceCall.syncedPreferenceKeys)
-        .union([SpeechPreferences.autoSpeakKey, AppThemeStorage.selectedThemeIDKey, AccountNameStore.storageKey])
+        .union([AppThemeStorage.selectedThemeIDKey, AccountNameStore.storageKey])
 
     private var connectedHostModels: [ChatTargetModel] {
         settings.hosts.compactMap { model(for: $0.id) }.filter(\.isGatewayConnected)
@@ -1366,12 +1359,6 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         drawerPreferences.reloadMode()
         accountDirectory.names.reload()
         transcriptionSettings.reload()
-        let speech = SpeechPreferences.shared
-        let wasAutoSpeaking = speech.isAutoSpeakEnabled
-        speech.reload()
-        if wasAutoSpeaking, !speech.isAutoSpeakEnabled {
-            for model in models { model.speech.cancel() }
-        }
     }
 
     func selectFavorite(_ favorite: FavoriteFolder, from screen: ChatScreenModel, ifStillShowing contextID: UUID) {
@@ -1840,7 +1827,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
                   notificationSceneGeneration == sceneGeneration else { return false }
             // The same scene-level owner remains visible over the refused
             // presentation, and the original exact target remains retryable.
-            notifications.present(.init(isConversationAlert: true, title: "Couldn't open notification",
+            notifications.present(.init(title: "Couldn't open notification",
                 body: "Close the current view, then tap to try again or choose the conversation in History.",
                 payload: payload, decodingFailure: nil))
             return false

@@ -402,7 +402,7 @@ struct ChatWorkspaceLifecycleTests {
     }
 
     @Test func relaunchJoinsEveryPreviousDraftOwnerBeforeRestoring() async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let original = try #require(fixture.workspace.selectedScreen)
         try #require(await original.prepareDraft())
@@ -678,24 +678,6 @@ struct ChatWorkspaceLifecycleTests {
         #expect(try await waitUntil { try await recordings.listedIDs().isEmpty })
     }
 
-    @Test func onlyTheHostOnScreenOwnsTheAudioRoute() async throws {
-        let fixture = await WorkspaceFixture()
-        defer { await fixture.cleanUp() }
-        let mini = try #require(fixture.workspace.screen(for: fixture.mini.id))
-        let book = try #require(fixture.workspace.screen(for: fixture.book.id))
-
-        #expect(mini.target.ownsAudioRoute)
-        #expect(book.target.ownsAudioRoute == false)
-
-        fixture.workspace.select(hostID: fixture.book.id)
-        #expect(mini.target.ownsAudioRoute == false)
-        #expect(book.target.ownsAudioRoute)
-
-        // A retired model never speaks, even if it was the visible one.
-        book.target.beginRetirement()
-        #expect(book.target.ownsAudioRoute == false)
-    }
-
     @Test func brokerNotificationUsesOneWorkspaceSurfaceAcrossHostsAndLifecycle() async throws {
         let fixture = await WorkspaceFixture()
         defer { fixture.workspace.teardown(); await fixture.cleanUp() }
@@ -788,18 +770,6 @@ struct ChatWorkspaceLifecycleTests {
             title: "Inactive update", body: "Ready", applicationIsActive: { false }, workspace: workspace)
         #expect(!inactive.isEmpty)
         #expect(workspace.notifications.banner == nil)
-    }
-
-    @Test func disabledAutomaticAlertsDoNotUseEitherSurfaceEvenWhenMalformed() async {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
-        defer { await fixture.cleanUp() }
-        for active in [true, false] {
-            let options = await RemoteCoderAppDelegate.foregroundNotificationOptions(
-                userInfo: [TaskCompletionNotificationConstants.userInfoPayloadKey: "{bad"],
-                title: "Completion", body: "Done", applicationIsActive: { active }, workspace: fixture.workspace)
-            #expect(options.isEmpty)
-            #expect(fixture.workspace.notifications.banner == nil)
-        }
     }
 
     @Test(arguments: ["manual", "newer-tap", "new-chat"])

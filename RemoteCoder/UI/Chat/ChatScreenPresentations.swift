@@ -20,17 +20,6 @@ struct ChatScreenPresentations: ViewModifier {
                     .chromeZoomTransition("directory")
                     .chatPresentationDiagnostics("sheet-directory")
             }
-            .alert(
-                "Voice Output",
-                isPresented: Binding(
-                    get: { screen.target.speech.lastError != nil },
-                    set: { if !$0 { screen.target.speech.dismissError() } }
-                )
-            ) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(screen.target.speech.lastError ?? "")
-            }
             .alert("File attachments", isPresented: Binding(
                 get: { screen.target.fileImports.errorMessage != nil },
                 set: { if !$0 { screen.target.fileImports.dismissError() } }

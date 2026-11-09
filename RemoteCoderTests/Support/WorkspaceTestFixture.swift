@@ -22,7 +22,6 @@ final class WorkspaceFixture {
     private var relaunchedWorkspaces: [ChatWorkspaceModel] = []
 
     init(
-        notificationsEnabled: Bool = true,
         loadConversationHeader: @escaping @MainActor (ChatTargetModel, String) async throws -> ConversationHeader = {
             try await $0.conversationHeader(threadID: $1)
         },
@@ -49,7 +48,6 @@ final class WorkspaceFixture {
         } ?? GatewayHostConfiguration(
             id: UUID(), name: "MacBook", hostname: "127.0.0.1", port: 2, authToken: "book-token"
         )
-        defaults.set(notificationsEnabled, forKey: TaskCompletionNotificationConstants.completionNotificationsEnabledDefaultsKey)
         let chatDefaults = defaults
         let storage = temporaryStorage.storage
         for host in [mini, book] {

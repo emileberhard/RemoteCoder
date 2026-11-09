@@ -123,7 +123,7 @@ final class RemoteCoderAppModel {
             await workspace.bootstrap()
             logger.notice("chat bootstrap completed")
         }
-        if workspace.notifications.isEnabled, workspace.gatewayPolicy.registersDevice {
+        if workspace.gatewayPolicy.registersDevice {
             notificationAuthorizationTask = Task { [workspace] in
                 _ = await workspace.notifications.authorization.ensureAuthorizedIfNeeded()
             }

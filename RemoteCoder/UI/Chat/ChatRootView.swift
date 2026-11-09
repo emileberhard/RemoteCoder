@@ -703,7 +703,7 @@ private struct ChatScreen: View {
 
     private var blocksFilePresentation: Bool {
         isHistoryCovering || showDirectoryPicker || isShowingSettingsSheet || isVoiceModePresented || isCameraPresented || presentedQuestion != nil
-            || screen.target.speech.lastError != nil || screen.target.fileImports.errorMessage != nil || screen.alert?.message != nil
+            || screen.target.fileImports.errorMessage != nil || screen.alert?.message != nil
     }
 
     private var blocksComposerFocus: Bool {

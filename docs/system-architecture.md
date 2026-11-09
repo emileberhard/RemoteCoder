@@ -126,10 +126,9 @@ Rules:
   held the main queue, so admitted work and the SIGTERM handler waited for a click.
 - **"Visible" is three signals** (`TargetPresentation`). *Presented*: some window
   shows the target; it gates loops, warming, deferred refresh and observation.
-  *Key*: the key window's target; it gates the audio route, spoken replies,
-  haptics and the log-export host. *Leave*: each screen runs its own leave
-  actions (flush the draft, finish dictation, close the file reader, cancel
-  speech). With one window (iPhone, iPad and Mac) all three coincide.
+  *Key*: the key window's target; it gates the audio route, haptics and the
+  log-export host. *Leave*: each screen runs its own leave actions (flush the
+  draft, finish dictation, close the file reader). With one window (iPhone, iPad and Mac) all three coincide.
 - **One conversation per window.** Opening an address that is already presented
   focuses that window, because `ConversationState` owns one `HistoryWindow` and two
   viewers would evict each other's pages. Mac windows mirror what they present
@@ -395,8 +394,8 @@ through `daemon/liveActivity` and `daemon/liveActivity/changed` and APNs. Before
 inactivity the app retains that snapshot, so an attention-only activity starts
 with its actual rows; the gateway owns later updates and normal End,
 so an idle host may retire only its own activity (and host-less ones from
-earlier builds). Audio is one route and one system conversation: spoken replies
-come only from the host on screen, hiding a host completes its in-flight
+earlier builds). Audio is one route and one system conversation: hiding a host
+completes its in-flight
 dictation into its own draft and releases the microphone, a live call ends only
 when *its* owning host is retired, and the voice surface presents the call's
 owner rather than the sidebar selection. Log export follows the visible host.
@@ -2408,7 +2407,7 @@ models disable the bolt and expose “Fast unavailable” to accessibility. The 
 widths and accessibility text sizes; Voice Mode stays bound to its call's thread
 and provider, not the currently selected chat.
 
-Settings → Chat → Codex models and Claude Code models store model visibility
+Settings → Models in Pickers → Codex and Claude Code store model visibility
 separately for each provider through `ModelPickerPreferences` and `ModelVisibility`.
 Existing Codex overrides keep their storage key and format. Claude families are
 shown by default and visibility is saved by alias (`fable`, `opus`, `sonnet`, `haiku`).
@@ -2417,8 +2416,8 @@ use the visible subset. Existing conversations and explicitly configured shortcu
 still resolve hidden models. New Claude chats use their preferred visible family,
 then the first visible family; hiding all families leaves no default model.
 
-Settings → Chat → Reasoning levels stores visible efforts separately for Codex
-and Claude Code. `ModelPickerPreferences` owns it and `ReasoningEffortVisibility` intersects that preference with
+Each provider's page there also stores its visible reasoning levels, separately
+for Codex and Claude Code. `ModelPickerPreferences` owns it and `ReasoningEffortVisibility` intersects that preference with
 the model's capabilities; Max and Ultra are hidden by default. The slider stops,
 gauge range, new-chat default picker and Voice Mode shortcut options all use
 that same intersection. A hidden selection moves to the nearest visible level
@@ -2618,7 +2617,7 @@ an enqueue notification delivers requests immediately when the app is active.
 
 ## Speech relay
 
-Composer dictation (realtime and batch) and Speak replies use SpeechKit's own
+Composer dictation (realtime and batch) and dictation cleanup use SpeechKit's own
 provider protocols, but every request goes to the chat model's gateway rather
 than to the provider. `GatewaySpeechAccess` binds a chat model to its host and
 hands SpeechKit `SpeechProviderAccess.relay` at `<gateway>/speech/<provider>`

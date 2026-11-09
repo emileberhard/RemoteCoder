@@ -5,8 +5,6 @@ import OSLog
 protocol TurnDispatchHost: AnyObject {
     var isRetired: Bool { get }
     func feedbackForCurrentConversation() -> (HapticEvent) -> Void
-    func isVisibleConversation(_ conversationID: UUID, sessionID: String?) -> Bool
-    func speakIfOwningAudio(_ text: String)
     func presentFailure(_ message: String, conversationID: UUID)
     func turnsChanged(_ change: TurnRegistryChange)
     func synchronizeConversationActivity()
@@ -509,9 +507,6 @@ final class TurnDispatcher {
                 if case .uncertain = failure, let threadID = resolvedSessionID {
                     await host.reconcileInputDelivery(threadID: threadID)
                     guard !isClosed, await session.deliveryIsUncertain(userMessageID) else { return }
-                }
-                if host.isVisibleConversation(conversationID, sessionID: resolvedSessionID ?? sessionID) {
-                    host.speakIfOwningAudio("Error: \(failure.userMessage)")
                 }
             }
         }

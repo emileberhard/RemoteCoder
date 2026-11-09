@@ -256,7 +256,7 @@ struct TurnRegistryTests {
         #expect(registry.dispatchedTurn(id: job.id) == nil)
     }
 
-    @Test func aDispatchedTurnKeepsItsFinalReplyUntilItFinishes() {
+    @Test func finishingADispatchedTurnForgetsOnlyThatTurn() {
         let thread = Fixture.codexThread
         let registry = TurnRegistry()
         let job = Fixture.job(thread: thread, turn: "1")
@@ -266,11 +266,11 @@ struct TurnRegistryTests {
             conversationID: Self.conversation
         )
 
-        registry.recordFinalReply("Done", jobID: job.id)
-        registry.recordFinalReply("Ignored", jobID: "unknown")
+        registry.finishDispatched(jobID: "unknown")
+        #expect(registry.dispatchedTurn(id: job.id)
+            == DispatchedTurn(conversationID: Self.conversation, threadID: thread, turnID: "1"))
 
-        #expect(registry.finishDispatched(jobID: job.id)
-            == DispatchedTurn(conversationID: Self.conversation, threadID: thread, turnID: "1", finalReply: "Done"))
+        registry.finishDispatched(jobID: job.id)
         #expect(registry.dispatchedTurns.isEmpty)
     }
 

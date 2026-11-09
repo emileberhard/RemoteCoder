@@ -6,7 +6,7 @@ authenticated WebSocket to a Rust gateway (`host-daemon-rs/`) on each host. The
 gateway proxies one managed, version-matched `codex app-server` and also runs
 turns through the `claude` CLI, translating them into the same app-server v2
 notifications. The app's surfaces are a streamed chat with attachments,
-dictation and spoken replies; realtime Voice Mode; a history drawer across all
+dictation; realtime Voice Mode; a history drawer across all
 configured hosts; and direct `command/exec`. The `RemoteCoderMac` target
 shares the chat, history, questions, attachments and dictation with the iOS app,
 uses `RemoteCoder/Platform/macOS/` for its platform arms, and omits Voice Mode,

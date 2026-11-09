@@ -248,7 +248,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     var voice: VoiceInputController
     var voiceError: String?
-    var speech: VoiceOutputController
     @ObservationIgnored let realtimeVoice: VoiceCall
     @ObservationIgnored let gatewayPolicy: SharedGatewayPolicy
 
@@ -431,7 +430,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             : DictationRecordingStore<ExecutionTarget>.located(in: storage)
         self.voice = VoiceInputController(access: speechAccess, owner: ExecutionTarget(hostID: host.id),
             transcriber: RemoteCoderTranscriptionService(access: speechAccess), recordings: recordings, haptics: haptics, library: dictationLibrary)
-        self.speech = VoiceOutputController(access: speechAccess, preferences: .shared)
         let call = voiceCalls.call
         let callOwner = ExecutionTarget(hostID: host.id)
         let gateway = Self.makeGatewayClient(for: host, routes: routes, deviceTools: deviceTools,
@@ -576,23 +574,12 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             fileOpener.leaveScreen()
             ownedTasks.cancel(.warmConversations)
             drafts.requestFlush()
-            speech.cancel()
         }
         notifyActiveSessionChange()
     }
 
     private func publishDirectoryVisibility(_ visible: Bool) {
         directories.setVisible(visible, owner: directoryVisibilityOwner)
-    }
-
-    /// Speech output and dictation share one device-wide audio route, so only the
-    /// host on screen owns it: a hidden gateway's reply must not talk over the
-    /// visible conversation, and a retired one must not speak at all.
-    var ownsAudioRoute: Bool { lifecycle.presentation.key && isVisible && acceptsWork }
-
-    func speakIfOwningAudio(_ text: String) {
-        guard ownsAudioRoute else { return }
-        speech.enqueue(text)
     }
 
     func presentFailure(_ message: String, conversationID: UUID) {
@@ -875,7 +862,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         for screen in shown { screen.beginQuiescing() }
         backgroundExecution.release()
         directories.suspendRefreshLoop()
-        speech.cancel()
         pendingTerminationOperation = "Gateway and admitted work"
         terminationTask = Task { [self] in
             defer { pendingTerminationOperation = nil }
@@ -977,7 +963,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             screen.pendingSettings.removeAll()
             screen.historyOpenSignpost.abandon(.cancelled)
         }
-        speech.cancel()
         publishDirectoryVisibility(false)
         cancelActivityReads()
         conversationWarmer.clear()
@@ -1661,19 +1646,12 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         }
 
         if method == "turn/completed" {
-            var status: CodexAppServerV2.TurnStatus?
-            if case .turnCompleted(let completion) = note.server { status = completion.status }
-            finishDispatchedTurn(jobID: jobID, status: status, replay: replay)
+            turns.finishDispatched(jobID: jobID)
             handleGatewayTurnCompleted(
                 threadID: threadID,
                 turnID: turnID
             )
             return
-        }
-
-        if method == "item/completed", !replay,
-           case .agentMessage(_, let text, _, _, _) = event.item, text.isEmpty == false {
-            turns.recordFinalReply(text, jobID: jobID)
         }
 
         // Any non-completion lifecycle event is evidence of an active turn.
@@ -1691,13 +1669,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         guard haptics.consume(occurrence), !replay, isPresenting(threadID),
               let event = outcome.haptic else { return }
         feedback(event)
-    }
-
-    private func finishDispatchedTurn(jobID: String, status: CodexAppServerV2.TurnStatus?, replay: Bool) {
-        guard let turn = turns.finishDispatched(jobID: jobID) else { return }
-        guard !replay, status == .completed, let reply = turn.finalReply,
-              isVisibleConversation(turn.conversationID, sessionID: turn.threadID) else { return }
-        speakIfOwningAudio(reply)
     }
 
     private func recoverDispatchedTurnsAfterConnectionLoss() {
@@ -1757,7 +1728,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     func isVisibleConversation(_ conversationID: UUID, sessionID: String? = nil) -> Bool {
         // A retired model has no visible conversation: its late arrivals must not
-        // publish anything, on screen or on the audio route.
+        // publish anything.
         guard acceptsWork else { return false }
         return screens.contains { screen in
             screen.currentConversationID == conversationID && (sessionID == nil || screen.activeSessionID == sessionID)

@@ -13,7 +13,7 @@ struct ChatRootEventTests {
 
     @Test
     func navigationAfterPreparationWinsBeforeOpeningConsumption() async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let workspace = fixture.workspace
         let window = workspace.attachWindow(opening: nil)
@@ -41,7 +41,7 @@ struct ChatRootEventTests {
 
     @Test
     func anInitialWindowValueReachesTheNativeComposer() async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let hosted = HostedWindow(scene: scene)
@@ -61,7 +61,7 @@ struct ChatRootEventTests {
 
     @Test
     func anEndedVoiceCallsPresentationIsDroppedWithoutOpeningAChat() async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let workspace = fixture.workspace
         let window = workspace.attachWindow(opening: nil)
@@ -81,7 +81,7 @@ struct ChatRootEventTests {
 
     @Test(arguments: [Supersession.cancellation, .navigation])
     func aSupersededQueuedEventCannotCancelANewerConversationSwitch(supersession: Supersession) async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let workspace = fixture.workspace
         let window = workspace.attachWindow(opening: nil)
@@ -111,7 +111,7 @@ struct ChatRootEventTests {
 
     @Test(arguments: [RootState.loading, .retirementFailure], [Entry.quickAction, .newChatLink])
     func newChatRoutesWhileTheRootHasNoSelectedScreen(state: RootState, entry: Entry) async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let workspace = fixture.workspace
         let window = workspace.keyWindow

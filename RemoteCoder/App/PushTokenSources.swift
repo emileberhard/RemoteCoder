@@ -29,12 +29,12 @@ final class PushTokenSources {
 
     var voip: String? { microphonePermitted ? voipToken : nil }
 
-    func credentials(alertsEnabled: Bool) -> DeviceCredentials? {
+    func credentials() -> DeviceCredentials? {
         guard let environment = TaskCompletionNotificationConstants.apnsEnvironment,
               let bundleID = Bundle.main.bundleIdentifier else { return nil }
         return DeviceCredentials(
             deviceID: deviceID, bundleID: bundleID, apnsEnvironment: environment,
-            alertToken: alertsEnabled ? apns : nil, voipToken: voip, location: location
+            alertToken: apns, voipToken: voip, location: location
         )
     }
 

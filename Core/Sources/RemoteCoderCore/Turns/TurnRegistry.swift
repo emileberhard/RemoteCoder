@@ -11,7 +11,6 @@ struct DispatchedTurn: Equatable, Sendable {
     let conversationID: UUID
     let threadID: String
     let turnID: String
-    var finalReply: String?
 }
 
 struct TurnRegistryChange: Equatable, Sendable {
@@ -124,12 +123,8 @@ final class TurnRegistry {
         }
     }
 
-    func recordFinalReply(_ text: String, jobID: String) {
-        dispatchedTurnsByJobID[jobID]?.finalReply = text
-    }
-
-    func finishDispatched(jobID: String) -> DispatchedTurn? {
-        dispatchedTurnsByJobID.removeValue(forKey: jobID)
+    func finishDispatched(jobID: String) {
+        dispatchedTurnsByJobID[jobID] = nil
     }
 
     func endAllDispatched() {

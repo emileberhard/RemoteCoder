@@ -56,7 +56,7 @@ struct NotificationOverlayTests {
         #expect(!banner.point(inside: CGPoint(x: 1, y: banner.bounds.maxY - 1), with: nil))
         fixture.workspace.notifications.dismiss()
         #expect(await waitUntil { banner.isHidden && banner.bannerBounds.isEmpty })
-        fixture.workspace.notifications.present(.init(isConversationAlert: false, title: "Next task finished",
+        fixture.workspace.notifications.present(.init(title: "Next task finished",
             body: "Ready again", payload: nil, decodingFailure: nil))
         #expect(await waitUntil { !banner.isHidden && !banner.bannerBounds.isEmpty })
         #expect(!banner.isKeyWindow)

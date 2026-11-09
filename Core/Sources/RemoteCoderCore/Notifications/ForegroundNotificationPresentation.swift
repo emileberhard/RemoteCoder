@@ -6,7 +6,6 @@ enum ForegroundNotificationPresentation {
     enum Disposition { case inApp, system, suppressed }
 
     struct Delivery: Sendable {
-        let isConversationAlert: Bool
         let title: String
         let body: String
         let payload: TaskCompletionNotificationPayload?
@@ -39,7 +38,7 @@ enum ForegroundNotificationPresentation {
                 failure = path.isEmpty ? "root" : path.map(\.stringValue).joined(separator: ".")
             }
         }
-        return Delivery(isConversationAlert: containsPayload || payloadJSON != nil, title: title.isEmpty ? payload?.title ?? "RemoteCoder" : title,
+        return Delivery(title: title.isEmpty ? payload?.title ?? "RemoteCoder" : title,
                         body: body.isEmpty ? payload?.messagePreview ?? "New notification" : body,
                         payload: payload, decodingFailure: failure)
     }

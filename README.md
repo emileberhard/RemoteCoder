@@ -48,7 +48,7 @@ Generated HTML visuals may access external HTTPS resources. See
 | Feature | Prerequisites |
 | --- | --- |
 | Claude through llm-router, account switching, automatic titles and speech relay | Your own router deployment, host key and explicit gateway configuration |
-| Dictation and spoken replies | Configured speech relay and provider accounts; microphone permission for capture |
+| Dictation | Configured speech relay and provider accounts; microphone permission for capture |
 | Realtime Voice Mode | Compatible Codex realtime access, provider login and microphone permission; native system-call integration is iOS-only |
 | Notifications, incoming calls, Live Activities and location wake-ups | An APNs broker authorized for your own bundle IDs, signing capabilities and device registration |
 | Maps and navigation | Your own restricted Google Maps/Navigation credentials, enabled APIs and location permission |

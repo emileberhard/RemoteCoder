@@ -105,23 +105,17 @@ struct PreferenceSyncTests {
 
     @Test func aResetFromAnotherDeviceShowsTheDefaultWithoutBecomingAChoice() throws {
         let phone = try Device()
-        let speech = SpeechPreferences(defaults: phone.defaults)
         let drawer = ConversationDrawerPreferences(defaults: phone.defaults)
-        speech.isAutoSpeakEnabled = true
         drawer.mode = .projects
-        let keys = ConversationDrawerPreferences.syncedKeys.union([SpeechPreferences.autoSpeakKey])
+        let keys = ConversationDrawerPreferences.syncedKeys
         let store = SyncedPreferenceStore(defaults: phone.defaults, keys: keys)
-        store.onExternalChange = {
-            speech.reload()
-            drawer.reloadMode()
-        }
+        store.onExternalChange = { drawer.reloadMode() }
         let reset = PreferenceDocument(entries: Dictionary(uniqueKeysWithValues: keys.map {
             ($0, PreferenceEntry(value: .null, updatedAt: 5, device: "mac"))
         }))
 
         store.merge(reset)
 
-        #expect(!speech.isAutoSpeakEnabled)
         #expect(drawer.mode == .priority)
         #expect(keys.allSatisfy { phone.defaults.object(forKey: $0) == nil })
         #expect(store.pending(forHost: reset).isEmpty)

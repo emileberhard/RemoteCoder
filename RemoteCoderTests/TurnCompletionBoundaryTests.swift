@@ -3,20 +3,18 @@ import Testing
 @testable import RemoteCoder
 
 /// What a dispatched turn's end, a foreign or replayed turn, and a lost socket
-/// each do to busy state, the send and the audio route. They run against the
+/// each do to busy state and the send. They run against the
 /// real chat model and `FakeGatewayServer` so they hold across any change to
 /// how the model learns that its own turn ended.
 @MainActor
 struct TurnCompletionBoundaryTests {
     private static let thread = "019a3333-0000-7000-8000-000000000004"
 
-    @Test(.timeLimit(.minutes(1))) func aCompletedTurnEndsItsJobAndSpeaksItsFinalReply() async throws {
+    @Test(.timeLimit(.minutes(1))) func aCompletedTurnEndsItsJob() async throws {
         let gateway = try FakeGatewayServer(threadID: Self.thread, model: CodexModelFixtures.solID)
         let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
         defer { await fixture.cleanUp(); await gateway.stop() }
         let chat = try await openChat(fixture)
-        let speech = speakingReplies(on: chat)
-        defer { speech.cancel() }
         try await dispatch("Hi", from: chat, to: gateway)
 
         try await gateway.notify("item/completed", agentMessage("Hello there", itemID: "answer"))
@@ -24,23 +22,19 @@ struct TurnCompletionBoundaryTests {
 
         #expect(await waitUntil { chat.currentReplyDelivery == .idle })
         #expect(chat.target.historyBusySessionIDs.isEmpty)
-        #expect(await waitUntil { Self.isEngaged(speech) })
     }
 
-    @Test(.timeLimit(.minutes(1))) func aFailedTurnEndsItsJobWithoutSpeaking() async throws {
+    @Test(.timeLimit(.minutes(1))) func aFailedTurnEndsItsJob() async throws {
         let gateway = try FakeGatewayServer(threadID: Self.thread, model: CodexModelFixtures.solID)
         let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
         defer { await fixture.cleanUp(); await gateway.stop() }
         let chat = try await openChat(fixture)
-        let speech = speakingReplies(on: chat)
-        defer { speech.cancel() }
         try await dispatch("Hi", from: chat, to: gateway)
 
         try await gateway.notify("turn/completed", completion(status: "failed", error: "Rate limit reached"))
 
         #expect(await waitUntil { chat.currentReplyDelivery == .idle })
         #expect(chat.target.historyBusySessionIDs.isEmpty)
-        #expect(Self.isQuiet(speech))
     }
 
     @Test(.timeLimit(.minutes(1))) func aCompletedTurnWithoutTextEndsQuietly() async throws {
@@ -48,15 +42,12 @@ struct TurnCompletionBoundaryTests {
         let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
         defer { await fixture.cleanUp(); await gateway.stop() }
         let chat = try await openChat(fixture)
-        let speech = speakingReplies(on: chat)
-        defer { speech.cancel() }
         try await dispatch("Hi", from: chat, to: gateway)
 
         try await gateway.notify("turn/completed", completion(status: "completed"))
 
         #expect(await waitUntil { chat.currentReplyDelivery == .idle })
         #expect(chat.target.historyBusySessionIDs.isEmpty)
-        #expect(Self.isQuiet(speech))
         #expect(!chat.messages.contains { $0.text.contains("empty response") })
     }
 
@@ -79,30 +70,32 @@ struct TurnCompletionBoundaryTests {
         #expect(chat.target.historyBusySessionIDs.isEmpty)
     }
 
-    @Test(.timeLimit(.minutes(1))) func aForeignTurnNeverSpeaksAndNeverEndsTheDispatchedJob() async throws {
+    @Test(.timeLimit(.minutes(1))) func aForeignTurnNeverEndsTheDispatchedJob() async throws {
         let gateway = try FakeGatewayServer(threadID: Self.thread, model: CodexModelFixtures.solID)
         let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
         defer { await fixture.cleanUp(); await gateway.stop() }
         let chat = try await openChat(fixture)
-        let speech = speakingReplies(on: chat)
-        defer { speech.cancel() }
         try await dispatch("Hi", from: chat, to: gateway)
 
-        try await gateway.notify("item/completed", agentMessage("From another client", itemID: "foreign", turnID: "turn-other"))
-        try await gateway.notify("turn/completed", completion(status: "completed", turnID: "turn-other"))
-        try await gateway.notify("turn/completed", completion(status: "completed"))
+        for (method, params) in [
+            ("item/completed", agentMessage("From another client", itemID: "foreign", turnID: "turn-other")),
+            ("turn/completed", completion(status: "completed", turnID: "turn-other")),
+        ] {
+            let note = CodexGatewayNotification(method: method, params: .object(params), server: ServerNotification.decode(method: method, params: .object(params)))
+            await chat.target.apply(gatewayEvent: try #require(GatewayNotificationRouting.route(note)), replay: false)
+        }
+        #expect(chat.currentReplyDelivery == .acknowledged)
+        #expect(chat.target.historyBusySessionIDs == [Self.thread])
 
+        try await gateway.notify("turn/completed", completion(status: "completed"))
         #expect(await waitUntil { chat.currentReplyDelivery == .idle })
-        #expect(Self.isQuiet(speech))
     }
 
-    @Test(.timeLimit(.minutes(1))) func aReplayedCompletionEndsTheJobButNeverSpeaks() async throws {
+    @Test(.timeLimit(.minutes(1))) func aReplayedCompletionEndsTheJob() async throws {
         let gateway = try FakeGatewayServer(threadID: Self.thread, model: CodexModelFixtures.solID)
         let fixture = await WorkspaceFixture(miniGatewayPort: try await gateway.start())
         defer { await fixture.cleanUp(); await gateway.stop() }
         let chat = try await openChat(fixture)
-        let speech = speakingReplies(on: chat)
-        defer { speech.cancel() }
         try await dispatch("Hi", from: chat, to: gateway)
         await chat.target.handleScenePhaseInactive()
         try #require(chat.target.observation.state(of: Self.thread) == .detached)
@@ -116,7 +109,6 @@ struct TurnCompletionBoundaryTests {
         }
 
         #expect(chat.target.historyBusySessionIDs.isEmpty)
-        #expect(Self.isQuiet(speech))
     }
 
     @Test(.timeLimit(.minutes(1))) func aLostConnectionBeforeTheStartReplyLeavesTheSendReportedNotDelivered() async throws {
@@ -181,20 +173,6 @@ struct TurnCompletionBoundaryTests {
         try #require(await waitUntil { chat.currentReplyDelivery == .acknowledged })
         await chat.target.dispatcher.drain()
     }
-
-    private func speakingReplies(on chat: ChatScreenModel) -> VoiceOutputController {
-        let suiteName = "TurnCompletionBoundaryTests.\(UUID().uuidString)"
-        let preferences = SpeechPreferences(defaults: UserDefaults(suiteName: suiteName) ?? .standard)
-        preferences.isAutoSpeakEnabled = true
-        chat.target.speech = VoiceOutputController(access: .fixture, preferences: preferences)
-        return chat.target.speech
-    }
-
-    private static func isEngaged(_ speech: VoiceOutputController) -> Bool {
-        speech.isPreparing || speech.isSpeaking || speech.lastError != nil
-    }
-
-    private static func isQuiet(_ speech: VoiceOutputController) -> Bool { !isEngaged(speech) }
 
     private func completion(status: String, error: String? = nil, turnID: String = "turn-1") -> [String: JSONValue] {
         var turn: [String: JSONValue] = ["id": .string(turnID), "status": .string(status)]

@@ -8,7 +8,7 @@ import UIKit
 @MainActor
 struct ChatWorkspaceStartupTests {
     @Test func keepingTheAppOpenRestartsItsCancelledAccountImport() async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         await fixture.workspace.retireEverything()
         let host = fixture.mini.id, account = UUID()
@@ -34,7 +34,7 @@ struct ChatWorkspaceStartupTests {
     }
 
     @Test(.timeLimit(.minutes(1))) func keepingTheAppOpenDoesNotRetryAnAlreadyAdmittedHost() async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         await fixture.workspace.retireEverything()
         let hosts = [fixture.mini, fixture.book].sorted { $0.id.uuidString < $1.id.uuidString }
@@ -87,7 +87,7 @@ struct ChatWorkspaceStartupTests {
     }
 
     @Test func anEnrollmentWindowRestoresItsIndependentNewChatSetup() async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         await fixture.workspace.retireEverything()
         let host = fixture.mini.id, account = UUID(), slot = UUID()
@@ -114,7 +114,7 @@ struct ChatWorkspaceStartupTests {
     }
 
     @Test func mountingTheRootReplacesRetiredAccountSelectionWithItsHost() async throws {
-        let fixture = await WorkspaceFixture(notificationsEnabled: false)
+        let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         await fixture.workspace.retireEverything()
         let accountID = UUID()

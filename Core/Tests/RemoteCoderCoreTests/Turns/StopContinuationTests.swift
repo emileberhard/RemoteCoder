@@ -422,8 +422,6 @@ private final class StopFixture: TurnDispatchHost {
             if event == .error { failed = true; failureWaiter?.resume(); failureWaiter = nil }
         }
     }
-    func isVisibleConversation(_ conversationID: UUID, sessionID: String?) -> Bool { false }
-    func speakIfOwningAudio(_ text: String) {}
     func presentFailure(_ message: String, conversationID: UUID) {}
     func turnsChanged(_ change: TurnRegistryChange) {}
     func synchronizeConversationActivity() {}
