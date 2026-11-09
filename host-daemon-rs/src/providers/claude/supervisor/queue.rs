@@ -181,16 +181,16 @@ impl ClaudeSupervisor {
     ) -> Result<T> {
         let store = Arc::clone(&self.queued_messages);
         let thread = thread_id.to_owned();
-        let (result, changed) = tokio::task::spawn_blocking(move || {
+        let (result, listed) = tokio::task::spawn_blocking(move || {
             store.update(&thread, |queue| {
                 let previous = queue.clone();
                 let result = operation(queue)?;
-                Ok((result, *queue != previous))
+                Ok((result, !queue.lists_like(&previous)))
             })
         })
         .await
         .map_err(|error| anyhow::Error::from(error).context(QueueWriteUncertain))??;
-        if changed {
+        if listed {
             let _ = self
                 .deliver(json!({"method":"thread/queue/changed","params":{"threadId":thread_id}}))
                 .await;

@@ -4025,6 +4025,56 @@ async fn an_interrupted_claim_returns_to_the_queue_even_when_the_transcript_list
     let _ = child.kill().await;
 }
 
+fn queue_changes(
+    events: &mut mpsc::Receiver<crate::providers::claude::ClaudeNotification>,
+) -> usize {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter(|event| {
+            matches!(event, crate::providers::claude::ClaudeNotification::Event(value)
+                if value["method"] == "thread/queue/changed")
+        })
+        .count()
+}
+
+#[tokio::test]
+async fn queue_changes_notify_only_when_the_listing_changes() {
+    use super::queue::QueuedOutcome;
+    let (_home, agent, mut events, group, mut child) = queue_agent().await;
+    queue(&agent, "first").await;
+    queue(&agent, "second").await;
+    assert_eq!(queue_changes(&mut events), 2);
+    agent
+        .start_queued_now(QUEUE_THREAD, "first")
+        .await
+        .expect("Send Now starts the first message");
+    assert_eq!(
+        queue_changes(&mut events),
+        1,
+        "claiming and marking the start written are not listed; only its removal is"
+    );
+    echo_and_finish(&agent, group, "first").await;
+    let reaper = tokio::spawn(async move { child.wait().await });
+    agent.stop_parent(QUEUE_THREAD).await.unwrap();
+    agent
+        .start_queued_now(QUEUE_THREAD, "second")
+        .await
+        .expect_err("a stopped runtime refuses the input");
+    reaper.await.unwrap().unwrap();
+    let mut replacement = replace_runtime(&agent).await;
+    assert!(matches!(
+        agent.start_next_queued(QUEUE_THREAD, "second").await,
+        QueuedOutcome::Waiting
+    ));
+    assert_eq!(queued_ids(&agent).await, vec!["second".to_owned()]);
+    assert_eq!(
+        queue_changes(&mut events),
+        0,
+        "a failed start and its settlement leave the listing unchanged"
+    );
+    agent.runtimes.lock().await.clear();
+    let _ = replacement.kill().await;
+}
+
 #[tokio::test]
 async fn adds_are_idempotent_by_client_id_and_refuse_ids_the_conversation_already_ran() {
     let (_home, agent, _events, _group, mut child) = queue_agent().await;

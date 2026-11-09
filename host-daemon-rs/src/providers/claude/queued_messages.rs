@@ -76,6 +76,16 @@ impl Queue {
         self.entries.iter().find(|entry| entry.id == id)
     }
 
+    pub(crate) fn lists_like(&self, other: &Queue) -> bool {
+        self.hold == other.hold
+            && self.entries.len() == other.entries.len()
+            && self
+                .entries
+                .iter()
+                .zip(&other.entries)
+                .all(|(entry, other)| entry.id == other.id && entry.input == other.input)
+    }
+
     fn is_empty(&self) -> bool {
         self.entries.is_empty() && self.hold.is_none()
     }
