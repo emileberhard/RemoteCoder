@@ -1,4 +1,4 @@
-use super::{Gateway, Outcome, Snapshot, Trace, bounded, effective_title};
+use super::{Gateway, Outcome, Snapshot, Trace, bounded};
 use crate::gateway::renames::Candidate;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
@@ -88,18 +88,14 @@ impl Gateway {
         thread: &str,
         trace: &Trace,
     ) -> Result<String> {
-        let header = self.review_header(thread).await?;
-        let header = &header["thread"];
-        ensure!(
-            header["id"].as_str() == Some(thread) && header["ephemeral"].as_bool() == Some(false),
-            "conversation is unavailable"
-        );
-        let previous = effective_title(header)
-            .filter(|title| !title.trim().is_empty())
-            .context("the conversation has nothing to name yet")?;
-        let candidate = self.prepare_regenerate(thread).await?;
+        let (candidate, previous) = self.prepare_regenerate(thread).await?;
         let mut title = self
-            .ask_title(thread, &requested_title_question(previous), previous, trace)
+            .ask_title(
+                thread,
+                &requested_title_question(&previous),
+                &previous,
+                trace,
+            )
             .await?;
         trace.event(
             "candidate",
@@ -113,8 +109,8 @@ impl Gateway {
             title = self
                 .ask_title(
                     thread,
-                    &requested_title_repair_question(previous),
-                    previous,
+                    &requested_title_repair_question(&previous),
+                    &previous,
                     trace,
                 )
                 .await?;
@@ -128,7 +124,7 @@ impl Gateway {
             );
         }
         let outcome = self
-            .commit_title(thread, None, &title, previous, candidate, trace)
+            .commit_title(thread, None, &title, &previous, candidate, trace)
             .await?;
         ensure!(
             outcome.status == "renamed",

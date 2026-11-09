@@ -647,6 +647,7 @@ impl Gateway {
         *self.apns_completion_task.lock().await = Some(completion_task);
 
         self.start_live_activity().await;
+        self.start_pending_rename_drain();
 
         // Gateway-owned voice and observer work gets one control connection.
         // Each remote client opens its own independent app-server connection.

@@ -56,15 +56,6 @@ impl Runtime {
         if method == "turn/started" {
             self.schedule_early_title(message);
         }
-        if (method == "turn/started" || method == "turn/completed")
-            && message
-                .pointer("/params/threadId")
-                .and_then(Value::as_str)
-                .is_some_and(is_claude_thread_id)
-            && let Some(gateway) = self.gateway.upgrade()
-        {
-            gateway.wake_pending_renames();
-        }
         if method != "turn/completed" {
             return;
         }
@@ -278,11 +269,13 @@ impl Gateway {
         let Some(snapshot) = self.review_snapshot(thread, turn, trace).await? else {
             return Ok(Outcome::skipped("snapshotRejected"));
         };
-        let title_eligible =
-            titles::eligible(&snapshot) && self.title_exclusion(thread).await?.is_none();
+        let protection = self
+            .marks
+            .title_protection(thread.to_owned(), crate::time::unix_seconds() as i64)
+            .await?;
         let questions = Questions {
-            title: title_eligible,
-            done: snapshot.completed_at.is_some(),
+            title: titles::eligible(&snapshot) && protection.title_exclusion().is_none(),
+            done: snapshot.completed_at.is_some() && !protection.pinned,
         };
         trace.consumer_outcome(
             "title",
@@ -397,31 +390,19 @@ impl Gateway {
     }
 
     async fn review_exclusion(&self, thread: &str) -> Result<Option<&'static str>> {
-        let marks = self.marks.read(crate::time::unix_seconds() as i64).await?;
-        let Some(mark) = marks.threads.get(thread) else {
-            return Ok(None);
-        };
-        Ok(if mark.purpose.is_some() {
-            Some("excludedPurpose")
-        } else {
-            None
-        })
+        let protection = self
+            .marks
+            .title_protection(thread.to_owned(), crate::time::unix_seconds() as i64)
+            .await?;
+        Ok(protection.purpose.then_some("excludedPurpose"))
     }
 
     async fn title_exclusion(&self, thread: &str) -> Result<Option<&'static str>> {
-        if let Some(reason) = self.review_exclusion(thread).await? {
-            return Ok(Some(reason));
-        }
-        let now = crate::time::unix_seconds() as i64;
-        let marks = self.marks.read(now).await?;
-        if self.marks.pending_renames(now).await?.contains_key(thread) {
-            return Ok(Some("pendingRename"));
-        }
-        Ok(marks
-            .threads
-            .get(thread)
-            .filter(|mark| mark.manual_name)
-            .map(|_| "manualName"))
+        Ok(self
+            .marks
+            .title_protection(thread.to_owned(), crate::time::unix_seconds() as i64)
+            .await?
+            .title_exclusion())
     }
 
     async fn review_turns(&self, thread: &str, direction: &str, limit: u32) -> Result<Value> {

@@ -230,6 +230,22 @@ pub(crate) enum SessionRename {
     NoConversation,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SessionRenameError {
+    Definite(String),
+    Unknown(String),
+}
+
+impl std::fmt::Display for SessionRenameError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Definite(message) | Self::Unknown(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for SessionRenameError {}
+
 #[derive(Clone, Copy)]
 enum TurnOrigin {
     Dispatched,
@@ -991,10 +1007,17 @@ async fn wait_for_group_exit(process_group_id: Pid, timeout: Duration) -> bool {
     }
 }
 
-fn append_custom_title(path: &Path, session_uuid: &str, title: &str) -> Result<bool, String> {
+fn append_custom_title(
+    path: &Path,
+    session_uuid: &str,
+    title: &str,
+) -> Result<bool, SessionRenameError> {
     use std::io::{Read, Seek, SeekFrom, Write};
-    let failed =
-        |error: std::io::Error| format!("Could not record the Claude session title: {error}");
+    let failed = |error: std::io::Error| {
+        SessionRenameError::Definite(format!(
+            "Could not record the Claude session title: {error}"
+        ))
+    };
     let mut file = fs::OpenOptions::new()
         .read(true)
         .append(true)
@@ -1008,10 +1031,10 @@ fn append_custom_title(path: &Path, session_uuid: &str, title: &str) -> Result<b
     file.seek(SeekFrom::Start(length - 1)).map_err(failed)?;
     file.read_exact(&mut last).map_err(failed)?;
     if last[0] != b'\n' {
-        return Err(
+        return Err(SessionRenameError::Definite(
             "The Claude session file ends mid-record; retry once Claude finishes writing it"
                 .to_owned(),
-        );
+        ));
     }
     let mut line = json!({
         "type": "custom-title",
@@ -1020,7 +1043,11 @@ fn append_custom_title(path: &Path, session_uuid: &str, title: &str) -> Result<b
     })
     .to_string();
     line.push('\n');
-    file.write_all(line.as_bytes()).map_err(failed)?;
+    file.write_all(line.as_bytes()).map_err(|error| {
+        SessionRenameError::Unknown(format!(
+            "Could not record the Claude session title: {error}"
+        ))
+    })?;
     Ok(true)
 }
 

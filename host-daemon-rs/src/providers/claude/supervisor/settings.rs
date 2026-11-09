@@ -1,6 +1,6 @@
 use super::{
-    ClaudeRuntimeSettings, ClaudeSupervisor, SessionRename, TurnStartError, append_custom_title,
-    claude_model_matches,
+    ClaudeRuntimeSettings, ClaudeSupervisor, SessionRename, SessionRenameError, TurnStartError,
+    append_custom_title, claude_model_matches,
 };
 use crate::ids::is_session_uuid;
 use crate::providers::claude::ClaudeSelection;
@@ -205,9 +205,11 @@ impl ClaudeSupervisor {
         thread_id: &str,
         session_uuid: &str,
         name: &str,
-    ) -> Result<SessionRename, String> {
+    ) -> Result<SessionRename, SessionRenameError> {
         if !is_session_uuid(session_uuid) {
-            return Err(format!("Claude session id {session_uuid} is not a UUID"));
+            return Err(SessionRenameError::Definite(format!(
+                "Claude session id {session_uuid} is not a UUID"
+            )));
         }
         let lifecycle = self.lifecycles.lock(thread_id).await;
         let pid = self
@@ -236,7 +238,9 @@ impl ClaudeSupervisor {
             let recorded = tokio::task::spawn_blocking(move || {
                 let path = crate::providers::claude::timeline::find_session_path(&session, &home)
                     .map_err(|error| {
-                    format!("Could not find the Claude session file: {error:#}")
+                    SessionRenameError::Definite(format!(
+                        "Could not find the Claude session file: {error:#}"
+                    ))
                 })?;
                 match path {
                     Some(path) => append_custom_title(&path, &session, &title),
@@ -244,7 +248,9 @@ impl ClaudeSupervisor {
                 }
             })
             .await
-            .map_err(|error| format!("Claude session rename worker failed: {error}"))??;
+            .map_err(|error| {
+                SessionRenameError::Unknown(format!("Claude session rename worker failed: {error}"))
+            })??;
             if !recorded {
                 return Ok(SessionRename::NoConversation);
             }

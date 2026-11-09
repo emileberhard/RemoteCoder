@@ -674,13 +674,16 @@ blocks startup or provider journal retirement.
   order on the first load without a v5 file, preserving marks and pending native
   unarchives. Frozen prior types map each pin name to a pin flag and a durable
   `pendingRenames` entry. The control-owned drain runs on readiness and new
-  entries, and on a Claude turn start or completion, through the per-thread rename serial
-  owner. It skips the current name, or an untitled pin whose name without a
-  trailing ellipsis appears in the raw or summarized preview. That may discard a
+  entries, and on a Claude turn start or completion only when that thread has a
+  pending entry, through the per-thread rename serial owner. It skips the current
+  name, or an untitled pin whose name without a trailing ellipsis appears in the
+  raw or summarized preview. That may discard a
   typed name that happens to occur in the preview; compatibility owns the trade-off.
   A 30-second wait bounds each drain attempt; an owned per-thread task keeps its
   serial fence until a submitted provider write replies, and the drain continues
-  to other entries. Failures and uncertain replies remain queued for a later wake.
+  to other entries. Failures and uncertain replies remain queued and retry with
+  exponential backoff from 5 seconds to 5 minutes while entries remain; wakes
+  coalesce and prompt an earlier retry.
   Claude's missing conversation may
   be a first turn that has not started, so it is not proof of deletion.
   Adoption retains pending renames and manual-name facts. With no prior file it imports schema 1

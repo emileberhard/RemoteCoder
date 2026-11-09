@@ -2689,7 +2689,9 @@ async fn idle_rename_appends_the_sdk_title_record_and_announces_it() {
     fs::write(&path, "").unwrap();
     assert_eq!(rename().await, Ok(SessionRename::NoConversation));
     fs::write(&path, "{\"type\":\"user\"").unwrap();
-    assert!(rename().await.unwrap_err().contains("mid-record"));
+    assert!(
+        matches!(rename().await, Err(SessionRenameError::Definite(message)) if message.contains("mid-record"))
+    );
     assert_eq!(fs::read_to_string(&path).unwrap(), "{\"type\":\"user\"");
     assert!(rx.try_recv().is_err());
 

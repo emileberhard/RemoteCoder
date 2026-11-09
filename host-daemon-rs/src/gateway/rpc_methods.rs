@@ -767,17 +767,21 @@ impl Gateway {
         Ok(serde_json::json!({ "released": released }))
     }
 
-    pub(super) async fn claude_thread_set_name(&self, params: &Value) -> RpcResult {
+    pub(super) async fn claude_thread_set_name(
+        &self,
+        params: &Value,
+    ) -> std::result::Result<Value, super::renames::RenameFailure> {
+        use super::renames::RenameFailure;
         let thread_id = params
             .get("threadId")
             .and_then(Value::as_str)
             .unwrap_or_default();
         let Some(session_uuid) = crate::providers::claude::session_uuid_from_thread_id(thread_id)
         else {
-            return Err(RpcError::new(
+            return Err(RenameFailure::Definite(RpcError::new(
                 RpcCode::InvalidParams,
                 "threadId is required",
-            ));
+            )));
         };
         let Some(name) = params
             .get("name")
@@ -785,26 +789,33 @@ impl Gateway {
             .map(str::trim)
             .filter(|name| !name.is_empty())
         else {
-            return Err(RpcError::new(
+            return Err(RenameFailure::Definite(RpcError::new(
                 RpcCode::InvalidParams,
                 "thread name must not be empty",
-            ));
+            )));
         };
         let Some(agent) = self.claude_agent() else {
-            return Err(RpcError::new(
+            return Err(RenameFailure::Definite(RpcError::new(
                 RpcCode::Internal,
                 "Claude agent is not running",
-            ));
+            )));
         };
         match agent.rename_session(thread_id, session_uuid, name).await {
-            Ok(crate::providers::claude::SessionRename::Renamed) => Ok(serde_json::json!({})),
-            Ok(crate::providers::claude::SessionRename::NoConversation) => Err(RpcError::new(
-                RpcCode::InvalidParams,
-                format!(
-                    "Claude thread {thread_id} has no conversation in this account yet; name it once its first turn has started"
-                ),
-            )),
-            Err(error) => Err(RpcError::new(RpcCode::Internal, error)),
+            Ok(crate::providers::claude::SessionRename::Renamed) => Ok(json!({})),
+            Ok(crate::providers::claude::SessionRename::NoConversation) => {
+                Err(RenameFailure::Definite(RpcError::new(
+                    RpcCode::InvalidParams,
+                    format!(
+                        "Claude thread {thread_id} has no conversation in this account yet; name it once its first turn has started"
+                    ),
+                )))
+            }
+            Err(crate::providers::claude::SessionRenameError::Definite(error)) => Err(
+                RenameFailure::Definite(RpcError::new(RpcCode::Internal, error)),
+            ),
+            Err(crate::providers::claude::SessionRenameError::Unknown(error)) => Err(
+                RenameFailure::Unknown(RpcError::new(RpcCode::Internal, error)),
+            ),
         }
     }
 

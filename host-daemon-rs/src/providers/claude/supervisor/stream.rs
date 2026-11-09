@@ -71,19 +71,38 @@ impl ClaudeSupervisor {
         pid: i32,
         request: Value,
         lifecycle: tokio::sync::OwnedMutexGuard<()>,
-    ) -> Result<Value, String> {
-        let prepared = Self::prepare_runtime_control(&request).map_err(|error| error.message)?;
+    ) -> Result<Value, super::SessionRenameError> {
+        use super::SessionRenameError;
+        let prepared = Self::prepare_runtime_control(&request)
+            .map_err(|error| SessionRenameError::Definite(error.message))?;
         let request_id = prepared.request_id().to_owned();
         let (sender, receiver) = oneshot::channel();
         let input = self
             .begin_runtime_control(thread_id, pid, &request_id, sender)
-            .await?;
+            .await
+            .map_err(SessionRenameError::Definite)?;
         drop(lifecycle);
-        let result = self
-            .runtime_control_reply(thread_id, pid, input, prepared, receiver)
-            .await;
+        let result = if let Err(error) = input.send_prepared_control(prepared).await {
+            if super::InputWriter::is_stalled(&error) {
+                let error = self.input_stalled(thread_id, pid, "control", error);
+                Err(SessionRenameError::Unknown(error.message))
+            } else {
+                let message = format!("failed writing a Claude control request: {error}");
+                self.retire_after_write_failure(thread_id, pid, &message)
+                    .await;
+                Err(SessionRenameError::Unknown(message))
+            }
+        } else {
+            match receiver.await {
+                Ok(Ok(value)) => Ok(value),
+                Ok(Err(error)) => Err(SessionRenameError::Definite(error)),
+                Err(_) => Err(SessionRenameError::Unknown(
+                    "Claude runtime ended during a control request".into(),
+                )),
+            }
+        };
         self.remove_control_reply(thread_id, pid, &request_id).await;
-        result.map_err(|error| error.message)
+        result
     }
 
     pub(super) async fn cancel_runtime_control(&self, thread_id: &str, pid: i32, request_id: &str) {

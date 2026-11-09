@@ -250,7 +250,15 @@ pub(super) struct RpcClient {
 }
 
 #[derive(Debug)]
-struct ThreadNotFound(String);
+pub(crate) struct ThreadNotFound(String);
+
+pub(crate) fn thread_not_found(thread_id: &str, error: &Value) -> Option<ThreadNotFound> {
+    let message = error["message"].as_str()?;
+    (error["code"] == -32600
+        && (message == format!("thread not loaded: {thread_id}")
+            || message == format!("thread not found: {thread_id}")))
+    .then(|| ThreadNotFound(error.to_string()))
+}
 
 #[derive(Debug)]
 struct EphemeralTurnsUnavailable;
@@ -308,6 +316,7 @@ impl RpcClient {
         P: Serialize,
         R: DeserializeOwned,
     {
+        let params = serde_json::to_value(params)?;
         let deadline = tokio::time::Instant::now() + RPC_TIMEOUT;
         self.next_id += 1;
         let id = format!("runtime:{}", self.next_id);
@@ -348,11 +357,10 @@ impl RpcClient {
                         .with_context(|| format!("{method} failed: {error}"));
                 }
                 if method == "thread/read"
-                    && error["message"]
-                        .as_str()
-                        .is_some_and(|message| message.contains("thread not found:"))
+                    && let Some(thread_id) = params["threadId"].as_str()
+                    && let Some(missing) = thread_not_found(thread_id, error)
                 {
-                    return Err(ThreadNotFound(format!("{method} failed: {error}")).into());
+                    return Err(missing.into());
                 }
                 bail!("{method} failed: {error}");
             }

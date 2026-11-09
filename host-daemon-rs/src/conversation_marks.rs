@@ -228,6 +228,28 @@ pub(crate) struct Marks {
     pub threads: BTreeMap<String, ThreadMarks>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TitleProtection {
+    pub pinned: bool,
+    pub purpose: bool,
+    pub manual_name: bool,
+    pub pending_rename: bool,
+}
+
+impl TitleProtection {
+    pub(crate) fn title_exclusion(self) -> Option<&'static str> {
+        if self.purpose {
+            Some("excludedPurpose")
+        } else if self.pending_rename {
+            Some("pendingRename")
+        } else if self.manual_name {
+            Some("manualName")
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PendingRename {
@@ -557,6 +579,26 @@ impl ConversationMarksStore {
         .await
     }
 
+    pub(crate) async fn title_protection(
+        &self,
+        thread_id: String,
+        now: i64,
+    ) -> Result<TitleProtection> {
+        self.transaction(now, move |document, created| {
+            let marks = document.threads.get(&thread_id);
+            Ok((
+                TitleProtection {
+                    pinned: marks.is_some_and(|mark| mark.pinned),
+                    purpose: marks.is_some_and(|mark| mark.purpose.is_some()),
+                    manual_name: marks.is_some_and(|mark| mark.manual_name),
+                    pending_rename: document.pending_renames.contains_key(&thread_id),
+                },
+                created,
+            ))
+        })
+        .await
+    }
+
     pub(crate) async fn pending_renames(
         &self,
         now: i64,
@@ -575,15 +617,19 @@ impl ConversationMarksStore {
         thread_id: String,
         expected: PendingRename,
         now: i64,
-    ) -> Result<(bool, Option<Marks>)> {
+    ) -> Result<(bool, bool, Option<Marks>)> {
         self.transaction(now, move |document, created| {
             if document.pending_renames.get(&thread_id) != Some(&expected) {
-                return Ok(((false, None), created));
+                return Ok(((false, false, None), created));
             }
+            let previous = document
+                .threads
+                .get(&thread_id)
+                .is_some_and(|marks| marks.manual_name);
             let mut transition = Transition::new(document)?;
             transition.update(&thread_id, |marks| marks.manual_name = true);
             let (delta, changed) = transition.finish();
-            Ok(((true, delta), changed || created))
+            Ok(((true, previous, delta), changed || created))
         })
         .await
     }
@@ -623,12 +669,16 @@ impl ConversationMarksStore {
         &self,
         thread_id: String,
         now: i64,
-    ) -> Result<Option<Marks>> {
+    ) -> Result<(bool, Option<Marks>)> {
         self.transaction(now, move |document, created| {
+            let previous = document
+                .threads
+                .get(&thread_id)
+                .is_some_and(|marks| marks.manual_name);
             let mut transition = Transition::new(document)?;
             transition.update(&thread_id, |marks| marks.manual_name = true);
             let (delta, changed) = transition.finish();
-            Ok((delta, changed || created))
+            Ok(((previous, delta), changed || created))
         })
         .await
     }

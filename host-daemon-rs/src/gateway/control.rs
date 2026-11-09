@@ -754,12 +754,22 @@ impl Gateway {
         params: Value,
         timeout: Duration,
     ) -> Result<Value> {
+        let thread_id = params["threadId"].as_str().map(str::to_owned);
         let (reply_rx, _pending) = self.begin_control_call(method, params).await?;
         tokio::time::timeout(timeout, reply_rx)
             .await
             .context("codex internal JSON-RPC timed out")?
             .context("codex internal JSON-RPC response channel closed")?
-            .map_err(anyhow::Error::msg)
+            .map_err(|error| {
+                if method == "thread/read"
+                    && let Some(thread_id) = thread_id.as_deref()
+                    && let Ok(value) = serde_json::from_str::<Value>(&error)
+                    && let Some(missing) = crate::runtime::rpc::thread_not_found(thread_id, &value)
+                {
+                    return missing.into();
+                }
+                anyhow::Error::msg(error)
+            })
     }
 
     pub(super) async fn call_control_unadmitted(
@@ -821,17 +831,22 @@ impl Gateway {
         &self,
         method: &str,
         params: Value,
-    ) -> crate::rpc::RpcResult {
+    ) -> std::result::Result<Value, super::renames::RenameFailure> {
+        use super::renames::RenameFailure;
         let (reply_rx, _pending) = self
             .begin_control_call(method, params)
             .await
-            .map_err(|error| super::agent_gateway::native_error(&error))?;
+            .map_err(|error| RenameFailure::Definite(super::agent_gateway::native_error(&error)))?;
         match reply_rx.await {
             Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => Err(serde_json::from_str::<Value>(&error)
-                .map(|error| crate::rpc::RpcError::from_wire(&error))
-                .unwrap_or_else(|_| crate::rpc::RpcError::from(anyhow!(error)))),
-            Err(error) => Err(anyhow!("Codex rename response channel closed: {error}").into()),
+            Ok(Err(error)) => Err(RenameFailure::Definite(
+                serde_json::from_str::<Value>(&error)
+                    .map(|error| crate::rpc::RpcError::from_wire(&error))
+                    .unwrap_or_else(|_| crate::rpc::RpcError::from(anyhow!(error))),
+            )),
+            Err(error) => Err(RenameFailure::Unknown(
+                anyhow!("Codex rename response channel closed: {error}").into(),
+            )),
         }
     }
 

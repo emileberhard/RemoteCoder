@@ -37,7 +37,7 @@ pub(crate) mod identity;
 pub(crate) mod install;
 mod launchd;
 pub(crate) mod recovery;
-mod rpc;
+pub(crate) mod rpc;
 pub(crate) mod shutdown_receipt;
 mod supervisor;
 pub(crate) mod transaction;

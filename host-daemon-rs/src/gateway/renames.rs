@@ -6,10 +6,10 @@ use crate::tasks::owned_tasks::OwnedTasks;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
-use tokio::sync::{Semaphore, oneshot};
+use tokio::sync::{Notify, Semaphore, oneshot};
 
 const MAX_RENAME_THREADS: usize = 1_024;
 const MAX_RENAME_NAME_BYTES: usize = 4_096;
@@ -18,8 +18,7 @@ const CALLER_WAIT: Duration = Duration::from_secs(30);
 pub(super) struct Renames {
     threads: Mutex<HashMap<String, Weak<RenameState>>>,
     tasks: OwnedTasks,
-    drain_running: AtomicBool,
-    drain_requested: AtomicBool,
+    drain_wake: Notify,
     update_capacity: Arc<Semaphore>,
 }
 
@@ -28,8 +27,7 @@ impl Default for Renames {
         Self {
             threads: Mutex::new(HashMap::new()),
             tasks: OwnedTasks::default(),
-            drain_running: AtomicBool::new(false),
-            drain_requested: AtomicBool::new(false),
+            drain_wake: Notify::new(),
             update_capacity: Arc::new(Semaphore::new(64)),
         }
     }
@@ -45,6 +43,20 @@ struct RenameState {
 pub(super) struct Candidate {
     state: Arc<RenameState>,
     generation: u64,
+}
+
+#[derive(Debug)]
+pub(super) enum RenameFailure {
+    Definite(RpcError),
+    Unknown(RpcError),
+}
+
+impl RenameFailure {
+    fn into_error(self) -> RpcError {
+        match self {
+            Self::Definite(error) | Self::Unknown(error) => error,
+        }
+    }
 }
 
 enum Rename {
@@ -164,7 +176,10 @@ impl Gateway {
         receiver.await.map_err(|_| RpcError::draining())?
     }
 
-    pub(super) async fn prepare_regenerate(self: &Arc<Self>, thread: &str) -> Result<Candidate> {
+    pub(super) async fn prepare_regenerate(
+        self: &Arc<Self>,
+        thread: &str,
+    ) -> Result<(Candidate, String)> {
         let pending = self
             .marks
             .pending_renames(crate::time::unix_seconds() as i64)
@@ -202,6 +217,21 @@ impl Gateway {
                         state.generation.load(Ordering::Acquire) == generation,
                         "a newer rename superseded regeneration"
                     );
+                    let header = gateway.review_header(&thread).await?;
+                    let header = &header["thread"];
+                    anyhow::ensure!(
+                        header["id"].as_str() == Some(thread.as_str())
+                            && header["ephemeral"].as_bool() == Some(false),
+                        "conversation is unavailable"
+                    );
+                    let previous = super::conversation_review::effective_title(header)
+                        .filter(|title| !title.trim().is_empty())
+                        .context("the conversation has nothing to name yet")?
+                        .to_owned();
+                    anyhow::ensure!(
+                        state.generation.load(Ordering::Acquire) == generation,
+                        "a newer rename superseded regeneration"
+                    );
                     if let Some(delta) = gateway
                         .marks
                         .clear_manual_name(thread, crate::time::unix_seconds() as i64)
@@ -209,7 +239,7 @@ impl Gateway {
                     {
                         gateway.publish_marks(&delta).await;
                     }
-                    Ok(Candidate { state, generation })
+                    Ok((Candidate { state, generation }, previous))
                 }
                 .await;
                 drop(permit);
@@ -280,40 +310,28 @@ impl Gateway {
         Ok(json!({ "delta": delta }))
     }
 
-    pub(super) fn wake_pending_renames(self: &Arc<Self>) {
-        self.renames.drain_requested.store(true, Ordering::Release);
-        if self.renames.drain_running.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let gateway = Arc::clone(self);
-        if !self
-            .renames
-            .tasks
-            .spawn("pending conversation renames", async move {
-                loop {
-                    gateway
-                        .renames
-                        .drain_requested
-                        .store(false, Ordering::Release);
-                    gateway.drain_pending_renames().await;
-                    gateway
-                        .renames
-                        .drain_running
-                        .store(false, Ordering::Release);
-                    if !gateway.renames.drain_requested.load(Ordering::Acquire)
-                        || gateway.renames.drain_running.swap(true, Ordering::AcqRel)
-                    {
-                        break;
-                    }
-                }
-                Ok(())
-            })
-        {
-            self.renames.drain_running.store(false, Ordering::Release);
-        }
+    pub(super) fn wake_pending_renames(&self) {
+        self.renames.drain_wake.notify_one();
     }
 
-    async fn drain_pending_renames(self: &Arc<Self>) {
+    pub(super) fn start_pending_rename_drain(self: &Arc<Self>) {
+        let gateway = Arc::clone(self);
+        self.renames.tasks.spawn("pending conversation renames", async move {
+            loop {
+                gateway.renames.drain_wake.notified().await;
+                let mut backoff = Duration::from_secs(5);
+                loop {
+                    if !gateway.drain_pending_renames().await { break; }
+                    tokio::select! {
+                        _ = gateway.renames.drain_wake.notified() => backoff = Duration::from_secs(5),
+                        _ = tokio::time::sleep(backoff) => backoff = (backoff * 2).min(Duration::from_secs(300)),
+                    }
+                }
+            }
+        });
+    }
+
+    async fn drain_pending_renames(self: &Arc<Self>) -> bool {
         let pending = match self
             .marks
             .pending_renames(crate::time::unix_seconds() as i64)
@@ -322,7 +340,7 @@ impl Gateway {
             Ok(pending) => pending,
             Err(error) => {
                 tracing::warn!(%error, "pending renames unavailable");
-                return;
+                return true;
             }
         };
         for (thread, pending) in pending {
@@ -359,7 +377,7 @@ impl Gateway {
                     Ok(())
                 })
             {
-                return;
+                return false;
             }
             match tokio::time::timeout(CALLER_WAIT, receiver).await {
                 Ok(Ok(Ok(()))) => {}
@@ -371,6 +389,17 @@ impl Gateway {
                     thread_id = thread,
                     "pending rename is still awaiting its provider"
                 ),
+            }
+        }
+        match self
+            .marks
+            .pending_renames(crate::time::unix_seconds() as i64)
+            .await
+        {
+            Ok(remaining) => !remaining.is_empty(),
+            Err(error) => {
+                tracing::warn!(%error, "pending renames unavailable");
+                true
             }
         }
     }
@@ -397,7 +426,10 @@ impl Gateway {
         }
         let header = match self.review_header(thread).await {
             Ok(header) => header,
-            Err(error) if !is_claude_thread_id(thread) && missing_codex_thread(&error, thread) => {
+            Err(error)
+                if !is_claude_thread_id(thread)
+                    && error.is::<crate::runtime::rpc::ThreadNotFound>() =>
+            {
                 self.marks
                     .complete_pending_rename(
                         thread.to_owned(),
@@ -423,7 +455,7 @@ impl Gateway {
         if !is_current() {
             return Ok(());
         }
-        let (current, delta) = self
+        let (current, previous, delta) = self
             .marks
             .begin_pending_rename(
                 thread.to_owned(),
@@ -435,11 +467,35 @@ impl Gateway {
             self.publish_marks(&delta).await;
         }
         if !current || !is_current() {
+            if current
+                && !previous
+                && let Some(delta) = self
+                    .marks
+                    .clear_manual_name(thread.to_owned(), crate::time::unix_seconds() as i64)
+                    .await?
+            {
+                self.publish_marks(&delta).await;
+            }
             return Ok(());
         }
-        self.write_thread_name(&json!({"threadId":thread,"name":name}))
+        if let Err(failure) = self
+            .write_thread_name(&json!({"threadId":thread,"name":name}))
             .await
-            .map_err(|error| anyhow::anyhow!("provider rename failed: {error:?}"))?;
+        {
+            if matches!(failure, RenameFailure::Definite(_))
+                && !previous
+                && let Some(delta) = self
+                    .marks
+                    .clear_manual_name(thread.to_owned(), crate::time::unix_seconds() as i64)
+                    .await?
+            {
+                self.publish_marks(&delta).await;
+            }
+            return Err(anyhow::anyhow!(
+                "provider rename failed: {:?}",
+                failure.into_error()
+            ));
+        }
         self.marks
             .complete_pending_rename(
                 thread.to_owned(),
@@ -530,25 +586,12 @@ impl Gateway {
             if !current() {
                 return Ok(None);
             }
-            if !requested
-                && self
-                    .marks
-                    .read(crate::time::unix_seconds() as i64)
-                    .await
-                    .map_err(RpcError::from)?
-                    .threads
-                    .get(thread)
-                    .is_some_and(|mark| mark.manual_name)
-            {
-                return Ok(None);
-            }
-            if self
+            let protection = self
                 .marks
-                .pending_renames(crate::time::unix_seconds() as i64)
+                .title_protection(thread.to_owned(), crate::time::unix_seconds() as i64)
                 .await
-                .map_err(RpcError::from)?
-                .contains_key(thread)
-            {
+                .map_err(RpcError::from)?;
+            if (!requested && protection.title_exclusion().is_some()) || protection.pending_rename {
                 return Ok(None);
             }
             let header = self.review_header(thread).await.map_err(RpcError::from)?;
@@ -560,22 +603,42 @@ impl Gateway {
             }
         }
         let manual = matches!(rename, Rename::Manual);
-        let response = self
-            .write_thread_name(&json!({"threadId":thread, "name":name}))
-            .await?;
-        if manual
-            && let Some(delta) = self
+        let previous = if manual {
+            let (previous, delta) = self
                 .marks
                 .record_manual_name(thread.to_owned(), crate::time::unix_seconds() as i64)
                 .await
-                .map_err(RpcError::from)?
+                .map_err(RpcError::from)?;
+            if let Some(delta) = delta {
+                self.publish_marks(&delta).await;
+            }
+            previous
+        } else {
+            true
+        };
+        let response = match self
+            .write_thread_name(&json!({"threadId":thread, "name":name}))
+            .await
         {
-            self.publish_marks(&delta).await;
-        }
+            Ok(response) => response,
+            Err(failure) => {
+                if matches!(failure, RenameFailure::Definite(_))
+                    && !previous
+                    && let Some(delta) = self
+                        .marks
+                        .clear_manual_name(thread.to_owned(), crate::time::unix_seconds() as i64)
+                        .await
+                        .map_err(RpcError::from)?
+                {
+                    self.publish_marks(&delta).await;
+                }
+                return Err(failure.into_error());
+            }
+        };
         Ok(Some(response))
     }
 
-    async fn write_thread_name(&self, params: &Value) -> RpcResult {
+    async fn write_thread_name(&self, params: &Value) -> std::result::Result<Value, RenameFailure> {
         if params["threadId"].as_str().is_some_and(is_claude_thread_id) {
             self.claude_thread_set_name(params).await
         } else {
@@ -604,18 +667,135 @@ fn matches_displayed_title(header: &Value, name: &str) -> bool {
     preview.contains(needle) || crate::prompt_summary::prompt_summary(preview).contains(needle)
 }
 
-fn missing_codex_thread(error: &anyhow::Error, thread: &str) -> bool {
-    serde_json::from_str::<Value>(&error.to_string()).is_ok_and(|reply| {
-        reply["code"] == -32600
-            && reply["message"].as_str() == Some(format!("thread not loaded: {thread}").as_str())
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::notifications::history::NotificationOrigin;
     use crate::test_support::{FakeControl, TestGateway};
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_pending_name_retries_after_backoff_without_an_external_wake() {
+        use crate::conversation_marks::Change;
+        let gateway = TestGateway::new();
+        gateway
+            .marks
+            .update(
+                vec![Change::Pin {
+                    thread_id: "thread".into(),
+                    name: Some("Keep".into()),
+                }],
+                1,
+            )
+            .await
+            .unwrap();
+        let mut control = FakeControl::attach(&gateway, 8).await;
+        gateway.start_pending_rename_drain();
+        gateway.wake_pending_renames();
+        let read: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
+        gateway
+            .handle_control_text(
+                json!({"id":read["id"],"result":{"thread":{"name":"Current"}}}).to_string(),
+                NotificationOrigin::Control { opened_after: 0 },
+            )
+            .await;
+        let write: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
+        gateway
+            .handle_control_text(
+                json!({"id":write["id"],"error":{"code":-32603,"message":"rejected"}}).to_string(),
+                NotificationOrigin::Control { opened_after: 0 },
+            )
+            .await;
+        assert!(
+            tokio::time::timeout(Duration::from_secs(4), control.requests.recv())
+                .await
+                .is_err()
+        );
+        let retry: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
+        assert_eq!(retry["method"], "thread/read");
+        gateway
+            .handle_control_text(
+                json!({"id":retry["id"],"result":{"thread":{"name":"Current"}}}).to_string(),
+                NotificationOrigin::Control { opened_after: 0 },
+            )
+            .await;
+        let write: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
+        gateway
+            .handle_control_text(
+                json!({"id":write["id"],"result":{}}).to_string(),
+                NotificationOrigin::Control { opened_after: 0 },
+            )
+            .await;
+        loop {
+            if gateway.marks.pending_renames(2).await.unwrap().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        gateway.renames.stop().await;
+    }
+
+    #[tokio::test]
+    async fn provider_rejection_rolls_back_new_protection_for_pending_rename() {
+        use crate::conversation_marks::Change;
+        let gateway = TestGateway::new();
+        gateway
+            .marks
+            .update(
+                vec![Change::Pin {
+                    thread_id: "thread".into(),
+                    name: Some("Keep".into()),
+                }],
+                1,
+            )
+            .await
+            .unwrap();
+        let pending = gateway.marks.pending_renames(1).await.unwrap()["thread"].clone();
+        let mut control = FakeControl::attach(&gateway, 8).await;
+        let drain = tokio::spawn({
+            let gateway = gateway.clone();
+            async move { gateway.drain_pending_rename("thread", &pending).await }
+        });
+        let read: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
+        gateway
+            .handle_control_text(
+                json!({"id":read["id"],"result":{"thread":{"name":"Current"}}}).to_string(),
+                NotificationOrigin::Control { opened_after: 0 },
+            )
+            .await;
+        let write: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
+        assert!(gateway.marks.read(2).await.unwrap().threads["thread"].manual_name);
+        gateway
+            .handle_control_text(
+                json!({"id":write["id"],"error":{"code":-32603,"message":"rejected"}}).to_string(),
+                NotificationOrigin::Control { opened_after: 0 },
+            )
+            .await;
+        assert!(drain.await.unwrap().is_err());
+        let marks = gateway.marks.read(2).await.unwrap();
+        assert!(!marks.threads["thread"].manual_name);
+        assert_eq!(
+            gateway.marks.pending_renames(2).await.unwrap()["thread"].name,
+            "Keep"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_provider_reply_keeps_manual_name_protection() {
+        let gateway = TestGateway::new();
+        let mut control = FakeControl::attach(&gateway, 8).await;
+        let rename = tokio::spawn({
+            let gateway = gateway.clone();
+            async move {
+                gateway
+                    .rename_thread(&json!({"threadId":"thread","name":"Manual"}))
+                    .await
+            }
+        });
+        let _: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
+        gateway.control_requests.lock().unwrap().clear();
+        assert!(rename.await.unwrap().is_err());
+        assert!(gateway.marks.read(2).await.unwrap().threads["thread"].manual_name);
+    }
 
     #[tokio::test]
     async fn an_unavailable_claude_header_keeps_the_pending_name() {
@@ -892,7 +1072,14 @@ mod tests {
             .record_manual_name("thread".into(), 1)
             .await
             .unwrap();
-        let _candidate = gateway.prepare_regenerate("thread").await.unwrap();
+        let mut control = FakeControl::attach(&gateway, 8).await;
+        let admission = tokio::spawn({
+            let gateway = gateway.clone();
+            async move { gateway.prepare_regenerate("thread").await }
+        });
+        let read: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
+        gateway.handle_control_text(json!({"id":read["id"],"result":{"thread":{"id":"thread","name":"Old","ephemeral":false}}}).to_string(), NotificationOrigin::Control { opened_after: 0 }).await;
+        let _candidate = admission.await.unwrap().unwrap();
         assert!(!gateway.marks.read(2).await.unwrap().threads["thread"].manual_name);
         assert!(gateway.marks.pending_renames(2).await.unwrap().is_empty());
         gateway.marks.update(vec![pin("New")], 3).await.unwrap();

@@ -75,6 +75,22 @@ impl Gateway {
                 .record_unretained(),
         };
         self.review.ingest(message, recorded.is_new);
+        if recorded.is_new
+            && matches!(method, "turn/started" | "turn/completed")
+            && let Some(thread) = thread_id
+                .as_deref()
+                .filter(|id| crate::providers::claude::is_claude_thread_id(id))
+        {
+            match self
+                .marks
+                .title_protection(thread.to_owned(), unix_seconds() as i64)
+                .await
+            {
+                Ok(protection) if protection.pending_rename => self.wake_pending_renames(),
+                Ok(_) => {}
+                Err(error) => warn!(%error, "pending rename lookup failed"),
+            }
+        }
         if recorded.is_new && method == "thread/name/updated" {
             self.invalidate_live_activity_title(thread_id.as_deref());
             self.refresh_live_activity().await;
