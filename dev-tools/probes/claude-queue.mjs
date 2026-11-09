@@ -4,7 +4,7 @@ import { isAbsolute, join } from "node:path";
 import { IsolatedGateway, startStubRouter } from "./isolated-gateway.mjs";
 
 if (process.argv[2] === "--help") {
-    console.log("Usage: bun dev-tools/probes/claude-queue.mjs CANDIDATE_BINARY [CLAUDE_MODEL]\nRuns an owned isolated gateway whose Claude turns use the host router. Queues Claude messages behind a running shell turn and proves they run as separate FIFO successor turns carrying their canonical clientUserMessageId, that a removed message never runs, that the thread ends idle, that the queue holds after Stop until Send Now, and that queued messages survive a planned gateway restart and run after the resumed turn. Production stays unchanged; success removes the isolated home, failure retains it.");
+    console.log("Usage: bun dev-tools/probes/claude-queue.mjs CANDIDATE_BINARY [CLAUDE_MODEL]\nRuns an owned isolated gateway whose Claude turns use the host router. Queues Claude messages behind a running shell turn and proves they run as separate FIFO successor turns carrying their canonical clientUserMessageId, that a removed message never runs, that the thread ends idle, that the queue holds after Stop until Send Now, that queued messages survive a planned gateway restart and run after the resumed turn, and that a planned restart during a queue-started turn resumes that turn once and still runs the next message as its own successor turn without a hold. Production stays unchanged; success removes the isolated home, failure retains it.");
     process.exit(0);
 }
 const [binary, model = "claude-sonnet-5"] = process.argv.slice(2);
@@ -87,9 +87,11 @@ async function busyTurn(label, seconds) {
     return { turnId, clientId: id };
 }
 
-async function enqueue(label) {
+async function enqueue(label, seconds = 0) {
     const id = clientId(label);
-    const input = text(`RemoteCoder queued-message probe ${label}. Reply with only QUEUED. Do not use tools.`);
+    const input = text(seconds
+        ? `RemoteCoder queued-message probe ${label}. Run exactly /bin/sleep ${seconds} with your Bash tool, then reply with only QUEUED. Do not read or write files and do not run any other command.`
+        : `RemoteCoder queued-message probe ${label}. Reply with only QUEUED. Do not use tools.`);
     const added = await client.call("thread/queue/add", { threadId, input, clientUserMessageId: id });
     assert.equal(added.queuedSubmission?.clientUserMessageId, id, "thread/queue/add did not echo the canonical clientUserMessageId");
     const repeated = await client.call("thread/queue/add", { threadId, input, clientUserMessageId: id });
@@ -155,11 +157,7 @@ async function restartPhase() {
     const running = await busyTurn("restarted", 25);
     const first = await enqueue("after-restart-first");
     const second = await enqueue("after-restart-second");
-    const stopStarted = Date.now();
-    await lab.stop();
-    await lab.start();
-    const restartMs = Date.now() - stopStarted;
-    client = await connect();
+    const restartMs = await restart();
     const survived = await queued();
     const recorded = await history();
     const ran = recorded.filter(turn => turn.clientIds.includes(first.id) || turn.clientIds.includes(second.id));
@@ -172,6 +170,51 @@ async function restartPhase() {
     assert(resumed.length > 0, "the planned restart did not resume the interrupted turn before the queue drained");
     return { restartedTurnId: running.turnId, restartMs, listedAfterRestart: survived.ids.length,
         resumedTurnIds: resumed.map(turn => turn.id), queuedTurnIds };
+}
+
+async function restart() {
+    const stopStarted = Date.now();
+    await lab.stop();
+    await lab.start();
+    const restartMs = Date.now() - stopStarted;
+    client = await connect();
+    return restartMs;
+}
+
+async function queueStartedRestartPhase() {
+    const running = await busyTurn("before-queued-restart", 10);
+    const first = await enqueue("queued-restart-first", 30);
+    const second = await enqueue("queued-restart-second");
+    let firstTurnId;
+    await lab.waitFor(async () => {
+        firstTurnId = (await history()).find(turn => turn.clientIds.includes(first.id))?.id;
+        return firstTurnId && client.notifications.some(message => message.method === "item/started"
+            && message.params.turnId === firstTurnId && message.params.item?.type === "commandExecution");
+    }, 180);
+    assert.deepEqual((await queued()).ids, [second.id], "the first queued message did not leave the queue when its turn started");
+    const restartMs = await restart();
+    const holds = [];
+    await lab.waitFor(async () => {
+        const listed = await queued();
+        if (listed.hold) holds.push(listed.hold);
+        return listed.ids.length === 0 && await idle();
+    }, 300);
+    assert.deepEqual(holds, [], "the queue was held after a planned restart of a queue-started turn");
+    const turns = await history();
+    const firstIndex = turns.findIndex(turn => turn.id === firstTurnId);
+    const carrying = id => turns.filter(turn => turn.clientIds.includes(id));
+    assert.equal(carrying(first.id).length, 1, "the restarted queued message ran more than once");
+    assert.equal(carrying(second.id).length, 1, "the second queued message did not run exactly once");
+    const secondTurn = carrying(second.id)[0];
+    const secondIndex = turns.indexOf(secondTurn);
+    assert.deepEqual(secondTurn.clientIds, [second.id], "the second queued message joined another turn");
+    assert.equal(secondTurn.status, "completed", `the second queued turn ended ${secondTurn.status}`);
+    const resumed = turns.slice(firstIndex + 1, secondIndex).filter(turn => !turn.clientIds.length);
+    assert(firstIndex > turns.findIndex(turn => turn.id === running.turnId), "the first queued message did not run after the busy turn");
+    assert.equal(turns[firstIndex].status, "interrupted", "the planned restart did not interrupt the queue-started turn");
+    assert(resumed.length > 0, "the planned restart did not resume the queue-started turn before the next message");
+    return { firstTurnId, firstStatus: turns[firstIndex].status, restartMs, resumedTurnIds: resumed.map(turn => turn.id),
+        secondTurnId: secondTurn.id, holds: holds.length };
 }
 
 try {
@@ -195,7 +238,8 @@ try {
     threadId = started.thread?.id;
     assert(threadId?.startsWith("claude_"), "thread/start returned no Claude thread");
     await client.call("conversation/subscriptions/set", { threadIds: [threadId] });
-    const receipt = { threadId, model, fifo: await fifoPhase(), held: await heldPhase(), restart: await restartPhase() };
+    const receipt = { threadId, model, fifo: await fifoPhase(), held: await heldPhase(), restart: await restartPhase(),
+        queuedRestart: await queueStartedRestartPhase() };
     assert(await idle(), "the thread is not idle after the probe");
     receipt.finalActivity = "idle";
     await client.call("claude/thread/release", { threadId });

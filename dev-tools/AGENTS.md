@@ -126,11 +126,14 @@ stub router forwards Claude inference to the host router with the host key held
 in memory; no credential is copied into the lab. One conversation subscribes
 through `conversation/subscriptions/set` and runs three journeys behind a shell
 sleep: two messages plus a removed one, a Stop with one message held for 20 s
-before Send Now, and a planned SIGTERM restart with two messages queued. Proof
+before Send Now, a planned SIGTERM restart with two messages queued, and a
+planned restart while the first of two queued messages runs its own turn. Proof
 comes from canonical history: each queued `clientId` is the only user item of
 its own completed successor turn, in queue order, none joins the running turn,
 the removed one never runs, the thread ends idle, and after the restart a
-resumed turn runs before the queue drains. The receipt holds identities and
+resumed turn runs before the queue drains. After the restart of a
+queue-started turn, that message runs exactly once, the queue is never held,
+and the next message still runs as its own successor turn. The receipt holds identities and
 timings only. Success removes the lab root; failure retains it as evidence.
 
 ## rc-gateway

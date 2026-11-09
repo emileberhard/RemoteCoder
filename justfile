@@ -510,7 +510,7 @@ gateway-e2e-compact-live *args:
 gateway-e2e-queue-live *args:
     ./dev-tools/rc-gateway e2e-queue-live {{ args }}
 
-# Queue Claude messages on an isolated gateway (host router) and prove FIFO turns, Remove, the hold after Stop, Send Now and restart survival.
+# Queue Claude messages on an isolated gateway (host router) and prove FIFO turns, Remove, the hold after Stop, Send Now, restart survival and a restart of a queue-started turn.
 gateway-e2e-claude-queue-isolated candidate *model:
     bun dev-tools/probes/claude-queue.mjs "{{ candidate }}" {{ model }}
 

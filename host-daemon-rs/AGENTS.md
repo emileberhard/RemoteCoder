@@ -44,7 +44,7 @@ surface:
 | Agent tools on both providers | `just gateway-e2e-agent-tools-live` |
 | iPhone tool transport, image inference and saved originals | `just gateway-e2e-device-tools-live` |
 | Codex queued messages (FIFO successor turns with their canonical `clientId`, none in the running turn, idle afterwards, held after Stop, Send Now; creates a thread) | `just gateway-e2e-queue-live` |
-| Claude queued messages (isolated gateway, host router: FIFO successor turns with their canonical `clientId`, none in the running turn, Remove from Queue, idle afterwards, held after Stop, Send Now, scoped `thread/queue/changed`, survival across a planned restart) | `just gateway-e2e-claude-queue-isolated /absolute/gateway/binary` |
+| Claude queued messages (isolated gateway, host router: FIFO successor turns with their canonical `clientId`, none in the running turn, Remove from Queue, idle afterwards, held after Stop, Send Now, scoped `thread/queue/changed`, survival across a planned restart, a planned restart of a queue-started turn without a hold) | `just gateway-e2e-claude-queue-isolated /absolute/gateway/binary` |
 | File upload handoff on both providers | `just gateway-e2e-upload-live` |
 | Voice resume context | `just voice-probe-resume-context` |
 
