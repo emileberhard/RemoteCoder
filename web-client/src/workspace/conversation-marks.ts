@@ -11,6 +11,7 @@ export type ThreadMarks = {
   seenThrough?: number;
   markedUnread: boolean;
   pinName?: string;
+  pinned?: boolean;
   purpose?: ConversationPurpose;
   settlement?: ConversationSettlement;
   doneThrough?: number;
@@ -31,7 +32,7 @@ export type MarkedConversation = {
 export type ConversationMarkChange =
   | { op: "markRead" | "settle" | "unsettle"; threadId: string; through: number }
   | { op: "markUnread" | "unpin"; threadId: string }
-  | { op: "pin"; threadId: string; name: string }
+  | { op: "pin"; threadId: string; name?: string }
   | { op: "setPurpose"; threadId: string; purpose: ConversationPurpose }
   | { op: "setChangesView"; threadId: string; view: ChangesView | null }
   | { op: "markAllRead"; through: number }
@@ -90,7 +91,9 @@ export function decodeMarkChange(value: unknown): ConversationMarkChange {
     case "unpin":
       return { op: entry.op, threadId };
     case "pin":
-      return { op: entry.op, threadId, name: text(entry.name, 256) };
+      return entry.name === undefined
+        ? { op: entry.op, threadId }
+        : { op: entry.op, threadId, name: text(entry.name, 256) };
     case "setPurpose":
       return { op: entry.op, threadId, purpose: purpose(entry.purpose) };
     case "setChangesView":
@@ -115,6 +118,10 @@ export function decodeConversationMarks(value: unknown): ConversationMarks {
     if (row.seenThrough != null) marks.seenThrough = integer(row.seenThrough, "seenThrough");
     if (row.doneThrough != null) marks.doneThrough = integer(row.doneThrough, "doneThrough");
     if (row.pinName != null) marks.pinName = text(row.pinName, 256);
+    if (row.pinned != null) {
+      if (typeof row.pinned !== "boolean") throw new Error("Invalid pinned mark");
+      marks.pinned = row.pinned;
+    }
     if (row.changesView != null) marks.changesView = decodeChangesView(row.changesView);
     if (row.purpose != null) marks.purpose = purpose(row.purpose);
     if (row.settlement != null) {
@@ -176,6 +183,7 @@ export function applyMarkChange(base: ConversationMarks, change: ConversationMar
     case "markRead":
       if (change.op === "settle") {
         marks.pinName = undefined;
+        marks.pinned = false;
         marks.settlement = { state: "settled", through: change.through };
       }
       marks.markedUnread = false;
@@ -185,10 +193,12 @@ export function applyMarkChange(base: ConversationMarks, change: ConversationMar
       marks.markedUnread = true;
       break;
     case "pin":
-      marks.pinName = normalizedPinName(change.name);
+      if (base.schemaVersion >= 5) marks.pinned = true;
+      else if (change.name !== undefined) marks.pinName = normalizedPinName(change.name);
       break;
     case "unpin":
       marks.pinName = undefined;
+      marks.pinned = false;
       break;
     case "setPurpose":
       marks.purpose = change.purpose;
@@ -221,11 +231,15 @@ export function isUnseenQuestion(marks: ConversationMarks, askedAtMs: number, th
     Math.max(marks.readBaseline, marks.threads[threadId]?.seenThrough ?? -Infinity)
   );
 }
+export function isPinned(marks: ConversationMarks, threadId: string): boolean {
+  const row = marks.threads[threadId];
+  return marks.schemaVersion >= 5 ? row?.pinned === true : row?.pinName !== undefined;
+}
 export function isProbablyDone(marks: ConversationMarks, thread: MarkedConversation): boolean {
   const row = marks.threads[thread.id];
   return (
     !row?.purpose &&
-    !row?.pinName &&
+    !isPinned(marks, thread.id) &&
     row?.doneThrough !== undefined &&
     thread.latestActivityAt !== null &&
     thread.latestActivityAt <= row.doneThrough
@@ -260,7 +274,7 @@ export function isSettled(
 ): boolean {
   if (marks.schemaVersion < 2 || isLive) return false;
   const row = marks.threads[thread.id];
-  if (row?.pinName || isUnread(marks, thread)) return false;
+  if (isPinned(marks, thread.id) || isUnread(marks, thread)) return false;
   if (
     row?.settlement?.state === "settled" &&
     (row.purpose || (thread.latestActivityAt !== null && thread.latestActivityAt <= row.settlement.through))

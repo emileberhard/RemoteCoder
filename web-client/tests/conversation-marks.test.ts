@@ -80,3 +80,17 @@ test("deltas merge newest per thread and retain the greatest baseline", () => {
   ).toThrow();
   expect(normalizedPinName(` ${"🧑‍💻".repeat(40)} `)?.length).toBeLessThan(200);
 });
+
+test("schema 5 pin protects against settlement and done without a pin name", () => {
+  const marks = decodeConversationMarks({
+    schemaVersion: 5,
+    revision: 1,
+    readBaseline: 1000,
+    threads: { t: { revision: 1, pinned: true, doneThrough: 120 } },
+  });
+  expect(isSettled(marks, thread, false, 999999)).toBe(false);
+  expect(isProbablyDone(marks, thread)).toBe(false);
+  const unpinned = applyMarkChange(marks, { op: "unpin", threadId: "t" });
+  expect(isSettled(unpinned, thread, false, 999999)).toBe(true);
+  expect(isProbablyDone(unpinned, thread)).toBe(true);
+});

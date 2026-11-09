@@ -36,6 +36,7 @@ import {
 } from "./conversation-drawer-preferences";
 import { conversationHeader } from "./conversation-header";
 import type { ChangesView } from "./conversation-marks";
+import { isPinned } from "./conversation-marks";
 import type { Conversation, Renderer, RequestCard } from "./conversation-session";
 import { ConversationSessions } from "./conversation-sessions";
 import { ConversationSettingsSelection } from "./conversation-settings-selection";
@@ -918,6 +919,32 @@ export class Workspace {
       this.publish();
       if (wasShown) void this.selectDraft(key).catch((error) => this.report(error));
     });
+  }
+  async renameConversation(address: Address, name: string) {
+    const marks = this.sidebar.marks(address).marks;
+    if (!marks) throw new Error("Refresh conversation marks before renaming");
+    if (marks.schemaVersion < 5) {
+      if (!isPinned(marks, address.threadId)) throw new Error("Renaming requires a pinned conversation");
+      this.sidebar.pin(address, name);
+      return;
+    }
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("Enter a conversation name");
+    const host = this.hosts.get(address);
+    const priorName = host.threads.find((thread) => thread.id === address.threadId)?.name;
+    await host.rpc.call(
+      "thread/name/set",
+      { threadId: address.threadId, name: trimmed },
+      { signal: host.controller.signal },
+    );
+    if (
+      this.hosts.present(host) &&
+      host.threads.find((thread) => thread.id === address.threadId)?.name === priorName
+    )
+      this.event(host.target, {
+        method: "thread/name/updated",
+        params: { threadId: address.threadId, threadName: trimmed },
+      });
   }
   async regenerateTitle(address = this.state.selected) {
     if (!address) return;

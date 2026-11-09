@@ -417,3 +417,58 @@ test("unsent drafts sort newest first, known times before historical unknowns, w
     ).drafts.map((row) => row.key),
   ).toEqual([key("tie-a"), key("tie-z")]);
 });
+
+test("schema 5 pins use conversation titles for sorting and search, with unknown unloaded titles", () => {
+  const state = host(
+    [{ ...thread("a"), name: "Zebra" }, { ...thread("b"), name: "Apple" }, thread("normal")],
+    {
+      marks: {
+        ...marks,
+        schemaVersion: 5,
+        threads: {
+          a: { revision: 1, markedUnread: false, pinned: true, pinName: "Ignored legacy name" },
+          b: { revision: 1, markedUnread: false, pinned: true },
+          missing: { revision: 1, markedUnread: false, pinned: true },
+        },
+      },
+    },
+  );
+  const pinned = project([state]).sections.find((section) => section.kind === "pinned")?.rows;
+  expect(pinned?.map((row) => row.title)).toEqual(["Apple", "Unknown conversation", "Zebra"]);
+  expect(pinned?.find((row) => row.address.threadId === "missing")).toMatchObject({
+    isLoading: false,
+    isUnread: null,
+  });
+  expect(ids(project([state], { query: "zebra" }))).toEqual(["a"]);
+  expect(ids(project([state], { query: "ignored legacy" }))).toEqual([]);
+  for (const row of project([state])
+    .sections.flatMap((section) => section.rows)
+    .filter((r) => r.address.threadId !== "missing"))
+    expect(row).toMatchObject({ canRename: true, canRegenerateName: true });
+  const legacy = host([{ ...thread("a"), name: "Zebra" }, thread("normal")], {
+    marks: { ...marks, threads: { a: { revision: 1, markedUnread: false, pinName: "Legacy name" } } },
+  });
+  const legacyRows = project([legacy]).sections.flatMap((section) => section.rows);
+  expect(legacyRows.find((row) => row.address.threadId === "a")).toMatchObject({
+    title: "Legacy name",
+    canRename: true,
+    canRegenerateName: false,
+  });
+  expect(legacyRows.find((row) => row.address.threadId === "normal")).toMatchObject({
+    canRename: false,
+    canRegenerateName: true,
+  });
+  expect(ids(project([legacy], { query: "legacy name" }))).toEqual(["a"]);
+});
+
+test("a loaded delegated pin does not become an unloaded root row", () => {
+  const child = { ...thread("child"), nativeParentThreadId: "root" };
+  const state = host([child], {
+    marks: {
+      ...marks,
+      schemaVersion: 5,
+      threads: { child: { revision: 1, markedUnread: false, pinned: true } },
+    },
+  });
+  expect(ids(project([state]))).toEqual([]);
+});

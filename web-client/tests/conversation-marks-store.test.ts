@@ -346,3 +346,24 @@ test("older gateway schema drops unsupported pending settlements and still synch
   expect(JSON.parse(disk.data.get(key) ?? "{}").pending).toEqual([]);
   store.dispose();
 });
+
+test("saved legacy named pins survive a schema 5 read and dispatch unchanged", async () => {
+  const disk = storage();
+  const key = `remotecoder.web.marks.v1:${targetKey({ hostId: "mini" })}`;
+  const change = { op: "pin", threadId: "t", name: "Name from an older client" };
+  disk.value.setItem(key, JSON.stringify({ acknowledged: snapshot(), pending: [{ id: "old", change }] }));
+  const sent: unknown[] = [];
+  const next = { ...snapshot(1, { t: { revision: 1, pinned: true } }), schemaVersion: 5 };
+  const remote = rpc(async (method, params) => {
+    if (method.endsWith("/read")) return next;
+    sent.push(params);
+    return { delta: { ...next, revision: 2, threads: { t: { revision: 2, pinned: true } } } };
+  });
+  const store = new ConversationMarksStore({ hostId: "mini" }, remote, disk.value, () => {});
+  await store.sync();
+  expect(sent).toEqual([{ changes: [change] }]);
+  expect(store.pendingCount).toBe(0);
+  expect(store.marks?.threads.t?.pinned).toBe(true);
+  expect(store.restoreWarning).toBeUndefined();
+  store.dispose();
+});

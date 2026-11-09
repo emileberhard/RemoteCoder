@@ -21,6 +21,7 @@ const threadValues = (marks: ThreadMarks | undefined) =>
     marks?.seenThrough,
     marks?.markedUnread ?? false,
     marks?.pinName,
+    marks?.pinned ?? false,
     marks?.purpose,
     marks?.settlement?.state,
     marks?.settlement?.through,

@@ -491,3 +491,46 @@ test("discarding another draft is allowed while the selected conversation awaits
   ack.resolve({ turn: { id: "t" } });
   await sending;
 });
+
+test("schema 5 pin, rename and settlement undo use the owning host without coupling names", async () => {
+  const { workspace, harness } = await setup();
+  harness.marks = { ...harness.marks, schemaVersion: 5 };
+  await workspace.refreshHost("mini");
+  const address = { hostId: "mini", threadId: "shared" };
+  workspace.pinConversation(address, "Conversation");
+  expect(rows(workspace).find((row) => row.address.threadId === "shared")).toMatchObject({
+    title: "Conversation",
+    isPinned: true,
+  });
+  await workspace.renameConversation(address, "  My name  ");
+  expect(harness.calls.find((call) => call.method === "thread/name/set")?.params).toEqual({
+    threadId: "shared",
+    name: "My name",
+  });
+  expect(rows(workspace).find((row) => row.address.threadId === "shared")?.title).toBe("My name");
+  const undo = workspace.settleConversations([address]);
+  expect(workspace.conversationMarks()?.marks?.threads.shared?.pinned).toBe(false);
+  undo.undo();
+  expect(workspace.conversationMarks()?.marks?.threads.shared?.pinned).toBe(true);
+  await workspace.refreshHost("mini");
+  const changes = harness.calls
+    .filter((call) => call.method === "conversation/marks/update")
+    .flatMap((call) => call.params.changes as Record<string, unknown>[]);
+  expect(changes.filter((change) => change.op === "pin")).toEqual([
+    { op: "pin", threadId: "shared" },
+    { op: "pin", threadId: "shared" },
+  ]);
+  workspace.unpinConversation(address);
+  await workspace.renameConversation(address, "Unpinned name");
+  expect(rows(workspace).find((row) => row.address.threadId === "shared")?.title).toBe("Unpinned name");
+});
+
+test("legacy rename changes only a pinned name and refuses unpinned rename", async () => {
+  const { workspace, harness } = await setup();
+  const address = { hostId: "mini", threadId: "shared" };
+  await expect(workspace.renameConversation(address, "Name")).rejects.toThrow("pinned");
+  workspace.pinConversation(address, "Original");
+  await workspace.renameConversation(address, "  Chosen name  ");
+  expect(rows(workspace).find((row) => row.address.threadId === "shared")?.title).toBe("Chosen name");
+  expect(harness.calls.some((call) => call.method === "thread/name/set")).toBe(false);
+});

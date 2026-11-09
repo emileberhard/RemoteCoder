@@ -209,3 +209,22 @@ test("failed provider history reads keep known pinned and ordinary headers with 
   expect(workspace.selectedHost?.historyErrors).toEqual(["history offline"]);
   expect(workspace.conversationDrawer.hostStates[0]?.errors).toContain("history offline");
 });
+
+test("schema 5 pinned flags recover headers outside loaded history", async () => {
+  const { workspace, harness } = await setup();
+  harness.marks = {
+    schemaVersion: 5,
+    revision: 1,
+    readBaseline: 0,
+    threads: { older: { revision: 1, markedUnread: false, pinned: true } },
+  };
+  harness.handler = (method, params) =>
+    method === "thread/read"
+      ? { thread: { ...header(String(params.threadId)), name: "Recovered title" } }
+      : undefined;
+  await workspace.refreshHost("mini");
+  const row = workspace.conversationDrawer.sections
+    .flatMap((section) => section.rows)
+    .find((candidate) => candidate.address.threadId === "older");
+  expect(row).toMatchObject({ title: "Recovered title", isPinned: true });
+});

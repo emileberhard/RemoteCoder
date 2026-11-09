@@ -1,7 +1,7 @@
 import { type RefObject, useMemo } from "react";
 import { addressKey, codexDesktopLink } from "../../protocol/boundary";
 import { neighbor, nextNeedingAttention } from "../../workspace/conversation-sidebar-navigation";
-import type { PinnedChatRename } from "../conversations/pinned-chat-rename-dialog";
+import type { ChatRename } from "../conversations/chat-rename-dialog";
 import { useRun, useSnapshot, useWorkspace } from "../workspace-context";
 import { type ChatCommand, type ChatWindowActions, chatCommands } from "./chat-commands";
 import type { ComposerHandle } from "./composer/composer";
@@ -16,7 +16,7 @@ export type ChatWindow = Readonly<{
   chooseFolder(): void;
   openSettings(): void;
   togglePalette(): void;
-  renamePinned(rename: PinnedChatRename): void;
+  renameChat(rename: ChatRename): void;
 }>;
 
 export function useChatWindowActions(chatWindow: ChatWindow): ChatWindowActions {
@@ -44,7 +44,7 @@ export function useChatWindowActions(chatWindow: ChatWindow): ChatWindowActions 
           case "togglePin":
             return row?.isPinned != null;
           case "rename":
-            return row?.isPinned === true;
+            return row?.canRename === true;
           case "settle":
             return row !== undefined && (row.settlement === "settled" || row.canSettle);
           case "markUnread":
@@ -127,7 +127,7 @@ export function useChatWindowActions(chatWindow: ChatWindow): ChatWindowActions 
             if (row.isPinned) return run(() => workspace.unpinConversation(address));
             return run(() => workspace.pinConversation(address, row.title));
           case "rename":
-            return address && row && chatWindow.renamePinned({ address, name: row.title });
+            return address && row && chatWindow.renameChat({ address, name: row.title });
           case "copyReference":
             return address && run(() => navigator.clipboard.writeText(link ?? address.threadId));
           case "settle":

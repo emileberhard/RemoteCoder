@@ -23,10 +23,10 @@ import { MenuItem } from "../design-system/menu";
 import { ProviderMark } from "../design-system/provider-mark";
 import type { SettingsTab } from "../settings/settings-dialog";
 import { useRun, useSnapshot, useWorkspace } from "../workspace-context";
+import type { ChatRename } from "./chat-rename-dialog";
 import { ActivityIndicator, ConversationRow } from "./conversation-row";
 import { ConversationRowMenu } from "./conversation-row-menu";
 import { NewChatButton } from "./new-chat-button";
-import type { PinnedChatRename } from "./pinned-chat-rename-dialog";
 import { ViewOptionsButton } from "./view-options";
 
 const visibleDraftLimit = 3;
@@ -37,12 +37,12 @@ export function HistorySidebar({
   hidden,
   onNavigate,
   openSettings,
-  renamePinned,
+  renameChat,
 }: {
   hidden: boolean;
   onNavigate(): void;
   openSettings(tab: SettingsTab): void;
-  renamePinned(rename: PinnedChatRename): void;
+  renameChat(rename: ChatRename): void;
 }) {
   const workspace = useWorkspace();
   const run = useRun();
@@ -281,7 +281,7 @@ export function HistorySidebar({
           <ConversationRowMenu
             row={menuRow}
             open={() => open(menuRow)}
-            renamePinned={renamePinned}
+            renameChat={renameChat}
             settle={(row) => settle([row])}
           />
         )}

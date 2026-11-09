@@ -8,6 +8,7 @@ import type { ConversationDrawerArrangement } from "./conversation-drawer-prefer
 import { type ConversationHeader, isDelegatedAgent, latestActivityAt } from "./conversation-header";
 import {
   type ConversationMarkChange,
+  isPinned,
   isUnread,
   isUnseenQuestion,
   normalizedPinName,
@@ -102,7 +103,7 @@ export class ConversationSidebarModel {
     return this.hosts.protectPinnedThreads(
       host,
       Object.entries(marks.threads)
-        .filter(([, marks]) => marks.pinName !== undefined)
+        .filter(([id]) => isPinned(marks, id))
         .map(([id]) => id),
     );
   }
@@ -243,9 +244,15 @@ export class ConversationSidebarModel {
     }
   }
   pin(address: Address, name: string) {
-    const normalized = normalizedPinName(name);
-    if (!normalized) throw new Error("Enter a pin name");
-    this.record(address, [{ op: "pin", threadId: address.threadId, name: normalized }]);
+    const marks = this.state(this.hosts.get(address)).marks.marks;
+    if (!marks) throw new Error("Refresh conversation marks before pinning");
+    if (marks.schemaVersion >= 5) {
+      this.record(address, [{ op: "pin", threadId: address.threadId }]);
+    } else {
+      const normalized = normalizedPinName(name);
+      if (!normalized) throw new Error("Enter a pin name");
+      this.record(address, [{ op: "pin", threadId: address.threadId, name: normalized }]);
+    }
   }
   private settlement(address: Address) {
     const state = this.state(this.hosts.get(address));
@@ -293,7 +300,12 @@ export class ConversationSidebarModel {
       batch.changes.push({ op: "settle", threadId: address.threadId, through });
       batch.undo.push({ op: "unsettle", threadId: address.threadId, through });
       const pinName = marks.threads[address.threadId]?.pinName;
-      if (pinName) batch.undo.push({ op: "pin", threadId: address.threadId, name: pinName });
+      if (isPinned(marks, address.threadId))
+        batch.undo.push(
+          marks.schemaVersion >= 5
+            ? { op: "pin", threadId: address.threadId }
+            : { op: "pin", threadId: address.threadId, name: pinName },
+        );
       if (
         isUnread(marks, {
           id: header.id,

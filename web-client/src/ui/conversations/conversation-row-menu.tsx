@@ -16,17 +16,17 @@ import type { ConversationSidebarRow } from "../../workspace/conversation-sideba
 import { chatCommands } from "../chat/chat-commands";
 import { MenuItem } from "../design-system/menu";
 import { useRun, useWorkspace } from "../workspace-context";
-import type { PinnedChatRename } from "./pinned-chat-rename-dialog";
+import type { ChatRename } from "./chat-rename-dialog";
 
 export function ConversationRowMenu({
   row,
   open,
-  renamePinned,
+  renameChat,
   settle,
 }: {
   row: ConversationSidebarRow;
   open(): void;
-  renamePinned(rename: PinnedChatRename): void;
+  renameChat(rename: ChatRename): void;
   settle(row: ConversationSidebarRow): void;
 }) {
   const workspace = useWorkspace();
@@ -39,34 +39,34 @@ export function ConversationRowMenu({
       <MenuItem icon={<MessageSquareText size={16} />} onSelect={open}>
         Open conversation
       </MenuItem>
+      {row.canRename && (
+        <MenuItem icon={<Pencil size={16} />} onSelect={() => renameChat({ address, name: row.title })}>
+          Rename
+        </MenuItem>
+      )}
       {row.isPinned ? (
-        <>
-          <MenuItem icon={<Pencil size={16} />} onSelect={() => renamePinned({ address, name: row.title })}>
-            Rename
-          </MenuItem>
-          <MenuItem
-            icon={<PinOff size={16} />}
-            onSelect={() => run(() => workspace.unpinConversation(address))}
-          >
-            Unpin
-          </MenuItem>
-        </>
+        <MenuItem
+          icon={<PinOff size={16} />}
+          onSelect={() => run(() => workspace.unpinConversation(address))}
+        >
+          Unpin
+        </MenuItem>
       ) : (
-        <>
-          <MenuItem
-            icon={<Pin size={16} />}
-            disabled={row.isPinned === null}
-            onSelect={() => run(() => workspace.pinConversation(address, row.title))}
-          >
-            Pin
-          </MenuItem>
-          <MenuItem
-            icon={<WandSparkles size={16} />}
-            onSelect={() => run(() => workspace.regenerateTitle(address))}
-          >
-            Regenerate Name
-          </MenuItem>
-        </>
+        <MenuItem
+          icon={<Pin size={16} />}
+          disabled={row.isPinned === null}
+          onSelect={() => run(() => workspace.pinConversation(address, row.title))}
+        >
+          Pin
+        </MenuItem>
+      )}
+      {row.canRegenerateName && (
+        <MenuItem
+          icon={<WandSparkles size={16} />}
+          onSelect={() => run(() => workspace.regenerateTitle(address))}
+        >
+          Regenerate Name
+        </MenuItem>
       )}
       {row.isUnread ? (
         <MenuItem

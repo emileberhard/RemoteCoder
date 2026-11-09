@@ -28,6 +28,8 @@ function row(threadId: string, changes: Partial<ConversationSidebarRow> = {}): C
     isProbablyDone: false,
     needsInput: false,
     canSettle: true,
+    canRename: true,
+    canRegenerateName: true,
     ...changes,
   };
 }
