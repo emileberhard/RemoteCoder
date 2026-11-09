@@ -275,7 +275,7 @@ private struct ChatScreen: View {
     @State private var drawerNotice: DrawerNotice?
     @State private var find = TranscriptFind()
     @State private var commandPalette: CommandPaletteCatalog?
-    @State private var pinRequest: ConversationPinRequest?
+    @State private var renamingPinnedChat: ConversationAddress?
     @State private var fileImportRequest = 0
     private let logger = AppLogger(category: "ChatScreen")
 
@@ -310,7 +310,7 @@ private struct ChatScreen: View {
                 CommandPalette(catalog: commandPalette, dismiss: { self.commandPalette = nil })
             }
         }
-        .conversationPinPrompt($pinRequest, workspace: workspace)
+        .pinnedChatRenamePrompt($renamingPinnedChat, workspace: workspace)
         #if os(iOS)
         .reasoningPickerOverlay()
         #endif
@@ -346,7 +346,7 @@ private struct ChatScreen: View {
                 returnToParent: returnToAgentParent,
                 selectConversation: { selectConversation($0) },
                 fork: forkConversation,
-                requestPinName: { pinRequest = $0 },
+                renamePinnedChat: { renamingPinnedChat = $0 },
                 toggleAgents: toggleAgents,
                 attachFile: { fileImportRequest += 1 },
                 toggleCommandPalette: { actions in
@@ -707,7 +707,7 @@ private struct ChatScreen: View {
     }
 
     private var blocksComposerFocus: Bool {
-        blocksFilePresentation || pinRequest != nil
+        blocksFilePresentation || renamingPinnedChat != nil
             || isReviewingChangesSheet
             || commandPalette != nil || screen.target.voiceError != nil || composerPresentations.blocksFocus
     }

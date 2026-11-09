@@ -1619,6 +1619,14 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         return conversation.agentParentAddress(localHostID: hostID)
     }
 
+    var openConversationTitle: String? {
+        let list = target.conversationList
+        guard let threadID = openThreadID,
+              let header = list.header(id: threadID) ?? activeConversation
+        else { return nil }
+        return ConversationSidebarProjection.title(for: header, pinnedName: list.pinnedName(for: threadID))
+    }
+
     var subagentContext: SubagentContext? {
         guard let parent = agentParent, let conversation = activeConversation else { return nil }
         let list = target.conversationList

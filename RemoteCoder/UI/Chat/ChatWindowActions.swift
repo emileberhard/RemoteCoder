@@ -180,7 +180,7 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
         case .focusComposer: "Focus Composer"
         case .attachFile: "Attach File…"
         case .toggleFastMode: "Fast Mode"
-        case .togglePin: actions?.isPinned == true ? "Unpin" : "Pin…"
+        case .togglePin: actions?.isPinned == true ? "Unpin" : "Pin"
         case .rename: "Rename…"
         case .copyReference: actions?.conversation.map { $0.codexDesktopLink == nil } == true ? "Copy Thread ID" : "Copy Link"
         case .showAgents: "Show Subagents"
@@ -253,7 +253,7 @@ struct ChatWindowActionsPublisher: View {
     let returnToParent: () -> Void
     let selectConversation: (ConversationAddress) -> Void
     let fork: (ConversationAddress) -> Void
-    let requestPinName: (ConversationPinRequest) -> Void
+    let renamePinnedChat: (ConversationAddress) -> Void
     let toggleAgents: () -> Void
     let attachFile: () -> Void
     let toggleCommandPalette: (ChatWindowActions) -> Void
@@ -291,7 +291,7 @@ struct ChatWindowActionsPublisher: View {
             returnToParent: returnToParent,
             selectConversation: selectConversation,
             fork: fork,
-            requestPinName: requestPinName,
+            renamePinnedChat: renamePinnedChat,
             toggleAgents: toggleAgents,
             attachFile: attachFile,
             toggleCommandPalette: toggleCommandPalette,
@@ -322,7 +322,7 @@ fileprivate struct ChatWindowActionContext {
     let returnToParent: () -> Void
     let selectConversation: (ConversationAddress) -> Void
     let fork: (ConversationAddress) -> Void
-    let requestPinName: (ConversationPinRequest) -> Void
+    let renamePinnedChat: (ConversationAddress) -> Void
     let toggleAgents: () -> Void
     let attachFile: () -> Void
     let toggleCommandPalette: (ChatWindowActions) -> Void
@@ -400,12 +400,13 @@ fileprivate struct ChatWindowActionContext {
                 if workspace.pinnedName(for: address) != nil {
                     workspace.unpin(address)
                     HapticService.shared.play(.toggleOff)
-                } else {
-                    requestPinName(.init(kind: .pin, address: address))
+                } else if let title = screen.openConversationTitle {
+                    workspace.pin(address, name: title)
+                    HapticService.shared.play(.toggleOn)
                 }
             }
         case .rename:
-            if let address = screen.openAddress { requestPinName(.init(kind: .rename, address: address)) }
+            if let address = screen.openAddress { renamePinnedChat(address) }
         case .copyReference:
             if let address = screen.openAddress { HapticService.shared.copy(address.codexDesktopLink ?? address.threadID) }
         case .showAgents:

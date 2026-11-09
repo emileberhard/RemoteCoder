@@ -32,11 +32,7 @@ struct ChatScreenChrome: ViewModifier {
     }
 
     private var title: String {
-        let list = screen.target.conversationList
-        guard let threadID = screen.openThreadID,
-              let header = list.threads.first(where: { $0.id == threadID }) ?? screen.activeConversation
-        else { return "New Chat" }
-        return ConversationSidebarProjection.title(for: header, pinnedName: list.pinnedName(for: threadID))
+        screen.openConversationTitle ?? "New Chat"
     }
 
     private var subtitle: String {

@@ -23,8 +23,7 @@ struct ConversationHistoryView: View {
     @State private var pending: ConversationSidebarSnapshot?
     @State private var isInteracting = false
     @State private var undo: DrawerUndo?
-    @State private var pinNameIntent: PinNameIntent?
-    @State private var pinNameDraft = ""
+    @State private var renamingPinnedChat: ConversationAddress?
     @State private var windowActivations = 0
     @State private var capturedWindowActivation: Int?
     @State private var visibility = SurfaceVisibilityState(isVisible: false)
@@ -45,19 +44,7 @@ struct ConversationHistoryView: View {
             .safeAreaInset(edge: .top) {
                 if isVisible { ClusterCoverageStrip(coverage: workspace.agentCoverage).padding(.horizontal) }
             }
-            .alert(pinNamePromptTitle, item: $pinNameIntent) { intent in
-                TextField("Pinned chat name", text: $pinNameDraft)
-                    .onChange(of: pinNameDraft) { pinNameDraft = ConversationPinName.clamped(pinNameDraft) }
-                Button(intent.primaryActionTitle) {
-                    commitPinName(intent)
-                }
-                .disabled(pinNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button("Cancel", role: .cancel) {
-                    pinNameDraft = ""
-                }
-            } message: { intent in
-                Text(intent.promptMessage)
-            }
+            .pinnedChatRenamePrompt($renamingPinnedChat, workspace: workspace)
             .modifier(WindowActivations(count: $windowActivations))
             .task(id: Arrangement(isVisible: isVisible, windowActivations: windowActivations)) {
                 guard isVisible else { capturedWindowActivation = nil; return }
@@ -190,8 +177,8 @@ struct ConversationHistoryView: View {
     private var actions: ConversationHistoryActions {
         ConversationHistoryActions(
             open: onSelect,
-            pin: beginPinning,
-            rename: beginRenaming,
+            pin: pin,
+            rename: { renamingPinnedChat = $0.address },
             regenerateName: { address in
                 HapticService.shared.play(.commit)
                 workspace.regenerateTitle(at: address) { message in
@@ -264,64 +251,14 @@ struct ConversationHistoryView: View {
 }
 
 extension ConversationHistoryView {
-    /// The pin prompt's source of truth is the addressed row itself, so a pin
-    /// command can never land on the same thread id on another host.
-    fileprivate struct PinNameIntent: Identifiable {
-        enum Kind { case pin, rename }
-
-        let kind: Kind
-        let address: ConversationAddress
-        let title: String
-
-        var id: String { "\(kind)|\(address.id)" }
-
-        var primaryActionTitle: String {
-            switch kind {
-            case .pin: "Pin"
-            case .rename: "Rename"
-            }
-        }
-
-        var promptMessage: String {
-            switch kind {
-            case .pin: "Pinned chats need a name."
-            case .rename: "Update the pinned chat name."
-            }
-        }
-    }
-
-    private var pinNamePromptTitle: String {
-        switch pinNameIntent?.kind {
-        case .pin: "Name this pinned chat"
-        case .rename: "Rename pinned chat"
-        case nil: ""
-        }
-    }
-
-    private func beginPinning(_ row: ConversationSidebarRow) {
-        pinNameDraft = ""
-        pinNameIntent = PinNameIntent(kind: .pin, address: row.address, title: row.title)
-    }
-
-    private func beginRenaming(_ row: ConversationSidebarRow) {
-        pinNameDraft = workspace.pinnedName(for: row.address) ?? ""
-        pinNameIntent = PinNameIntent(kind: .rename, address: row.address, title: row.title)
+    private func pin(_ row: ConversationSidebarRow) {
+        rearrange { workspace.pin(row.address, name: row.title) }
+        HapticService.shared.play(.toggleOn)
     }
 
     private func rearrange(_ change: () -> Void) {
         change()
         if let layout { receive(workspace.sidebarSnapshot(arrangedBy: layout, in: window)) }
-    }
-
-    private func commitPinName(_ intent: PinNameIntent) {
-        let trimmed = pinNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        pinNameDraft = ""
-        guard trimmed.isEmpty == false else { return }
-        let previous = workspace.pinnedName(for: intent.address)
-        rearrange { workspace.pin(intent.address, name: trimmed) }
-        if workspace.pinnedName(for: intent.address) != previous {
-            HapticService.shared.play(intent.kind == .pin ? .toggleOn : .commit)
-        }
     }
 }
 

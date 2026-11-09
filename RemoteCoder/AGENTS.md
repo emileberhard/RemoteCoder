@@ -1364,7 +1364,7 @@ entrypoint linked above.
   or transcript identity changes, and jumps with `revealTranscriptRow(_:)`.
 - `ConversationHistoryView` owns the snapshot observation, the captured layout
   (held by `ChatScreen` as `drawerLayout`, so window commands can walk the
-  displayed order) and the pin prompts. The `ConversationHistoryList` seam
+  displayed order). The `ConversationHistoryList` seam
   presents it: the iOS arm uses opaque content-surface rows under subheadline
   semibold section headers whose trailing chevron folds Pinned, each project, Automations and
   Settled into content-surface shelf cards, and the
@@ -1509,6 +1509,8 @@ entrypoint linked above.
   its `preview`. `thread/name/updated` retitles the cached row on its own host,
   so producers such as automations name their threads through
   `thread/name/set` instead of teaching the app their prompt format.
+  Pinning never asks for a name: it stores the title the row shows as the pin
+  name, which the gateway then stops retitling; Rename edits it.
 - There is no close button: the scrim tap or a leftward drag closes the drawer.
 - `ConversationDrawer` is gesture-owned, not a scroll view.
   - One `DrawerPanGesture` (`UIGestureRecognizerRepresentable`) owns horizontal
