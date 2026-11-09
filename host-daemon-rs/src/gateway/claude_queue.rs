@@ -166,7 +166,7 @@ impl Gateway {
             "input": entry.input,
             "clientUserMessageId": entry.id,
         });
-        if let Ok(Some(cwd)) = agent.recorded_cwd(thread).await {
+        if let Ok(Some(cwd)) = agent.queued_cwd(thread).await {
             params["cwd"] = json!(cwd);
         }
         Map::from_iter([

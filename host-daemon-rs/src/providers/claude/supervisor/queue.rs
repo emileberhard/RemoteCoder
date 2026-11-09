@@ -589,22 +589,14 @@ impl ClaudeSupervisor {
         })
     }
 
-    pub(crate) async fn recorded_cwd(&self, thread_id: &str) -> Result<Option<String>> {
-        let cwd = self
-            .runtimes
-            .lock()
-            .await
-            .get(thread_id)
-            .map(|runtime| runtime.cwd.clone());
-        if cwd.is_some() {
-            return Ok(cwd);
-        }
+    pub(crate) async fn queued_cwd(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<String>, TurnStartError> {
         Ok(self
-            .conversation_index
-            .parent(thread_id)
+            .recorded_selection(thread_id)
             .await?
-            .selection
-            .map(|selection| selection.cwd))
+            .map(|(_, cwd)| cwd))
     }
 
     pub(super) async fn mark_queued_written(
@@ -698,7 +690,9 @@ impl ClaudeSupervisor {
         }
         let history = match (
             session_uuid_from_thread_id(thread_id),
-            self.recorded_cwd(thread_id).await?,
+            self.queued_cwd(thread_id)
+                .await
+                .map_err(|error| anyhow::anyhow!("{error}"))?,
         ) {
             (Some(session), Some(cwd)) => self.session_history(&cwd, session),
             _ => None,
