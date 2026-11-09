@@ -290,7 +290,7 @@ pub(super) async fn claude(
             let _ = sender.send(result);
             if refresh {
                 let result = shutdown
-                    .run_until_cancelled(state.router.post("claude/accounts/refresh", json!({})))
+                    .run_until_cancelled(state.router.post("accounts/refresh", json!({})))
                     .await;
                 if matches!(result, Some(Err(_))) {
                     tracing::warn!("Claude account refresh after reset failed");

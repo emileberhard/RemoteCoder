@@ -262,6 +262,10 @@ fn router(state: HttpState) -> Router {
             post(claude_accounts::refresh).layer(DefaultBodyLimit::max(4096)),
         )
         .route(
+            "/codex/route",
+            put(claude_accounts::route_codex).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
             "/claude/accounts/resets/redeem",
             post(resets::claude).layer(DefaultBodyLimit::max(8192)),
         )

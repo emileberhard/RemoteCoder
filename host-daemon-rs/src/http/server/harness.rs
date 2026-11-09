@@ -238,6 +238,7 @@ async fn claude_accounts_routes_require_authorization_without_codex_availability
         ("GET", "/claude/accounts", ""),
         ("PUT", "/claude/accounts/preference", "{\"account\":null}"),
         ("POST", "/claude/accounts/refresh", "{}"),
+        ("PUT", "/codex/route", "{\"route\":\"copilot\"}"),
     ] {
         let head = format!(
             "{method} {path} HTTP/1.1\r\nHost: {HOST}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -280,12 +281,21 @@ async fn claude_accounts_routes_require_authorization_without_codex_availability
     ) -> axum::response::Response {
         use axum::response::IntoResponse;
         assert_eq!(headers[header::AUTHORIZATION], "Bearer fixture-key");
+        if body["provider"] == "codex" {
+            assert!(body["account"] == "copilot" || body["account"].is_null());
+            let mut routed = inventory(serde_json::Value::Null);
+            routed["codex"]["route"] = serde_json::json!({
+                "kind": if body["account"].is_null() { "subscription" } else { "copilot" }
+            });
+            return Json(routed).into_response();
+        }
         assert_eq!(body["provider"], "claude");
         let refusal = match body["account"].as_str() {
             Some("missing") => Some((404, "account_not_found")),
             Some("unavailable") => Some((503, "preference_unavailable")),
             Some("unauthorized") => Some((401, "unauthorized")),
             Some("forbidden") => Some((403, "insufficient_scope")),
+            Some("copilot") => Some((403, "copilot_not_permitted")),
             Some("invalid") => Some((400, "invalid_request")),
             Some("unexpected") => Some((404, "other_missing")),
             Some("busy") => Some((503, "key_store_unavailable")),
@@ -377,6 +387,7 @@ async fn claude_accounts_routes_require_authorization_without_codex_availability
             "router_unauthorized",
         ),
         (serde_json::json!("forbidden"), 502, "router_unauthorized"),
+        (serde_json::json!("copilot"), 403, "copilot_not_permitted"),
         (serde_json::json!("invalid"), 502, "router_invalid_request"),
         (
             serde_json::json!("unexpected"),
@@ -399,6 +410,23 @@ async fn claude_accounts_routes_require_authorization_without_codex_availability
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let value: serde_json::Value = response.json().await.unwrap();
         assert_eq!(value["error"]["code"], code);
+    }
+    for (route, status) in [("copilot", 200), ("subscription", 200), ("chatgpt", 400)] {
+        let response = client
+            .put(format!("http://{address}/codex/route"))
+            .bearer_auth(OPERATOR)
+            .json(&serde_json::json!({"route":route}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), status);
+        let value: serde_json::Value = response.json().await.unwrap();
+        if status == 200 {
+            assert_eq!(value["codexRoute"], route);
+            assert_eq!(value["automatic"], "second");
+        } else {
+            assert_eq!(value["error"]["code"], "invalid_request");
+        }
     }
     let response = client
         .post(url("/select"))
@@ -554,7 +582,7 @@ async fn claude_reset_replies_before_its_tracked_claude_only_refresh_without_enr
             post(|| async { Json(json!({"outcome":"reset","reason":null})) }),
         )
         .route(
-            "/claude/accounts/refresh",
+            "/accounts/refresh",
             post({
                 let entered = entered.clone();
                 let release = release.clone();

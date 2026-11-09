@@ -16,18 +16,58 @@ use serde_json::{Value, json};
 struct RouterInventory {
     accounts: Vec<RouterAccount>,
     claude: RouterChoice,
+    codex: Option<RouterCodex>,
 }
 #[derive(Deserialize)]
 struct RouterChoice {
     automatic: String,
     preference: Option<String>,
+    route: Option<RouterRoute<ClaudeRoute>>,
+}
+#[derive(Deserialize)]
+struct RouterCodex {
+    route: Option<RouterRoute<CodexRoute>>,
+}
+#[derive(Deserialize)]
+struct RouterRoute<Kind> {
+    kind: Kind,
+}
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+enum ClaudeRoute {
+    Subscription,
+    Openrouter,
+    Copilot,
+}
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+enum CodexRoute {
+    Subscription,
+    Copilot,
 }
 #[derive(Deserialize)]
 #[serde(tag = "provider", rename_all = "lowercase")]
 enum RouterAccount {
     Claude(Box<ClaudeAccount>),
+    Copilot(Box<CopilotAccount>),
     #[serde(other)]
     Other,
+}
+#[derive(Deserialize)]
+struct CopilotAccount {
+    label: String,
+    plan: String,
+    availability: Availability,
+    available_at: Option<String>,
+    error: Option<String>,
+    budget: Option<RouterBudget>,
+}
+#[derive(Deserialize)]
+struct RouterBudget {
+    limit_usd: f64,
+    spent_usd: Option<f64>,
+    remaining_usd: Option<f64>,
+    resets_at: Option<String>,
 }
 #[derive(Deserialize)]
 struct ClaudeAccount {
@@ -68,10 +108,32 @@ struct RouterWindow {
     resets_at: String,
 }
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Directory {
     automatic: String,
     preference: Option<String>,
+    route: Option<ClaudeRoute>,
+    codex_route: Option<CodexRoute>,
+    copilot: Option<Copilot>,
     accounts: Vec<Account>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Copilot {
+    label: String,
+    plan: String,
+    availability: Availability,
+    available_at: Option<f64>,
+    error: Option<String>,
+    budget: Option<Budget>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Budget {
+    limit_usd: f64,
+    spent_usd: Option<f64>,
+    remaining_usd: Option<f64>,
+    resets_at: Option<f64>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,9 +153,16 @@ fn map_directory(value: Value) -> Result<Directory> {
     let inventory: RouterInventory = serde_json::from_value(value)?;
     let mut ids = std::collections::HashSet::new();
     let mut accounts = Vec::new();
+    let mut copilot = None;
     for account in inventory.accounts {
-        let RouterAccount::Claude(account) = account else {
-            continue;
+        let account = match account {
+            RouterAccount::Claude(account) => account,
+            RouterAccount::Copilot(account) => {
+                ensure!(copilot.is_none(), "Duplicate Copilot account");
+                copilot = Some(map_copilot(*account)?);
+                continue;
+            }
+            RouterAccount::Other => continue,
         };
         ensure!(
             valid_id(&account.id) && ids.insert(account.id.clone()),
@@ -152,7 +221,46 @@ fn map_directory(value: Value) -> Result<Directory> {
     Ok(Directory {
         automatic: inventory.claude.automatic,
         preference: inventory.claude.preference,
+        route: inventory.claude.route.map(|route| route.kind),
+        codex_route: inventory
+            .codex
+            .and_then(|codex| codex.route)
+            .map(|route| route.kind),
+        copilot,
         accounts,
+    })
+}
+fn map_copilot(account: CopilotAccount) -> Result<Copilot> {
+    let budget = account
+        .budget
+        .map(|budget| {
+            let amounts = [
+                Some(budget.limit_usd),
+                budget.spent_usd,
+                budget.remaining_usd,
+            ];
+            ensure!(
+                amounts
+                    .into_iter()
+                    .flatten()
+                    .all(|amount| amount.is_finite() && amount >= 0.0),
+                "Invalid Copilot budget"
+            );
+            Ok(Budget {
+                limit_usd: budget.limit_usd,
+                spent_usd: budget.spent_usd,
+                remaining_usd: budget.remaining_usd,
+                resets_at: budget.resets_at.as_deref().map(timestamp).transpose()?,
+            })
+        })
+        .transpose()?;
+    Ok(Copilot {
+        label: account.label,
+        plan: account.plan,
+        availability: account.availability,
+        available_at: account.available_at.as_deref().map(timestamp).transpose()?,
+        error: account.error,
+        budget,
     })
 }
 pub(super) fn valid_id(id: &str) -> bool {
@@ -202,6 +310,11 @@ fn response(result: Result<Value>) -> Response {
                         StatusCode::SERVICE_UNAVAILABLE,
                         "router_unavailable",
                         &failure.to_string(),
+                    ),
+                    (403, "copilot_not_permitted") => error(
+                        StatusCode::FORBIDDEN,
+                        "copilot_not_permitted",
+                        "This gateway's llm-router key may not use Copilot; its router policy needs copilot allowed",
                     ),
                     (401 | 403, _) => error(
                         StatusCode::BAD_GATEWAY,
@@ -273,6 +386,37 @@ pub(super) async fn prefer(
             .put(
                 "accounts/preference",
                 json!({"provider":"claude","account":account}),
+            )
+            .await,
+    )
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CodexRouteChoice {
+    route: Value,
+}
+pub(super) async fn route_codex(
+    State(state): State<HttpState>,
+    _: Authorized,
+    Json(request): Json<CodexRouteChoice>,
+) -> Response {
+    let account = match request.route.as_str() {
+        Some("subscription") => Value::Null,
+        Some("copilot") => json!("copilot"),
+        _ => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Choose subscription or copilot for the Codex route",
+            );
+        }
+    };
+    response(
+        state
+            .router
+            .put(
+                "accounts/preference",
+                json!({"provider":"codex","account":account}),
             )
             .await,
     )

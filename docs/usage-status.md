@@ -41,11 +41,13 @@ last-known or unavailable status. Missing summary windows use an em dash with
 “Not reported” for VoiceOver, and a circle without any overall window is dashed
 with a dimmed logo.
 
-The logos are template vector assets (`ClaudeMark`, `CodexMark`) tinted in code
-with each provider's brand color: Claude `#D97757`, Codex the
-`#F4F6FF`→`#C4D3FF`→`#7A9DFF` gradient. The Claude path is from Simple Icons
-16.32.0 (CC0-1.0); the Codex path is from Lobe Icons
-(`@lobehub/icons-static-svg` 1.95.0, MIT, LobeHub). Each SVG records its source. Codex slots are classified by their reported window duration, never by
+The logos are template vector assets (`ClaudeMark`, `CodexMark`, `CopilotMark`)
+tinted in code with each provider's brand color: Claude `#D97757`, Codex the
+`#F4F6FF`→`#C4D3FF`→`#7A9DFF` gradient, Copilot the primary label color. The
+Claude path is from Simple Icons 16.32.0 (CC0-1.0); the Codex path is from Lobe
+Icons (`@lobehub/icons-static-svg` 1.95.0, MIT, LobeHub); the Copilot path is
+Primer Octicons' `copilot-24` as packaged in Simple Icons 16.32.0 (MIT, GitHub).
+Each SVG records its source. Codex slots are classified by their reported window duration, never by
 a primary/secondary assumption.
 
 ## Provider health

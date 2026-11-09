@@ -109,7 +109,7 @@ accounts and Codex tokens. `RC_CODEX_GATEWAY_ROUTER_URL`,
 `RC_CODEX_GATEWAY_ROUTER_ACCOUNTS_URL` and `RC_CODEX_GATEWAY_ROUTER_KEY_FILE`
 stay gateway-owned and are not inherited by Codex. HTTP redirects and proxy
 routing are disabled. The key is read for each request and never stored in an
-environment variable. The router's `provision-remotecoder-key.sh` creates it and
+environment variable. `llm-router keys create` on the router host creates it and
 RemoteCoder's `install-router-key.zsh` installs it.
 
 A router outage leaves the last issued token in memory while it remains valid.
@@ -196,9 +196,10 @@ The host control API uses the existing gateway installation/operator credential:
 | Operation | Method and path |
 |---|---|
 | Read the cached directory; optionally refresh, and optionally wait for the in-flight refresh | `GET /accounts?refresh=true&wait=refresh` |
-| List Claude router subscriptions, usage, the automatic choice and RemoteCoder's preference | `GET /claude/accounts` |
-| Set RemoteCoder's Claude preference, or `null` for automatic | `PUT /claude/accounts/preference` |
-| Explicitly refresh stale Claude observations | `POST /claude/accounts/refresh` |
+| List Claude router subscriptions, usage, the automatic choice, RemoteCoder's preference and Claude route, the Codex route and the Copilot account | `GET /claude/accounts` |
+| Set RemoteCoder's Claude preference or Copilot route, or `null` for automatic | `PUT /claude/accounts/preference` |
+| Set the router-wide Codex route | `PUT /codex/route` |
+| Explicitly refresh stale Claude and Copilot observations | `POST /claude/accounts/refresh` |
 | Redeem a reset on the host-default Codex account | `POST /accounts/default-codex/resets/redeem` |
 | Redeem a reset on a Claude router account | `POST /claude/accounts/resets/redeem` |
 
@@ -206,11 +207,23 @@ The host control API uses the existing gateway installation/operator credential:
 on the server; when the bound passes or no refresh is running, it returns the
 current snapshot, whose `refreshing` says whether a round is still open.
 
-The preference takes `{account: <router account ID> | null}` and refresh takes
-`{}`; `null` returns to the router's automatic choice. The gateway reads the
+The preference takes `{account: <router account ID> | "copilot" | null}` and
+refresh takes `{}`; `null` returns to the router's automatic choice and
+`"copilot"` routes every Claude request of the `remotecoder` principal to
+GitHub Copilot. `PUT /codex/route` takes `{route: "subscription" | "copilot"}`
+and sets the Codex route for every router principal. The gateway reads the
 router's `GET /accounts`, `PUT /accounts/preference` and `POST /accounts/refresh`
-with the host's key and returns only Claude accounts. The preference belongs to
-the `remotecoder` principal, so both hosts share it.
+with the host's key and returns the Claude accounts in `accounts` and the
+Copilot account separately. The preference and Claude route belong to the
+`remotecoder` principal, so both hosts share them. A key whose router policy does
+not allow Copilot gets 403 `copilot_not_permitted`.
+
+`route` (`subscription`, `openrouter` or `copilot`), `codexRoute`
+(`subscription` or `copilot`) and `copilot` are null when the router does not
+report them, as before llm-router 1.10.0. `copilot` is `{label, plan,
+availability, availableAt, error, budget}`, where `budget` is null or
+`{limitUsd, spentUsd, remainingUsd, resetsAt}` in US dollars; null amounts mean
+unknown usage and `error` says why.
 Claude account creation, removal and credential management remain in llm-router.
 Configuration, transport and router failures return typed errors with actionable
 messages. See [Subscription usage](usage-status.md) for observation semantics.

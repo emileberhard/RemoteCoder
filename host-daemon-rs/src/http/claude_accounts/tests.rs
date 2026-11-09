@@ -173,3 +173,58 @@ fn malformed_resets_degrade_only_the_affected_claude_observation() {
         assert_eq!(wire["accounts"][1]["resets"]["offers"], json!([]));
     }
 }
+
+fn copilot_row() -> Value {
+    json!({"id":"copilot","provider":"copilot","label":"emil-eberhard-stretch","plan":"business",
+        "shared":false,"credential":"COPILOT_GITHUB_TOKEN","availability":"exhausted",
+        "available_at":"2026-12-01T00:00:00Z","usage":null,"resets":null,"credits":{"used":15025},
+        "budget":{"limit_usd":150,"spent_usd":150.25,"unreported_usd":0.25,"remaining_usd":0,
+            "resets_at":"2026-12-01T00:00:00Z"}})
+}
+
+#[test]
+fn routes_and_copilot_stay_unknown_until_the_router_reports_them() {
+    let older = serde_json::to_value(map_directory(payload()).unwrap()).unwrap();
+    for field in ["route", "codexRoute", "copilot"] {
+        assert_eq!(older[field], Value::Null, "{field}");
+    }
+    let mut inventory = payload();
+    inventory["claude"]["preference"] = Value::Null;
+    inventory["claude"]["route"] = json!({"kind":"copilot"});
+    inventory["codex"]["route"] = json!({"kind":"subscription"});
+    inventory["accounts"]
+        .as_array_mut()
+        .unwrap()
+        .push(copilot_row());
+    let wire = serde_json::to_value(map_directory(inventory.clone()).unwrap()).unwrap();
+    assert_eq!(wire["route"], "copilot");
+    assert_eq!(wire["codexRoute"], "subscription");
+    assert_eq!(wire["accounts"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        wire["copilot"],
+        json!({"label":"emil-eberhard-stretch","plan":"business","availability":"exhausted",
+            "availableAt":1796083200.0,"error":null,"budget":{"limitUsd":150.0,"spentUsd":150.25,
+            "remainingUsd":0.0,"resetsAt":1796083200.0}})
+    );
+    let mut unknown = inventory.clone();
+    unknown["accounts"][3]["availability"] = json!("unavailable");
+    unknown["accounts"][3]["error"] = json!("GitHub Copilot usage is unknown");
+    unknown["accounts"][3]["budget"]["spent_usd"] = Value::Null;
+    unknown["accounts"][3]["budget"]["remaining_usd"] = Value::Null;
+    let wire = serde_json::to_value(map_directory(unknown).unwrap()).unwrap();
+    assert_eq!(wire["copilot"]["error"], "GitHub Copilot usage is unknown");
+    assert_eq!(wire["copilot"]["budget"]["spentUsd"], Value::Null);
+    assert_eq!(wire["copilot"]["budget"]["remainingUsd"], Value::Null);
+    let mut invalid = inventory.clone();
+    invalid["accounts"]
+        .as_array_mut()
+        .unwrap()
+        .push(copilot_row());
+    assert!(map_directory(invalid).is_err());
+    let mut invalid = inventory.clone();
+    invalid["accounts"][3]["budget"]["remaining_usd"] = json!(-1);
+    assert!(map_directory(invalid).is_err());
+    let mut invalid = inventory;
+    invalid["codex"]["route"] = json!({"kind":"openrouter"});
+    assert!(map_directory(invalid).is_err());
+}

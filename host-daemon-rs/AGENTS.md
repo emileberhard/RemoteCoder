@@ -344,7 +344,7 @@ blocks startup or provider journal retirement.
   client disconnects. A refresh failure cannot replace a confirmed outcome.
   Codex refreshes use canonical account keys and dirty generations so a later
   redemption cannot lose its refresh. Both routes use the gateway's reset task
-  owner. Claude runs `claude/accounts/refresh` after replying.
+  owner. Claude runs the router's `accounts/refresh` after replying.
 
 ## Gateway RPCs
 
