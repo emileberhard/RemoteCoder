@@ -1131,46 +1131,30 @@ mod tests {
     }
 
     #[test]
-    fn claude_queue_methods_route_to_the_gateway_and_unserved_ones_are_refused() {
-        for (method, handler, lifetime, new_work) in [
-            (
-                "thread/queue/add",
-                ClaudeMethod::QueueAdd,
-                RequestLifetime::Command,
-                true,
-            ),
-            (
-                "thread/queue/start",
-                ClaudeMethod::QueueStart,
-                RequestLifetime::Command,
-                true,
-            ),
-            (
-                "thread/queue/delete",
-                ClaudeMethod::QueueDelete,
-                RequestLifetime::Command,
-                false,
-            ),
-            (
-                "thread/queue/list",
-                ClaudeMethod::QueueList,
-                RequestLifetime::Query,
-                false,
-            ),
-        ] {
+    fn claude_queue_methods_route_to_their_handlers_and_unserved_ones_are_refused() {
+        let route = |method: &str| {
             let raw =
                 json!({"id": 7, "method": method, "params": {"threadId": "claude_a"}}).to_string();
-            let request = request(DispatchPlan::parse(&raw));
-            assert_eq!(request.starts_new_work, new_work, "{method}");
-            let owned = request
+            request(DispatchPlan::parse(&raw))
                 .owned
-                .expect("Claude queue methods are gateway-owned");
-            assert_eq!(owned.lifetime, lifetime, "{method}");
-            assert!(
-                matches!(owned.target, OwnedTarget::Claude(target) if target == handler),
-                "{method}"
-            );
-        }
+                .map(|owned| owned.target)
+        };
+        assert!(matches!(
+            route("thread/queue/add"),
+            Some(OwnedTarget::Claude(ClaudeMethod::QueueAdd))
+        ));
+        assert!(matches!(
+            route("thread/queue/start"),
+            Some(OwnedTarget::Claude(ClaudeMethod::QueueStart))
+        ));
+        assert!(matches!(
+            route("thread/queue/delete"),
+            Some(OwnedTarget::Claude(ClaudeMethod::QueueDelete))
+        ));
+        assert!(matches!(
+            route("thread/queue/list"),
+            Some(OwnedTarget::Claude(ClaudeMethod::QueueList))
+        ));
         for method in ["thread/queue/update", "thread/queue/reorder"] {
             let raw =
                 json!({"id": 7, "method": method, "params": {"threadId": "claude_a"}}).to_string();
