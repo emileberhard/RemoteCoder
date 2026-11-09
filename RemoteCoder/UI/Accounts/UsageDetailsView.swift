@@ -30,6 +30,17 @@ extension AgentProvider {
     }
 }
 
+struct UsageMark {
+    let image: String
+    let style: AnyShapeStyle
+
+    static func provider(_ provider: AgentProvider) -> UsageMark {
+        UsageMark(image: provider.markImage, style: provider.markStyle)
+    }
+
+    static let copilot = UsageMark(image: "CopilotMark", style: AnyShapeStyle(.primary))
+}
+
 struct UsageRingsControl: View {
     var workspace: ChatWorkspaceModel
 
@@ -54,16 +65,17 @@ struct UsageRingButton: View {
 
     var body: some View {
         let account = workspace.codexAccount
-        let rows = account?.sample.usageRows ?? []
+        let copilot = workspace.accountDirectory.router.state.codexRoute == .copilot ? workspace.accountDirectory.router.copilot : nil
+        let rows = copilot?.usageRows(now: .now) ?? account?.sample.usageRows ?? []
         let status = workspace.providerStatus(of: .codex)
         Button(action: showUsage) {
-            UsageRings(provider: .codex, rows: rows, status: status, diameter: diameter)
+            UsageRings(mark: copilot == nil ? .provider(.codex) : .copilot, rows: rows, status: status, diameter: diameter)
                 .padding(4)
                 .contentShape(.circle)
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: .iconPress, pressedScale: 0.96, pressedOpacity: 0.9))
         .tooltip("Show Codex usage")
-        .accessibilityLabel("Codex usage, \(account?.title ?? "no account selected")")
+        .accessibilityLabel("Codex usage, \(copilot == nil ? account?.title ?? "no account selected" : "GitHub Copilot")")
         .accessibilityValue(UsageRings.accessibilityValue(rows: rows, status: status))
         .accessibilityIdentifier("usage-codex")
         .contextMenuPreviewShape(Circle())
@@ -109,18 +121,18 @@ struct UsageRingButton: View {
 /// Native vector paths keep small rings sharp; only changed values animate.
 /// Their colors/labels deliberately differ from HealthKit's Activity rings.
 struct UsageRings: View {
-    let provider: AgentProvider
+    let mark: UsageMark
     let diameter: CGFloat
-    private let weekly: CodexUsageLimitRow?
+    private let primary: CodexUsageLimitRow?
     private let fiveHour: CodexUsageLimitRow?
     private let isBroken: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
 
-    init(provider: AgentProvider, rows: [CodexUsageLimitRow], status: ProviderStatus?, diameter: CGFloat) {
-        self.provider = provider
+    init(mark: UsageMark, rows: [CodexUsageLimitRow], status: ProviderStatus?, diameter: CGFloat) {
+        self.mark = mark
         self.diameter = diameter
-        weekly = rows.first { $0.kind == .weekly }
+        primary = rows.first { $0.kind == .weekly } ?? rows.first { $0.kind == .monthly }
         fiveHour = rows.first { $0.kind == .fiveHour && $0.runOutWarning != nil }
         isBroken = status?.isBroken == true
     }
@@ -135,18 +147,18 @@ struct UsageRings: View {
                                     trackOpacity: contrast == .increased ? 0.3 : 0.18,
                                     animation: reduceMotion ? nil : .smooth(duration: 0.35))
         ZStack {
-            UsageRing(row: weekly, color: weekly?.remainingColor ?? .secondary, style: style)
+            UsageRing(row: primary, color: primary?.remainingColor ?? .secondary, style: style)
             if let fiveHour, let warning = fiveHour.runOutWarning {
                 UsageRing(row: fiveHour, color: fiveHour.isStale ? .secondary : warning.color, style: style)
                     .padding(style.lineWidth + 1)
                     .transition(.opacity)
             }
-            Image(provider.markImage)
+            Image(mark.image)
                 .resizable()
                 .scaledToFit()
-                .foregroundStyle(provider.markStyle)
+                .foregroundStyle(mark.style)
                 .frame(width: diameter * 0.46, height: diameter * 0.46)
-                .opacity(isBroken ? 0.3 : weekly.map { $0.isStale ? 0.5 : 1 } ?? 0.5)
+                .opacity(isBroken ? 0.3 : primary.map { $0.isStale ? 0.5 : 1 } ?? 0.5)
         }
         .frame(width: diameter, height: diameter)
         .overlay(alignment: .topTrailing) {
@@ -206,26 +218,60 @@ struct UsageDetailsView: View {
                maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : 280)
     }
 
+    private var router: RouterAccountDirectory { workspace.accountDirectory.router }
+
     private var content: some View {
         let account = workspace.codexAccount
+        let copilot = router.state.codexRoute == .copilot ? router.copilot : nil
         return VStack(alignment: .leading, spacing: 6) {
             Button(action: onShowAllAccounts) {
-                Label(account?.title ?? "Codex", systemImage: "person.2")
+                Label(copilot == nil ? account?.title ?? "Codex" : "GitHub Copilot", systemImage: "person.2")
                     .scaledFont(.headline)
             }
             .buttonStyle(.plain)
-            AccountResetCount(resets: account?.sample.resets, isStale: account?.sample.stale ?? false)
+            if router.state.offers(.codex(.copilot)) {
+                CodexRoutePicker(router: router).padding(.vertical, 4)
+                if let error = router.error {
+                    Text(error).scaledFont(.footnote).foregroundStyle(.secondary)
+                }
+            }
             if let reason = workspace.providerStatus(of: .codex)?.reason {
                 ProviderWarningLabel(text: reason).scaledFont(.footnote)
             }
-            UsageDetailsContent(
-                rows: account?.sample.usageRows ?? [],
-                notice: account?.sample.usageNotice,
-                isLoading: workspace.accountDirectory.hosts.contains(where: \.isRefreshing)
-            )
+            if let copilot {
+                UsageDetailsContent(rows: copilot.usageRows(now: .now), notice: copilot.notice, isLoading: router.isRefreshing)
+            } else {
+                AccountResetCount(resets: account?.sample.resets, isStale: account?.sample.stale ?? false)
+                UsageDetailsContent(
+                    rows: account?.sample.usageRows ?? [],
+                    notice: account?.sample.usageNotice,
+                    isLoading: workspace.accountDirectory.hosts.contains(where: \.isRefreshing)
+                )
+            }
         }
         .padding([.horizontal, .bottom], 16)
         .padding(.top, 6)
+    }
+}
+
+struct CodexRoutePicker: View {
+    var router: RouterAccountDirectory
+
+    private var selection: Binding<CodexRoute> {
+        Binding(get: { router.state.codexRoute ?? .subscription }, set: { route in
+            Task { await router.select(.codex(route)) }
+        })
+    }
+
+    var body: some View {
+        Picker("Codex runs on", selection: selection.nativeSelectionFeedback()) {
+            Text("ChatGPT").tag(CodexRoute.subscription)
+            Text("Copilot").tag(CodexRoute.copilot)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .disabled(!router.canSelect)
+        .accessibilityIdentifier("codex-route")
     }
 }
 
@@ -293,7 +339,7 @@ struct UsageLimitRowView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(row.title) allowance")
-        .accessibilityValue("\(row.remainingPercent) percent left\(row.isStale ? ", last known" : ""). \(row.resetText ?? "")")
+        .accessibilityValue("\(row.valueText ?? "\(row.remainingPercent) percent left")\(row.isStale ? ", last known" : ""). \(row.resetText ?? "")")
     }
 
     private var title: some View {
@@ -301,7 +347,7 @@ struct UsageLimitRowView: View {
     }
 
     private var value: some View {
-        Text("\(row.remainingPercent)% left")
+        Text(row.valueText ?? "\(row.remainingPercent)% left")
             .scaledFont(.subheadline.weight(.semibold).monospacedDigit())
             .foregroundStyle(row.remainingColor)
             .contentTransition(.numericText())

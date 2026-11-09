@@ -83,7 +83,7 @@ actor FakeGatewayServer {
     private var holdsClaudeRead = false
     private var heldClaudeRead: CheckedContinuation<Void, Never>?
     private var claudeReadArrival: CheckedContinuation<Void, Never>?
-    private(set) var claudeHTTPRequests: [(method: String, path: String, body: Data)] = []
+    private(set) var routerHTTPRequests: [(method: String, path: String, body: Data)] = []
     private var directory: AccountDirectoryResponse?
     private var holdsAgents = false
     private var heldAgents: CheckedContinuation<Void, Never>?
@@ -450,8 +450,8 @@ actor FakeGatewayServer {
     private func serve(_ request: HTTPRequest, on connection: NWConnection) async {
         var body: Data?
         var status = "200 OK"
-        if let path = request.url?.path, path.hasPrefix("/claude/") {
-            claudeHTTPRequests.append((request.method, path, request.body))
+        if let path = request.url?.path, path.hasPrefix("/claude/") || path == "/codex/route" {
+            routerHTTPRequests.append((request.method, path, request.body))
         }
         switch (request.method, request.url?.path) {
         case ("GET", "/claude/accounts"), ("POST", "/claude/accounts/refresh"):
@@ -462,7 +462,7 @@ actor FakeGatewayServer {
                 status = "503 Service Unavailable"
                 body = Data("{\"error\":{\"code\":\"router_unavailable\",\"message\":\"Router unavailable\"}}".utf8)
             } else { body = try? claudeAccounts.map { try JSONEncoder().encode($0) } }
-        case ("PUT", "/claude/accounts/preference"):
+        case ("PUT", "/claude/accounts/preference"), ("PUT", "/codex/route"):
             if dropsClaudeSelectionResponse {
                 claudeAccounts = claudeSelection
                 peers[ObjectIdentifier(connection)] = nil

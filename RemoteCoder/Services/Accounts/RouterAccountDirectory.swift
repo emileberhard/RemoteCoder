@@ -25,7 +25,13 @@ final class RouterAccountDirectory {
     }
 
     var accounts: [ClaudeRouterAccount] { state.accounts }
-    var effectiveAccount: ClaudeRouterAccount? { accounts.first { $0.id == (state.preference ?? state.automatic) } }
+    var copilot: CopilotRouterAccount? { state.copilot }
+    var effectiveAccount: ClaudeRouterAccount? {
+        switch state.choice {
+        case .copilot?, .openrouter?: nil
+        default: accounts.first { $0.id == (state.preference ?? state.automatic) }
+        }
+    }
     var canSelect: Bool { respondingHostID != nil && !isSelecting }
 
     @discardableResult
@@ -128,10 +134,13 @@ final class RouterAccountDirectory {
         return task
     }
 
-    func setPreference(_ id: String?) async {
+    func select(_ selection: RouterSelection) async {
         guard !isSelecting else { error = "An account selection is already in progress."; return }
-        guard id == nil || accounts.contains(where: { $0.id == id }) else { error = "Claude account unavailable."; return }
-        guard !hosts.isEmpty else { error = "No gateway is available for Claude account selection."; return }
+        guard state.offers(selection) else {
+            error = selection.unavailableMessage
+            return
+        }
+        guard !hosts.isEmpty else { error = "No gateway is available for account selection."; return }
         stopReading()
         let fence = revision
         let operationID = UUID()
@@ -160,14 +169,14 @@ final class RouterAccountDirectory {
                 do { try state.accept(available) }
                 catch { self.error = error.localizedDescription; return }
                 respondingHostID = host.id
-                guard id == nil || available.accounts.contains(where: { $0.id == id }) else {
-                    error = "Claude account unavailable."
+                guard available.offers(selection) else {
+                    error = selection.unavailableMessage
                     return
                 }
                 do {
-                    let response = try await client.setClaudePreference(id)
+                    let response = try await submit(selection, client: client)
                     guard !Task.isCancelled, revision == fence else { return }
-                    guard response.preference == id else { throw AccountServiceError.invalidResponse }
+                    guard response.confirms(selection) else { throw AccountServiceError.invalidResponse }
                     try state.accept(response)
                     error = nil
                 } catch is CancellationError { return }
@@ -186,7 +195,7 @@ final class RouterAccountDirectory {
                             guard !Task.isCancelled, revision == fence else { return }
                             try state.accept(confirmed)
                             respondingHostID = readbackHost.id
-                            self.error = confirmed.preference == id ? nil : selectionError
+                            self.error = confirmed.confirms(selection) ? nil : selectionError
                             return
                         } catch is CancellationError { return }
                         catch { failures.insert("\(readbackHost.displayName): \(error.localizedDescription)") }
@@ -202,6 +211,16 @@ final class RouterAccountDirectory {
         }
         self.task = task
         await task.value
+    }
+
+    private func submit(_ selection: RouterSelection, client: AccountAPIClient) async throws -> ClaudeRouterAccountList {
+        switch selection {
+        case .claude(let choice):
+            guard let preference = ClaudeAccountPreference(choice) else { throw AccountServiceError.invalidResponse }
+            return try await client.setClaudePreference(preference)
+        case .codex(let route):
+            return try await client.setCodexRoute(route)
+        }
     }
 
     private func finish(operationID: UUID, fence: UUID) {
@@ -264,3 +283,21 @@ final class RouterAccountDirectory {
         AccountAPIClient(host: host) { [routes] in routes(host) }
     }
 }
+
+private extension RouterSelection {
+    var unavailableMessage: String {
+        switch self {
+        case .claude(.copilot), .codex: "Copilot unavailable."
+        case .claude: "Claude account unavailable."
+        }
+    }
+}
+
+#if DEBUG
+extension RouterAccountDirectory {
+    func showPreview(_ list: ClaudeRouterAccountList) throws {
+        try state.accept(list)
+        respondingHostID = UUID()
+    }
+}
+#endif

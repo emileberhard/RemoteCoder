@@ -579,7 +579,7 @@ struct ChatWorkspaceLifecycleTests {
 
         await book.target.handleScenePhaseActive()
         #expect(await waitUntil(timeout: .seconds(1)) { await gateway.connectionCount > 0 } == false)
-        #expect(await gateway.claudeHTTPRequests.isEmpty)
+        #expect(await gateway.routerHTTPRequests.isEmpty)
 
         fixture.workspace.select(hostID: fixture.book.id)
         #expect(await waitUntil { await gateway.connectionCount > 0 })

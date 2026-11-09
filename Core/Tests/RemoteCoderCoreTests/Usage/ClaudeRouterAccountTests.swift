@@ -56,11 +56,51 @@ struct ClaudeRouterAccountTests {
         #expect(throws: DecodingError.self) { try JSONDecoder().decode(ClaudeRouterAccountList.self, from: invalid) }
     }
 
-    @Test(arguments: [nil, "one"] as [String?])
-    func preferenceRequestPreservesAutomaticAsExplicitNull(_ account: String?) throws {
-        let data = try JSONEncoder().encode(ClaudeAccountPreference(account: account))
-        let json = try JSONDecoder().decode(JSONValue.self, from: data)
-        #expect(json == .object(["account": account.map(JSONValue.string) ?? .null]))
+    @Test(arguments: [(.automatic, .null), (.account("one"), .string("one")), (.copilot, .string("copilot"))] as [(ClaudeChoice, JSONValue)])
+    func preferenceRequestPreservesAutomaticAsExplicitNull(_ choice: ClaudeChoice, _ account: JSONValue) throws {
+        let data = try JSONEncoder().encode(try #require(ClaudeAccountPreference(choice)))
+        #expect(try JSONDecoder().decode(JSONValue.self, from: data) == .object(["account": account]))
+        #expect(ClaudeAccountPreference(.openrouter) == nil)
+    }
+
+    @Test func routesAndCopilotStayUnknownUntilTheGatewayReportsThem() throws {
+        let account = #"{"id":"one","label":"one@example.com","plan":"max","shared":false,"credential":"ready","availability":"available","availableAt":null,"windows":[],"observedAt":null}"#
+        let older = try JSONDecoder().decode(ClaudeRouterAccountList.self,
+            from: Data(#"{"automatic":"one","preference":null,"accounts":[\#(account)]}"#.utf8))
+        #expect(older.choice == .automatic)
+        #expect(older.codexRoute == nil)
+        #expect(older.copilot == nil)
+        #expect(older.offers(.claude(.automatic)))
+        #expect(!older.offers(.claude(.copilot)))
+        #expect(!older.offers(.codex(.copilot)))
+        let current = try JSONDecoder().decode(ClaudeRouterAccountList.self, from: Data(#"""
+        {"automatic":"one","preference":null,"route":"copilot","codexRoute":"subscription","accounts":[\#(account)],
+         "copilot":{"label":"octo","plan":"business","availability":"exhausted","availableAt":1796083200,"error":null,
+           "budget":{"limitUsd":150,"spentUsd":150.25,"remainingUsd":0,"resetsAt":1796083200}}}
+        """#.utf8))
+        try current.validate()
+        #expect(current.choice == .copilot)
+        #expect(current.confirms(.claude(.copilot)))
+        #expect(!current.confirms(.claude(.automatic)))
+        #expect(current.confirms(.codex(.subscription)))
+        #expect(current.offers(.codex(.copilot)))
+        let copilot = try #require(current.copilot)
+        let row = try #require(copilot.usageRows(now: Date(timeIntervalSince1970: 1796000000)).first)
+        #expect(row.kind == .monthly)
+        #expect(row.remainingPercent == 0)
+        #expect(row.valueText?.contains("150") == true)
+        #expect(row.resetText != nil)
+        #expect(copilot.availabilityText.hasPrefix("Exhausted until"))
+        let unknown = CopilotRouterAccount(label: "octo", plan: "business", availability: .unavailable, availableAt: nil,
+            error: "GitHub Copilot usage is unknown",
+            budget: .init(limitUsd: 150, spentUsd: nil, remainingUsd: nil, resetsAt: nil))
+        #expect(unknown.usageRows(now: .now).isEmpty)
+        #expect(unknown.notice == "GitHub Copilot usage is unknown")
+        #expect(unknown.menuTitle == "Copilot")
+        var negative = current
+        negative.copilot = CopilotRouterAccount(label: "octo", plan: "business", availability: .available, availableAt: nil,
+            error: nil, budget: .init(limitUsd: 150, spentUsd: -1, remainingUsd: 151, resetsAt: nil))
+        #expect(throws: AccountServiceError.self) { try negative.validate() }
     }
 
     private func list(selected: String, observed: Double, used: Double) -> ClaudeRouterAccountList {

@@ -20,7 +20,9 @@ rings. Claude rows show the plan, a shared marker, 5-hour and weekly usage with
 reset times, and availability. **Automatic** follows the router's own choice and
 marks the account it picks; choosing an account stores RemoteCoder's router
 preference, shared by both hosts, and choosing Automatic clears it. An error
-keeps the prior preference.
+keeps the prior preference. When the router reports Copilot, a GitHub Copilot
+row with the seat's monthly budget joins the Claude choices, and the Codex
+section offers a ChatGPT | Copilot route switch.
 
 Each Codex account has one name across its hosts: a nickname from the overview's
 row menu, else its verified email, else "Codex account". Names sync as user
@@ -293,7 +295,7 @@ across hosts are grouped without adding their allowances. It chooses a fresh, id
 retains per-host authentication/availability. Account groups have stable ordering
 across quota refreshes. `AccountDirectory` stores Codex groups and rebuilds them
 only when host configuration, accounts or names change. Its
-`RouterAccountDirectory` owns router reads and the preference, fences
+`RouterAccountDirectory` owns router reads, the Claude choice and the Codex route, fences
 results when hosts change and cancels its work on teardown. Periodic reads use
 GET. Only the Claude ring, its popover and All Accounts request quota probes;
 Codex notification, automation and account-detail work refresh Codex separately.
@@ -302,9 +304,11 @@ When every host fails, one error per failing host identifies the unavailable
 routes. Initial and background reconciliation only updates configuration. The
 foreground loop owns the first read; connection changes request a read only
 while that loop is running. Renames preserve the responding route.
-A preference change checks that route first, then others, and sends one
-mutation. A lost response triggers an immediate read; confirmation clears the
-error, while a failed read or unchanged preference leaves the failure visible.
+A Claude choice or Codex route change checks that route first, then others,
+and sends one mutation; the router's reported route, not the echoed preference,
+confirms a Copilot choice. A lost response triggers an immediate read;
+confirmation clears the error, while a failed read or unchanged choice leaves
+the failure visible.
 Unknown windows remain unknown. Failed Codex hosts retain clearly stale data.
 When a verified account's quota read fails, the account stays ready, the router
 or app-server error is logged, and the last observation of that same identity

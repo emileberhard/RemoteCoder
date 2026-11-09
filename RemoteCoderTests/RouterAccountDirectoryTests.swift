@@ -18,15 +18,15 @@ struct RouterAccountDirectoryTests {
         directory.reconcile([host])
         await directory.refresh(interactive: false)
         #expect(directory.state.preference == "one")
-        await directory.setPreference("two")
+        await directory.select(.claude(.account("two")))
         #expect(directory.state.preference == "one")
         #expect(directory.error == "Preference could not be saved")
         await gateway.setClaudeAccounts(list(selected: "one"), selection: list(selected: "two"), failsSelection: false)
-        await directory.setPreference("two")
+        await directory.select(.claude(.account("two")))
         #expect(directory.state.preference == "two")
         #expect(directory.error == nil)
         await directory.refresh(interactive: true)
-        let requests = await gateway.claudeHTTPRequests
+        let requests = await gateway.routerHTTPRequests
         #expect(requests.map(\.path) == ["/claude/accounts", "/claude/accounts", "/claude/accounts/preference", "/claude/accounts", "/claude/accounts", "/claude/accounts/preference", "/claude/accounts/refresh"])
         let selection = try JSONDecoder().decode([String: String].self, from: requests[2].body)
         #expect(selection == ["account": "two"])
@@ -54,7 +54,7 @@ struct RouterAccountDirectoryTests {
         await gateway.releaseClaudeRead()
         await read
         await refresh
-        let requests = await gateway.claudeHTTPRequests
+        let requests = await gateway.routerHTTPRequests
         #expect(requests.map(\.path) == ["/claude/accounts", "/claude/accounts/refresh"])
     }
 
@@ -113,11 +113,11 @@ struct RouterAccountDirectoryTests {
         #expect(!directory.isRefreshing)
         await first.failClaudeRead(true)
         await second.failClaudeRead(false)
-        await directory.setPreference("two")
+        await directory.select(.claude(.account("two")))
         #expect(directory.state.preference == "two")
         #expect(directory.error == nil)
-        let firstRequests = await first.claudeHTTPRequests
-        let secondRequests = await second.claudeHTTPRequests
+        let firstRequests = await first.routerHTTPRequests
+        let secondRequests = await second.routerHTTPRequests
         #expect(firstRequests.map(\.path) == ["/claude/accounts", "/claude/accounts"])
         #expect(secondRequests.map(\.path) == ["/claude/accounts", "/claude/accounts", "/claude/accounts/preference"])
     }
@@ -134,10 +134,10 @@ struct RouterAccountDirectoryTests {
         directory.reconcile([configuration(name: "Mini", port: port)])
         await directory.refresh(interactive: false)
         await gateway.dropClaudeSelectionResponse()
-        await directory.setPreference("two")
+        await directory.select(.claude(.account("two")))
         #expect(directory.state.preference == "two")
         #expect(directory.error == nil)
-        let requests = await gateway.claudeHTTPRequests
+        let requests = await gateway.routerHTTPRequests
         #expect(requests.filter { $0.path == "/claude/accounts/preference" }.count == 1)
         #expect(requests.last?.path == "/claude/accounts")
     }
@@ -155,7 +155,7 @@ struct RouterAccountDirectoryTests {
         #expect(await waitUntil(timeout: .seconds(1)) { await gateway.connectionCount > 0 } == false)
         owner.startForeground()
         #expect(await waitUntil { directory.canSelect })
-        #expect(await gateway.claudeHTTPRequests.count == 1)
+        #expect(await gateway.routerHTTPRequests.count == 1)
         await gateway.holdClaudeRead()
         host.authToken = "changed-token"
         owner.reconcile([host])
@@ -165,10 +165,49 @@ struct RouterAccountDirectoryTests {
         await gateway.releaseClaudeRead()
         host.authToken = "background-token"
         owner.reconcile([host])
-        #expect(await waitUntil(timeout: .seconds(1)) { await gateway.claudeHTTPRequests.count > 2 } == false)
+        #expect(await waitUntil(timeout: .seconds(1)) { await gateway.routerHTTPRequests.count > 2 } == false)
         #expect(!directory.isRefreshing)
-        await directory.setPreference("unknown")
+        await directory.select(.claude(.account("unknown")))
         #expect(directory.error == "Claude account unavailable.")
+    }
+
+    @Test func copilotRoutesAreOfferedOnlyWhenReportedAndConfirmedByTheirRoute() async throws {
+        let gateway = try FakeGatewayServer()
+        let port = try await gateway.start()
+        defer { Task { await gateway.stop() } }
+        let temporary = TemporaryHostStorage()
+        defer { temporary.cleanUp() }
+        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated)
+        defer { directory.stopReading() }
+        directory.reconcile([configuration(name: "Mini", port: port)])
+        await gateway.setClaudeAccounts(list(selected: "one"), selection: nil, failsSelection: false)
+        await directory.refresh(interactive: false)
+        await directory.select(.claude(.copilot))
+        #expect(directory.error == "Copilot unavailable.")
+        var routed = list(selected: "one")
+        routed.route = .subscription
+        routed.codexRoute = .subscription
+        routed.copilot = CopilotRouterAccount(label: "octo", plan: "business", availability: .available, availableAt: nil,
+            error: nil, budget: .init(limitUsd: 150, spentUsd: 30, remainingUsd: 120, resetsAt: nil))
+        var codex = routed
+        codex.codexRoute = .copilot
+        await gateway.setClaudeAccounts(routed, selection: codex, failsSelection: false)
+        await directory.refresh(interactive: false)
+        await directory.select(.codex(.copilot))
+        #expect(directory.error == nil)
+        #expect(directory.state.codexRoute == .copilot)
+        #expect(directory.state.choice == .account("one"))
+        let claude = ClaudeRouterAccountList(automatic: "one", preference: nil, accounts: codex.accounts,
+            route: .copilot, codexRoute: .copilot, copilot: codex.copilot)
+        await gateway.setClaudeAccounts(codex, selection: claude, failsSelection: false)
+        await directory.select(.claude(.copilot))
+        #expect(directory.error == nil)
+        #expect(directory.state.choice == .copilot)
+        #expect(directory.effectiveAccount == nil)
+        let selections = await gateway.routerHTTPRequests.filter { $0.method == "PUT" }
+        #expect(selections.map(\.path) == ["/codex/route", "/claude/accounts/preference"])
+        #expect(try JSONDecoder().decode([String: String].self, from: selections[0].body) == ["route": "copilot"])
+        #expect(try JSONDecoder().decode([String: String].self, from: selections[1].body) == ["account": "copilot"])
     }
 
     private func configuration(name: String, port: Int) -> GatewayHostConfiguration {

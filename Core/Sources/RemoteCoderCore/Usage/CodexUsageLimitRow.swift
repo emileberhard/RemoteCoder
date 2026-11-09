@@ -1,7 +1,7 @@
 import Foundation
 
 enum UsageWindowKind: Int, CaseIterable, Hashable, Sendable {
-    case fiveHour, weekly, fable, other
+    case fiveHour, weekly, fable, monthly, other
 }
 
 struct CodexUsageLimitRow: Identifiable, Hashable, Sendable {
@@ -13,10 +13,11 @@ struct CodexUsageLimitRow: Identifiable, Hashable, Sendable {
     var isStale = false
     let resetText: String?
     var runOutWarning: UsageRunOutWarning? = nil
+    var valueText: String? = nil
 }
 
 extension UsageWindowKind {
     var label: String {
-        switch self { case .weekly: "Weekly"; case .fiveHour: "5-hour"; case .fable: "Fable weekly"; case .other: "Limit" }
+        switch self { case .weekly: "Weekly"; case .fiveHour: "5-hour"; case .fable: "Fable weekly"; case .monthly: "Monthly budget"; case .other: "Limit" }
     }
 }

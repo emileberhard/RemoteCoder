@@ -116,6 +116,15 @@ A lost response triggers an immediate read to confirm the router's actual
 preference; it never repeats the mutation. If that read fails or does not
 confirm the requested preference, the error remains visible. Credentials,
 availability and cooldowns come from the router.
+
+When the router reports Copilot (llm-router 1.10.0 and a gateway that passes
+it on), the selector also offers **Copilot**, which routes every Claude request
+of the `remotecoder` principal to GitHub Copilot, and the Codex popover and
+overview offer a ChatGPT | Copilot switch for the router-wide Codex route. A
+ring whose provider runs on Copilot shows the Copilot mark and the seat's
+monthly budget, with the dollars left and its reset; unknown Copilot usage shows
+the router's error instead of a ring value. With an older router or gateway the
+Copilot choices stay hidden.
 `/health` starts no Claude process or quota probe, and unavailable usage is
 never synthesized as zero.
 See [Provider accounts](provider-accounts.md#claude-router-and-profile-migration).

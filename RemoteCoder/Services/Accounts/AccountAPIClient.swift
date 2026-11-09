@@ -17,9 +17,13 @@ actor AccountAPIClient {
         try await claudeRequest(path: "claude/accounts/refresh", method: "POST", body: Data("{}".utf8))
     }
 
-    func setClaudePreference(_ id: String?) async throws -> ClaudeRouterAccountList {
-        try await claudeRequest(path: "claude/accounts/preference", method: "PUT",
-                                    body: JSONEncoder().encode(ClaudeAccountPreference(account: id)))
+    func setClaudePreference(_ preference: ClaudeAccountPreference) async throws -> ClaudeRouterAccountList {
+        try await claudeRequest(path: "claude/accounts/preference", method: "PUT", body: JSONEncoder().encode(preference))
+    }
+
+    func setCodexRoute(_ route: CodexRoute) async throws -> ClaudeRouterAccountList {
+        struct Input: Encodable { let route: CodexRoute }
+        return try await claudeRequest(path: "codex/route", method: "PUT", body: JSONEncoder().encode(Input(route: route)))
     }
 
     func redeemCodexReset(account: ProviderAccountSnapshot, attempt: ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult {
@@ -72,7 +76,7 @@ actor AccountAPIClient {
         if !query.isEmpty { components.queryItems = query }
         guard let url = components.url else { throw AccountServiceError.invalidResponse }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData,
-                                 timeoutInterval: path.hasPrefix("claude/") ? 15 : 100)
+                                 timeoutInterval: path.hasPrefix("claude/") || path == "codex/route" ? 15 : 100)
         request.httpShouldHandleCookies = false
         request.httpMethod = method
         request.httpBody = body
