@@ -260,6 +260,11 @@ final class ConversationList {
         }
     }
 
+    func renameLegacyPin(threadID: String, name: String) {
+        guard !marks.usesPinFlag, isPinned(threadID), let name = ConversationPinName.normalized(name) else { return }
+        recordMark(.pin(threadID: threadID, name: name))
+    }
+
     func unpin(threadID: String) {
         recordMark(.unpin(threadID: threadID))
     }

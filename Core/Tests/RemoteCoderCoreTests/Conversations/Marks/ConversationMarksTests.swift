@@ -22,13 +22,13 @@ struct ConversationMarksTests {
     @Test func nameActionsAndFlagProjectionFollowTheAcknowledgedSchema() {
         let legacy = ConversationMarks(schemaVersion: 4, revision: 1, readBaseline: 0,
                                        threads: ["pinned": ThreadMarks(pinName: "Kept")])
-        #expect(legacy.nameActions(for: "pinned") == .init(canRename: true, canRegenerateName: false))
-        #expect(legacy.nameActions(for: "ordinary") == .init(canRename: false, canRegenerateName: true))
+        #expect(legacy.nameActions(for: "pinned") == .init(canRename: true, canRegenerateName: false, pinRequiresDisplayedTitle: true, renameUsesLegacyPinName: true))
+        #expect(legacy.nameActions(for: "ordinary") == .init(canRename: false, canRegenerateName: true, pinRequiresDisplayedTitle: true, renameUsesLegacyPinName: true))
         #expect(!legacy.applying(.pinFlag(threadID: "ordinary")).isPinned("ordinary"))
         let current = ConversationMarks(schemaVersion: 5, revision: 1, readBaseline: 0,
                                         threads: ["pinned": ThreadMarks(pinned: true)])
-        #expect(current.nameActions(for: "pinned") == .init(canRename: true, canRegenerateName: true))
-        #expect(current.nameActions(for: "ordinary") == .init(canRename: true, canRegenerateName: true))
+        #expect(current.nameActions(for: "pinned") == .init(canRename: true, canRegenerateName: true, pinRequiresDisplayedTitle: false, renameUsesLegacyPinName: false))
+        #expect(current.nameActions(for: "ordinary") == .init(canRename: true, canRegenerateName: true, pinRequiresDisplayedTitle: false, renameUsesLegacyPinName: false))
         #expect(current.applying(.pinFlag(threadID: "ordinary")).isPinned("ordinary"))
     }
 

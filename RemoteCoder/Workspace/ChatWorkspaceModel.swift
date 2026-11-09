@@ -1687,7 +1687,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         if owner.conversationList.marks.usesPinFlag {
             owner.renameThread(threadID: address.threadID, name: name, onFailure: onFailure)
         } else {
-            owner.conversationList.pin(threadID: address.threadID, displayedTitle: name)
+            owner.conversationList.renameLegacyPin(threadID: address.threadID, name: name)
             HapticService.shared.play(.success)
         }
     }

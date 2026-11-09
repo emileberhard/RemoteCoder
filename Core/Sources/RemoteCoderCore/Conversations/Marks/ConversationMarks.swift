@@ -197,6 +197,8 @@ enum ConversationMarkChange: Codable, Equatable, Sendable {
 struct ConversationNameActions: Equatable, Sendable {
     let canRename: Bool
     let canRegenerateName: Bool
+    let pinRequiresDisplayedTitle: Bool
+    let renameUsesLegacyPinName: Bool
 }
 
 struct ConversationMarks: Codable, Equatable, Sendable {
@@ -230,7 +232,8 @@ struct ConversationMarks: Codable, Equatable, Sendable {
 
     func nameActions(for threadID: String) -> ConversationNameActions {
         let pinned = isPinned(threadID)
-        return ConversationNameActions(canRename: usesPinFlag || pinned, canRegenerateName: usesPinFlag || !pinned)
+        return ConversationNameActions(canRename: usesPinFlag || pinned, canRegenerateName: usesPinFlag || !pinned,
+                                       pinRequiresDisplayedTitle: !usesPinFlag, renameUsesLegacyPinName: !usesPinFlag)
     }
 
     var pinnedThreadIDs: Set<String> { Set(threads.compactMap { $0.value.isPinned ? $0.key : nil }) }

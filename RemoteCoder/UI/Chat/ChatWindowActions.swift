@@ -346,7 +346,7 @@ fileprivate struct ChatWindowActionContext {
         if conversation == nil {
             enabled.subtract([.fork, .togglePin, .copyReference, .markUnread])
         }
-        if !isPinned && screen.openConversationTitle == nil && nameActions?.canRename != true { enabled.remove(.togglePin) }
+        if !isPinned && screen.openConversationTitle == nil && nameActions?.pinRequiresDisplayedTitle != false { enabled.remove(.togglePin) }
         if nameActions?.canRename != true { enabled.remove(.rename) }
         if nameActions?.canRegenerateName != true { enabled.remove(.regenerateName) }
         if !find.hasMatches { enabled.subtract([.findNext, .findPrevious]) }

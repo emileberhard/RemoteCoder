@@ -285,9 +285,16 @@ struct HistoryServiceTests {
             model.pin(threadID: "new", displayedTitle: nil)
             #expect(model.isPinned("new"))
             #expect(model.marksReplica.pending.contains { $0.change == .pinFlag(threadID: "new") })
+            model.renameLegacyPin(threadID: "new", name: "Not a legacy name")
+            #expect(!model.marksReplica.pending.contains { $0.change == .pin(threadID: "new", name: "Not a legacy name") })
         } else {
+            model.renameLegacyPin(threadID: "new", name: "Not pinned")
+            #expect(!model.marksReplica.pending.contains { $0.change == .pin(threadID: "new", name: "Not pinned") })
             model.pin(threadID: "new", displayedTitle: "Legacy title")
             #expect(model.marksReplica.pending.contains { $0.change == .pin(threadID: "new", name: "Legacy title") })
+            model.renameLegacyPin(threadID: "new", name: "Chosen name")
+            #expect(model.pinnedName(for: "new") == "Chosen name")
+            #expect(model.marksReplica.pending.contains { $0.change == .pin(threadID: "new", name: "Chosen name") })
         }
 
     }
