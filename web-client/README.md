@@ -165,7 +165,8 @@ foreground refresh and Claude routing; Workspace owns browser visibility and
 agent parent/child navigation. Drawer actions return one five-second undo
 deadline, with draft restoration and cross-host partial failures kept by their
 owners. Missing pinned headers recover by exact address within the existing
-500-header cap rather than synthesizing rows from pin names.
+500-header cap. Schema 5 pins show an unknown title until their header loads;
+older gateways retain the previous behavior while recovery runs.
 
 Marks, favorites, preferences and questions retain distinct synchronization
 loops: their acknowledgment, revision, retry and durability contracts differ.

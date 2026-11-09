@@ -446,7 +446,13 @@ test("schema 5 pins use conversation titles for sorting and search, with unknown
     .filter((r) => r.address.threadId !== "missing"))
     expect(row).toMatchObject({ canRename: true, canRegenerateName: true });
   const legacy = host([{ ...thread("a"), name: "Zebra" }, thread("normal")], {
-    marks: { ...marks, threads: { a: { revision: 1, markedUnread: false, pinName: "Legacy name" } } },
+    marks: {
+      ...marks,
+      threads: {
+        a: { revision: 1, markedUnread: false, pinName: "Legacy name" },
+        missing: { revision: 1, markedUnread: false, pinName: "Missing legacy" },
+      },
+    },
   });
   const legacyRows = project([legacy]).sections.flatMap((section) => section.rows);
   expect(legacyRows.find((row) => row.address.threadId === "a")).toMatchObject({
@@ -459,6 +465,7 @@ test("schema 5 pins use conversation titles for sorting and search, with unknown
     canRegenerateName: true,
   });
   expect(ids(project([legacy], { query: "legacy name" }))).toEqual(["a"]);
+  expect(legacyRows.find((row) => row.address.threadId === "missing")).toBeUndefined();
 });
 
 test("a loaded delegated pin does not become an unloaded root row", () => {

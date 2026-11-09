@@ -110,6 +110,8 @@ offline transcript caching would require revisiting selection and retention.
   includes every foldable section in both drawer modes.
   Pins retain real headers within the 500-entry cap. Missing pins recover by
   exact context/thread, at most 32 reads per pass, with 30–600 s failure cooldown.
+  Schema 5 shows a missing pin with an unknown title until its header loads;
+  older gateways keep their previous behavior.
   Selected and live headers outrank pins; exact session reads enter the same
   header source used for selected row actions. One context-owned timer retries
   failed pins at the earliest cooldown and cancels on retirement or disposal.

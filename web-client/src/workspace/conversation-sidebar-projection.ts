@@ -331,7 +331,7 @@ export function projectConversationSidebar(
     }
   for (const host of hosts) {
     const marks = host.marks;
-    if (!marks) continue;
+    if (!marks || marks.schemaVersion < 5) continue;
     const loadedIds = new Set(host.threads.map((thread) => thread.id));
     const pinIds = Object.keys(marks.threads)
       .filter((id) => isPinned(marks, id))
@@ -343,8 +343,7 @@ export function projectConversationSidebar(
       const address = conversationAddress(host.target, threadId);
       const id = addressKey(address);
       if (ids.has(id)) continue;
-      const title =
-        marks.schemaVersion < 5 ? (threadMarks.pinName ?? "Unknown conversation") : "Unknown conversation";
+      const title = "Unknown conversation";
       const isSelected = selected !== undefined && addressKey(selected) === id;
       if (threadMarks.purpose === "probe" && !isSelected) continue;
       if (arrangement.unreadOnly && !isSelected && !threadMarks.markedUnread) continue;
