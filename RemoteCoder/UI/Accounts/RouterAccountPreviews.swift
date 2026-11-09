@@ -53,6 +53,21 @@ private struct RouterAccountsFixture: View {
     }
 }
 
+private struct CodexPopoverFixture: View {
+    let directory: RouterAccountDirectory
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("GitHub Copilot", systemImage: "person.2").scaledFont(.headline)
+            CodexRoutePicker(router: directory).padding(.vertical, 4)
+            UsageDetailsContent(rows: directory.copilot?.usageRows(now: .now) ?? [], notice: directory.copilot?.notice, isLoading: false)
+        }
+        .padding([.horizontal, .bottom], 16)
+        .padding(.top, 6)
+        .frame(width: 280)
+    }
+}
+
 private struct UsageRingsFixture: View {
     let directory: RouterAccountDirectory
 
@@ -68,19 +83,45 @@ private struct UsageRingsFixture: View {
     }
 }
 
+private struct PreviewFrame<Content: View>: View {
+    @State private var theme = AppThemeStore()
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background { ThemedAppBackground() }
+            .environment(theme)
+    }
+}
+
 #Preview("Claude on Copilot") {
-    ClaudeUsageDetailsView(directory: RouterAccountFixture.directory(route: .copilot), providerReason: nil, onShowAllAccounts: {})
+    PreviewFrame {
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.directory(route: .copilot), providerReason: nil, onShowAllAccounts: {})
+    }
 }
 
 #Preview("Claude on a subscription") {
-    ClaudeUsageDetailsView(directory: RouterAccountFixture.directory(route: .subscription), providerReason: nil, onShowAllAccounts: {})
+    PreviewFrame {
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.directory(route: .subscription), providerReason: nil, onShowAllAccounts: {})
+    }
 }
 
 #Preview("Accounts") {
-    RouterAccountsFixture(directory: RouterAccountFixture.directory(route: .copilot, codexRoute: .copilot))
+    PreviewFrame {
+        RouterAccountsFixture(directory: RouterAccountFixture.directory(route: .copilot, codexRoute: .copilot))
+    }
+}
+
+#Preview("Codex on Copilot") {
+    PreviewFrame {
+        CodexPopoverFixture(directory: RouterAccountFixture.directory(route: .subscription, codexRoute: .copilot))
+    }
 }
 
 #Preview("Usage rings") {
-    UsageRingsFixture(directory: RouterAccountFixture.directory(route: .copilot))
+    PreviewFrame {
+        UsageRingsFixture(directory: RouterAccountFixture.directory(route: .copilot))
+    }
 }
 #endif

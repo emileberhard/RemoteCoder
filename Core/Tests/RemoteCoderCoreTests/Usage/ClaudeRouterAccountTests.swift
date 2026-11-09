@@ -88,7 +88,7 @@ struct ClaudeRouterAccountTests {
         let row = try #require(copilot.usageRows(now: Date(timeIntervalSince1970: 1796000000)).first)
         #expect(row.kind == .monthly)
         #expect(row.remainingPercent == 0)
-        #expect(row.valueText?.contains("150") == true)
+        #expect(row.valueText == "\(0.0.formatted(.currency(code: "USD").precision(.fractionLength(0)))) left")
         #expect(row.resetText != nil)
         #expect(copilot.availabilityText.hasPrefix("Exhausted until"))
         let unknown = CopilotRouterAccount(label: "octo", plan: "business", availability: .unavailable, availableAt: nil,

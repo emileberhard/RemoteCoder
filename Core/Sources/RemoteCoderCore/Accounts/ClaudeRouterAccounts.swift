@@ -81,7 +81,7 @@ struct CopilotRouterAccount: Codable, Equatable, Sendable {
         return [CodexUsageLimitRow(id: "copilot-monthly", title: UsageWindowKind.monthly.label,
             usedPercent: 100 - window.remainingPercent, kind: .monthly,
             resetText: window.resetText(now: now, calendar: .autoupdatingCurrent),
-            valueText: "\(remaining.formatted(Self.dollars)) of \(budget.limitUsd.formatted(Self.dollars)) left")]
+            valueText: "\(remaining.formatted(Self.dollars)) left")]
     }
 
     var menuTitle: String {
@@ -89,7 +89,7 @@ struct CopilotRouterAccount: Codable, Equatable, Sendable {
         return "Copilot · \(remaining.formatted(Self.dollars)) left"
     }
 
-    private static let dollars = FloatingPointFormatStyle<Double>.Currency(code: "USD").precision(.fractionLength(0...2))
+    private static let dollars = FloatingPointFormatStyle<Double>.Currency(code: "USD").precision(.fractionLength(0))
 
     var availabilityText: String {
         if availability == .exhausted, let availableAt {
