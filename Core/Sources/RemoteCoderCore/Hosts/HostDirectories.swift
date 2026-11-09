@@ -216,6 +216,11 @@ final class HostDirectories {
         homeResolutionTask = nil
     }
 
+    func resolveInformation() async -> GatewayClient.HostInfoResponse? {
+        guard (try? await resolveHomePath()) != nil else { return nil }
+        return information
+    }
+
     func resolveHomePath() async throws -> String {
         while true {
             guard !isRetired else { throw HostDirectoriesError.retired }

@@ -1106,6 +1106,13 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         }
     }
 
+    func queueSupport(threadID: String) async -> Bool? {
+        switch AgentProvider.provider(forThreadID: threadID) {
+        case .codex: true
+        case .claude: await directories.resolveInformation().map { $0.claudeQueue == true }
+        }
+    }
+
     func refreshAgents(threadID: String) async {
         let agents = agentsModel(threadID: threadID)
         recentConversations.recordWarmed(agents)

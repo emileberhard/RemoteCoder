@@ -14,7 +14,7 @@ protocol TurnDispatchHost: AnyObject {
     func threadStarted(_ thread: CodexAppServerV2.Thread, session: ConversationSession, settingsRevision: UInt64,
                        requestedServiceTier: CodexAppServerV2.ServiceTierOverride?, admittedSettings: TurnDispatcher.Settings?) async
     func selectionIsCurrent(revision: UInt64, threadID: String) -> Bool
-    func supportsQueue(threadID: String) -> Bool
+    func queueSupport(threadID: String) async -> Bool?
 }
 
 @MainActor
@@ -208,7 +208,7 @@ final class TurnDispatcher {
                 startTurn(Submission(draft: followUp.draft, conversationID: followUp.conversationID,
                     userMessageID: steers.message.id, input: steers.input, interactionMode: .text,
                     settings: followUp.settings), sessionID: key.threadID)
-            } else if host?.supportsQueue(threadID: key.threadID) == true {
+            } else if await host?.queueSupport(threadID: key.threadID) == true {
                 guard !isClosed, !Task.isCancelled, stoppedTurns[key]?.id == stopped.id else { return }
                 startQueued(.first, conversationID: followUp.conversationID, threadID: key.threadID, settings: followUp.settings)
             }
@@ -291,12 +291,17 @@ final class TurnDispatcher {
     }
 
     func reconcileQueue(threadID: String) {
-        guard host?.supportsQueue(threadID: threadID) == true, !isClosed else { return }
+        guard !isClosed else { return }
         queueReads.start(threadID) { [self] in
             guard await conversations.openThreadIDs().contains(threadID) else { return }
             let session = await conversations.session(threadID: threadID)
-            guard await session.hasQueueReceipts() else { return }
+            guard await session.hasQueueReceipts(),
+                  let supported = await host?.queueSupport(threadID: threadID), !isClosed else { return }
             let read = await session.beginQueueRead()
+            guard supported else {
+                await session.applyQueue(CodexAppServerV2.QueueListing(entries: [], hold: nil), read: read, threadIsIdle: true)
+                return
+            }
             do {
                 let listing = try await gateway.queuedMessages(threadID: threadID)
                 let activity = try await gateway.readActiveTurns()

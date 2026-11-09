@@ -216,7 +216,7 @@ struct StopContinuationTests {
 
     @Test func claudeContinuesTheGatewayQueueWhenTheGatewayAdvertisesIt() async throws {
         let fixture = try await StopFixture.open(threadID: "claude_queued")
-        fixture.claudeQueueSupported = true
+        fixture.claudeQueue = true
         await fixture.socket.setQueue([CodexAppServerV2.QueuedSubmission(id: "claude-first", clientUserMessageId: "other-client")])
         fixture.stop()
         let stop = try await fixture.socket.request("turn/interrupt")
@@ -228,6 +228,22 @@ struct StopContinuationTests {
         let resume = try await fixture.socket.request("thread/resume")
         #expect(resume.params?.objectValue?["threadId"]?.stringValue == "claude_queued")
         await fixture.waitForSuccessor()
+        await fixture.close()
+    }
+
+    @Test(arguments: [Bool?.none, false])
+    func claudeQueueRowsAreUnconfirmedOnlyWhenTheHostIsKnownNotToQueue(claudeQueue: Bool?) async throws {
+        let fixture = try await StopFixture.open(threadID: "claude_rolled_back")
+        fixture.claudeQueue = claudeQueue
+        let local = ChatMessage(role: .user, text: "Later")
+        _ = try await fixture.session.submitToQueue(local, input: local.text)
+        await fixture.session.queued(local.id, submission: .init(id: local.id.uuidString, clientUserMessageId: local.id.uuidString))
+        fixture.dispatcher.reconcileQueue(threadID: "claude_rolled_back")
+        await fixture.dispatcher.drain()
+        let row = await fixture.session.snapshot().messages.last
+        #expect(row?.id == local.id)
+        #expect(row?.delivery == (claudeQueue == nil ? .queued : .unconfirmed))
+        #expect(await fixture.socket.count("thread/queue/list") == 0)
         await fixture.close()
     }
 
@@ -353,7 +369,7 @@ private final class StopFixture: TurnDispatchHost {
     let settings = TurnDispatcher.Settings(model: .unlisted(id: "gpt-6.1-sol", modelProvider: nil, reportedEffort: .medium, reportedFastMode: false),
         reasoning: .automatic, serviceTier: nil, fastModeState: .selection(false), workingDirectory: "/tmp", selectionRevision: 0)
     var selectionCurrent = false
-    var claudeQueueSupported = false
+    var claudeQueue: Bool? = false
     var admittedSettings: TurnDispatcher.Settings?
     var isRetired = false
     var refreshed = false
@@ -450,8 +466,8 @@ private final class StopFixture: TurnDispatchHost {
     func threadStarted(_ thread: CodexAppServerV2.Thread, session: ConversationSession, settingsRevision: UInt64,
                        requestedServiceTier: CodexAppServerV2.ServiceTierOverride?, admittedSettings: TurnDispatcher.Settings?) async { self.admittedSettings = admittedSettings }
     func selectionIsCurrent(revision: UInt64, threadID: String) -> Bool { selectionCurrent }
-    func supportsQueue(threadID: String) -> Bool {
-        AgentProvider.provider(forThreadID: threadID) == .codex || claudeQueueSupported
+    func queueSupport(threadID: String) async -> Bool? {
+        AgentProvider.provider(forThreadID: threadID) == .codex ? true : claudeQueue
     }
 }
 
