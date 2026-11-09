@@ -40,7 +40,7 @@ export type ConversationSidebarRow = Readonly<{
   address: Address;
   hostName: string;
   showsHostLabel: boolean;
-  title: string | undefined;
+  title: string;
   preview: string;
   timestamp: number | null;
   workingDirectory: string;
@@ -108,8 +108,8 @@ type RankInput = Pick<
 >;
 export type ConversationRowMarkState = Pick<
   ConversationSidebarRow,
-  "isPinned" | "isUnread" | "settlement" | "canSettle" | "canRename" | "canRegenerateName"
-> & { title: string };
+  "title" | "isPinned" | "isUnread" | "settlement" | "canSettle" | "canRename" | "canRegenerateName"
+>;
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const marked = (thread: ConversationHeader) => ({
   id: thread.id,
@@ -170,7 +170,7 @@ function rowMarkState(
     canSettle: settlement === "unsettled" && activity !== "working",
   };
 }
-export function conversationTitle(thread: ConversationHeader, pinName: string | undefined) {
+function conversationTitle(thread: ConversationHeader, pinName: string | undefined) {
   return pinName ?? (thread.name?.trim() ? thread.name : thread.preview.trim() || "(untitled)");
 }
 export function conversationRowMarkState(
@@ -251,9 +251,9 @@ function project(thread: ConversationHeader, host: ConversationSidebarHostInput)
     hostName: host.hostName,
   };
 }
-function matches(title: string | undefined, directory: string, hostName: string, terms: readonly string[]) {
+function matches(title: string, directory: string, hostName: string, terms: readonly string[]) {
   return terms.every((term) =>
-    [title, directory, hostName].some((text) => text !== undefined && foldSearchText(text).includes(term)),
+    [title, directory, hostName].some((text) => foldSearchText(text).includes(term)),
   );
 }
 export function projectConversationSidebar(
@@ -268,13 +268,12 @@ export function projectConversationSidebar(
   const searching = terms.length > 0;
   const showsHostLabel = new Set(hosts.map((host) => host.target.hostId)).size > 1;
   const slots: {
-    row: ConversationSidebarRow & { title: string };
+    row: ConversationSidebarRow;
     rank: Rank;
     pin: boolean;
     project: ReturnType<typeof project>;
   }[] = [];
   const ids = new Set<string>();
-  const unloadedPins: ConversationSidebarRow[] = [];
   for (const host of hosts)
     for (const thread of host.threads) {
       if (isDelegatedAgent(thread)) continue;
@@ -299,7 +298,7 @@ export function projectConversationSidebar(
       const asks = host.questionAskTimes.get(thread.id);
       const activity = host.activity.get(thread.id) ?? "unknown";
       const markState = rowMarkState(marks, pin, settled, live.isUnread, activity);
-      const row: ConversationSidebarRow & { title: string } = {
+      const row: ConversationSidebarRow = {
         id,
         address,
         hostName: host.hostName,
@@ -330,50 +329,6 @@ export function projectConversationSidebar(
       if (!matches(row.title, row.workingDirectory, showsHostLabel ? row.hostName : "", terms)) continue;
       slots.push({ row, rank: held, pin, project: project(thread, host) });
     }
-  for (const host of hosts) {
-    const marks = host.marks;
-    if (!marks || marks.schemaVersion < 5) continue;
-    const loadedIds = new Set(host.threads.map((thread) => thread.id));
-    const pinIds = Object.keys(marks.threads)
-      .filter((id) => isPinned(marks, id))
-      .sort()
-      .slice(0, 500);
-    for (const threadId of pinIds) {
-      const threadMarks = marks.threads[threadId];
-      if (!threadMarks || loadedIds.has(threadId)) continue;
-      const address = conversationAddress(host.target, threadId);
-      const id = addressKey(address);
-      if (ids.has(id)) continue;
-      const isSelected = selected !== undefined && addressKey(selected) === id;
-      if (threadMarks.purpose === "probe" && !isSelected) continue;
-      if (arrangement.unreadOnly && !isSelected && !threadMarks.markedUnread) continue;
-      if (!matches(undefined, "", showsHostLabel ? host.hostName : "", terms)) continue;
-      ids.add(id);
-      unloadedPins.push({
-        id,
-        address,
-        hostName: host.hostName,
-        showsHostLabel,
-        title: undefined,
-        preview: "",
-        timestamp: null,
-        workingDirectory: "",
-        isPinned: true,
-        isAutomation: threadMarks.purpose === "automation",
-        isUnread: threadMarks.markedUnread ? true : null,
-        isSelected,
-        isLoading: host.loadingThreadId === threadId,
-        activity: "unknown",
-        questionCount: null,
-        settlement: "unknown",
-        isProbablyDone: null,
-        needsInput: false,
-        canSettle: false,
-        canRename: false,
-        canRegenerateName: false,
-      });
-    }
-  }
   slots.sort((a, b) => {
     if (a.pin && b.pin) return collator.compare(a.row.title, b.row.title) || a.row.id.localeCompare(b.row.id);
     if (a.pin || b.pin) return a.pin ? -1 : 1;
@@ -420,10 +375,7 @@ export function projectConversationSidebar(
     "pinned",
     "pinned",
     "Pinned",
-    [
-      ...slots.filter((slot) => slot.pin).map((slot) => slot.row),
-      ...unloadedPins.sort((a, b) => a.id.localeCompare(b.id)),
-    ],
+    slots.filter((slot) => slot.pin).map((slot) => slot.row),
     arrangement.isPinnedFolded,
   );
   add(

@@ -39,7 +39,7 @@ export function ConversationRowMenu({
       <MenuItem icon={<MessageSquareText size={16} />} onSelect={open}>
         Open conversation
       </MenuItem>
-      {row.canRename && title !== undefined && (
+      {row.canRename && (
         <MenuItem icon={<Pencil size={16} />} onSelect={() => renameChat({ address, name: title })}>
           Rename
         </MenuItem>
@@ -54,8 +54,8 @@ export function ConversationRowMenu({
       ) : (
         <MenuItem
           icon={<Pin size={16} />}
-          disabled={row.isPinned === null || title === undefined}
-          onSelect={() => title !== undefined && run(() => workspace.pinConversation(address, title))}
+          disabled={row.isPinned === null}
+          onSelect={() => run(() => workspace.pinConversation(address, title))}
         >
           Pin
         </MenuItem>

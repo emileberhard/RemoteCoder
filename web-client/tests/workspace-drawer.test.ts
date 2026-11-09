@@ -540,7 +540,7 @@ test("legacy rename changes only a pinned name and refuses unpinned rename", asy
   expect(harness.calls.some((call) => call.method === "thread/name/set")).toBe(false);
 });
 
-test("rollback repairs persisted nameless pins before delivering subsequent marks", async () => {
+test("rollback drops persisted nameless pins before delivering subsequent marks", async () => {
   const disk = new MemoryStorage();
   const key = `remotecoder.web.marks.v1:${targetKey({ hostId: "mini" })}`;
   disk.setItem(
@@ -581,21 +581,12 @@ test("rollback repairs persisted nameless pins before delivering subsequent mark
   const params = await dispatched.promise;
   expect(params).toEqual({
     changes: [
-      { op: "pin", threadId: "shared", name: "Conversation" },
-      { op: "pin", threadId: "preview", name: "å".repeat(128) },
-      { op: "pin", threadId: "shared", name: "Earlier named pin" },
       { op: "pin", threadId: "shared", name: "Earlier named pin" },
       { op: "markUnread", threadId: "shared" },
     ],
   });
   const saved = JSON.parse(disk.getItem(key) ?? "{}");
-  expect(saved.pending.map((entry: { id: string }) => entry.id)).toEqual([
-    "known",
-    "preview",
-    "old",
-    "again",
-    "unread",
-  ]);
+  expect(saved.pending.map((entry: { id: string }) => entry.id)).toEqual(["old", "unread"]);
   expect(saved.pending.map((entry: { change: unknown }) => entry.change)).toEqual(
     (params as { changes: unknown }).changes,
   );

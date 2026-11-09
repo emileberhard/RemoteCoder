@@ -229,7 +229,7 @@ test("schema 5 pinned flags recover headers outside loaded history", async () =>
   expect(row).toMatchObject({ title: "Recovered title", isPinned: true });
 });
 
-test("an unloaded schema 5 pin can be opened while header recovery is pending", async () => {
+test("an unloaded schema 5 pin appears only after header recovery", async () => {
   const { workspace, harness } = await setup();
   const headerRead = deferred<unknown>();
   harness.handler = (method) => {
@@ -243,20 +243,25 @@ test("an unloaded schema 5 pin can be opened while header recovery is pending", 
       };
     return undefined;
   };
-  harness.emit("conversation/marks/changed", {
+  harness.marks = {
     schemaVersion: 5,
     revision: 1,
     readBaseline: 0,
-    threads: { older: { revision: 1, pinned: true } },
-  });
+    threads: { older: { revision: 1, markedUnread: false, pinned: true } },
+  };
+  harness.emit("conversation/marks/changed", harness.marks);
   const row = workspace.conversationDrawer.sections
     .flatMap((section) => section.rows)
     .find((candidate) => candidate.address.threadId === "older");
-  expect(row).toMatchObject({ title: undefined, isPinned: true });
-  if (!row) throw new Error("Missing pinned row");
-  const opening = workspace.selectConversation(row.address);
+  expect(row).toBeUndefined();
   headerRead.resolve({ thread: { ...header("older"), name: "Recovered title" } });
-  await opening;
+  await workspace.refreshHost("mini");
+  const recovered = workspace.conversationDrawer.sections
+    .flatMap((section) => section.rows)
+    .find((candidate) => candidate.address.threadId === "older");
+  expect(recovered).toMatchObject({ title: "Recovered title", isPinned: true });
+  if (!recovered) throw new Error("Missing recovered pin");
+  await workspace.selectConversation(recovered.address);
   expect(workspace.selectedConversation?.header.id).toBe("older");
   expect(
     workspace.conversationDrawer.sections

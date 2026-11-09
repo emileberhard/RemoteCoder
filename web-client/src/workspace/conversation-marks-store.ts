@@ -8,7 +8,6 @@ import {
   decodeConversationMarks,
   decodeMarkChange,
   mergeMarks,
-  normalizedPinName,
   type ThreadMarks,
 } from "./conversation-marks";
 
@@ -51,7 +50,6 @@ export class ConversationMarksStore {
     private readonly rpc: Rpc,
     private readonly storage: Storage | undefined,
     private readonly publish: () => void,
-    private readonly titleForThread: (threadId: string) => string | undefined,
   ) {
     this.target = executionTarget(target.hostId, target.enrollment);
     this.key = `remotecoder.web.marks.v1:${targetKey(this.target)}`;
@@ -233,28 +231,12 @@ export class ConversationMarksStore {
             const acknowledged = this.receivedDuringRead
               ? mergeMarks(snapshot, this.receivedDuringRead)
               : snapshot;
-            let pending = this.replica.pending;
-            if (snapshot.schemaVersion < 5) {
-              const names = new Map<string, string | undefined>();
-              pending = [];
-              for (const entry of this.replica.pending) {
-                let change = entry.change;
-                if (change.op === "pin") {
-                  if (change.name === undefined) {
-                    const current = names.has(change.threadId)
-                      ? names.get(change.threadId)
-                      : acknowledged.threads[change.threadId]?.pinName;
-                    const name = normalizedPinName(current ?? this.titleForThread(change.threadId) ?? "");
-                    if (!name) continue;
-                    change = { ...change, name };
-                  }
-                  names.set(change.threadId, change.name);
-                } else if (change.op === "unpin" || change.op === "settle") {
-                  names.set(change.threadId, undefined);
-                }
-                pending.push({ ...entry, change });
-              }
-            }
+            const pending =
+              snapshot.schemaVersion < 5
+                ? this.replica.pending.filter(
+                    ({ change }) => change.op !== "pin" || change.name !== undefined,
+                  )
+                : this.replica.pending;
             this.commit({ acknowledged, pending });
           } finally {
             this.reading = false;
