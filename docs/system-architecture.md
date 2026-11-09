@@ -2767,9 +2767,10 @@ The gateway owns one turn-review runtime in `gateway/conversation_review.rs`:
 trigger, host slot, dialogue snapshot, Jev client and trace.
 Plain title and done consumers select their questions independently. A completed
 user turn with a readable goal may need a title; any completed turn, including
-an agent-initiated turn, may be probably done. Pins, purposes and delegated
-agents are excluded; threads must be idle and non-ephemeral. No applicable
-question means no request.
+an agent-initiated turn, may be probably done. Purposes and delegated agents are
+excluded from both; user-chosen names are excluded from automatic titles, and
+pins from done suggestions. Threads must be idle and non-ephemeral. No
+applicable question means no request.
 
 The chronological dialogue reduces tools to short labels, preserves its bookends
 and marks omitted middle context. One Jev request carries whichever questions
@@ -2795,9 +2796,10 @@ The same runtime gives a new conversation an early title. Fifteen seconds after
 its first `turn/started`, `conversation_review/early_title.rs` asks the writer
 for a title mid-turn without a judge; a Claude side question answers while the
 turn runs. The drawer row's context menu offers Regenerate Name, which calls
-`conversation/title/regenerate` for an unpinned row. All three paths commit
-through `Gateway::commit_title` and the per-thread rename owner, so a manual
-rename wins and every write is traced.
+`conversation/title/regenerate`. Manual Rename protects the chosen name from
+automatic titles until Regenerate Name clears that protection. Pinning does not
+change a name. All three paths commit through `Gateway::commit_title` and the
+per-thread rename owner, so a manual rename wins and every write is traced.
 
 ### Conversation drawer order
 
@@ -2805,7 +2807,7 @@ The drawer has two views, chosen in its View Options popover and kept in
 `ConversationDrawerPreferences` with the Unread Only filter and the folded
 sections:
 
-- **Priority** (the default): pinned rows under a Pinned header, by pinned name,
+- **Priority** (the default): pinned rows under a Pinned header, by conversation title,
   then, under a Chats header, every other unsettled row ranked by
   `ConversationDrawerRank`, then the Settled shelf.
   The Chats header appears only below pinned or automation rows. Its tiers are, in
@@ -2988,15 +2990,20 @@ marks or settles many at once, and Mark All as Read moves the read baseline
 to the time it was chosen, even when the change reaches the gateway later.
 
 Pins, read state, purposes, settlement, done suggestions and changes views are conversation marks, owned by
-each gateway in `conversation-marks.v4.json` beside its turn state and shared by
+each gateway in `conversation-marks.v5.json` beside its turn state and shared by
 every device. `conversation/marks/read` returns the whole document;
 `conversation/marks/update` applies up to 500 changes and returns a revisioned
 delta, which the gateway also broadcasts as `conversation/marks/changed`. Both
 carry `schemaVersion`; a missing value means 1. The
 document's read baseline is set when it is first created, so existing history
-starts read. Schema 4 imports v3, else v2, on first load, or v1 through the
-settlement conversion when neither exists, leaving every older file untouched
-for rollback. The app offers changes views only from schema 4 and drops
+starts read. Schema 5 imports v4, v3 or v2 on first load, or v1 through the
+settlement conversion, leaving every older file untouched for rollback. A legacy
+pin name becomes a pin and a pending rename; the control-owned drain skips names
+already shown by the thread and retains failures for retry. Manual rename,
+regeneration and forgetting a thread cancel its pending carry-over. A schema 5
+pin is a flag; the provider thread's name, then preview, supplies its title.
+Clients retain the old named-pin behavior against gateways below schema 5.
+The app offers changes views only from schema 4 and drops
 pending view changes when a gateway reports an older schema. `doneThrough` is gateway-written and is not an update operation.
 Each host's `ConversationList` keeps a
 `ConversationMarksReplica` in `conversation-marks.v2.json` in its storage
