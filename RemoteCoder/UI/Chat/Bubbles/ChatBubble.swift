@@ -282,12 +282,14 @@ final class ChatBubbleMenuOwner {
 
 struct ChatBubbleContextMenu: ViewModifier {
     let owner: ChatBubbleMenuOwner
+    @Environment(AppThemeStore.self) private var themeStore
 
     func body(content: Content) -> some View {
         content.contextMenu {
             ChatBubbleOwnedMenu(owner: owner)
         } preview: {
             ChatBubbleOwnedPreview(owner: owner)
+                .environment(themeStore)
                 .environment(\.transcriptRowPresentation, nil)
                 .environment(\.chatBubbleMenuOwner, nil)
         }
