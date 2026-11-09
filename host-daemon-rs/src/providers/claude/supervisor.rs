@@ -46,7 +46,7 @@ mod turns;
 
 pub(crate) use jobs::ClaudeJobInspection;
 pub(crate) use messages::ParentMessage;
-pub(crate) use queue::{QueueAddError, QueuedOutcome, QueuedStart};
+pub(crate) use queue::{QueueAddError, QueuedOutcome};
 pub(crate) use restart_capture::ResumeDelivery;
 
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(5);
@@ -500,7 +500,7 @@ pub(crate) struct ClaudeSupervisor {
     turn_settled: tokio::sync::Notify,
     conversation_index: crate::providers::claude::conversation_index::Store,
     queued_messages: Arc<crate::providers::claude::queued_messages::QueuedMessages>,
-    queue_drains: queue::DrainRequests,
+    queue_drains: queue::QueueDrains,
     queued_writes: queue::QueuedWrites,
     job_changes: tokio::sync::watch::Sender<()>,
 }
@@ -526,7 +526,7 @@ impl ClaudeSupervisor {
                     settings.claude_home.clone(),
                 ),
             ),
-            queue_drains: queue::DrainRequests::default(),
+            queue_drains: queue::QueueDrains::default(),
             queued_writes: queue::QueuedWrites::default(),
             settings,
             notifications,

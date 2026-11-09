@@ -12,31 +12,70 @@ use crate::providers::claude::queued_messages::{
 use crate::providers::claude::{ClaudeTurnRequest, ClaudeUserInput, session_uuid_from_thread_id};
 use crate::rpc::error::RpcCode;
 
+const MAX_START_FAILURES: u8 = 3;
+
+enum Drain {
+    Requested,
+    Running { again: bool },
+}
+
 #[derive(Default)]
-pub(crate) struct DrainRequests {
-    threads: std::sync::Mutex<HashSet<String>>,
+pub(crate) struct QueueDrains {
+    threads: std::sync::Mutex<HashMap<String, Drain>>,
+    deferrals: std::sync::Mutex<HashMap<String, String>>,
     ready: tokio::sync::Notify,
 }
 
-impl DrainRequests {
+impl QueueDrains {
+    fn threads(&self) -> std::sync::MutexGuard<'_, HashMap<String, Drain>> {
+        self.threads.lock().expect("queue drains poisoned")
+    }
+
+    fn deferrals(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
+        self.deferrals.lock().expect("queue deferrals poisoned")
+    }
+
     fn request(&self, thread_id: &str) {
-        self.threads
-            .lock()
-            .expect("queue drain requests poisoned")
-            .insert(thread_id.to_owned());
-        self.ready.notify_one();
+        let mut threads = self.threads();
+        match threads.get_mut(thread_id) {
+            Some(Drain::Running { again }) => *again = true,
+            Some(Drain::Requested) => {}
+            None => {
+                threads.insert(thread_id.to_owned(), Drain::Requested);
+                self.ready.notify_one();
+            }
+        }
     }
 
     async fn next(&self) -> Vec<String> {
         loop {
             let ready = self.ready.notified();
-            let threads =
-                std::mem::take(&mut *self.threads.lock().expect("queue drain requests poisoned"));
-            if !threads.is_empty() {
-                return threads.into_iter().collect();
+            let started = self
+                .threads()
+                .iter_mut()
+                .filter(|(_, drain)| matches!(drain, Drain::Requested))
+                .map(|(thread, drain)| {
+                    *drain = Drain::Running { again: false };
+                    thread.clone()
+                })
+                .collect::<Vec<_>>();
+            if !started.is_empty() {
+                return started;
             }
             ready.await;
         }
+    }
+
+    fn finish(&self, thread_id: &str) -> bool {
+        let mut threads = self.threads();
+        if let Some(Drain::Running { again }) = threads.get_mut(thread_id)
+            && *again
+        {
+            *again = false;
+            return true;
+        }
+        threads.remove(thread_id);
+        false
     }
 }
 
@@ -49,16 +88,22 @@ impl QueuedWrites {
     }
 }
 
-pub(crate) enum QueuedStart {
-    Next(String),
-    Now(Option<String>),
-}
-
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum QueuedOutcome {
     Started(String),
     Waiting,
     Changed,
+    Failed {
+        error: TurnStartError,
+        held: Option<String>,
+    },
+}
+
+enum EntryStart {
+    Started(String),
+    Vanished,
+    Refused(TurnStartError),
+    Undecided(TurnStartError),
 }
 
 #[derive(Debug)]
@@ -88,18 +133,37 @@ impl TurnStartError {
 }
 
 impl ClaudeSupervisor {
-    pub(crate) fn queued_threads(&self) -> Vec<String> {
-        self.queued_messages.threads()
-    }
-
     pub(crate) async fn queue_drain_requests(&self) -> Vec<String> {
         self.queue_drains.next().await
+    }
+
+    pub(crate) fn finish_queue_drain(&self, thread_id: &str) -> bool {
+        self.queue_drains.finish(thread_id)
     }
 
     pub(crate) fn request_queue_drain(&self, thread_id: &str) {
         if self.queued_messages.has(thread_id) {
             self.queue_drains.request(thread_id);
         }
+    }
+
+    pub(crate) fn sweep_queue_drains(&self) {
+        let threads = self.queued_messages.threads();
+        self.queue_drains
+            .deferrals()
+            .retain(|thread, _| threads.contains(thread));
+        for thread in &threads {
+            self.queue_drains.request(thread);
+        }
+    }
+
+    pub(crate) fn defer_queue(&self, thread_id: &str, reason: &str) -> bool {
+        let mut deferrals = self.queue_drains.deferrals();
+        if deferrals.get(thread_id).is_some_and(|last| last == reason) {
+            return false;
+        }
+        deferrals.insert(thread_id.to_owned(), reason.to_owned());
+        true
     }
 
     pub(crate) async fn queued_messages(&self, thread_id: &str) -> Result<Queue> {
@@ -166,6 +230,7 @@ impl ClaudeSupervisor {
             id: id.to_owned(),
             input,
             delivery: Delivery::Queued,
+            failures: 0,
         };
         let added = self
             .update_queue(thread_id, move |queue| {
@@ -194,18 +259,6 @@ impl ClaudeSupervisor {
                 queue.hold = None;
             }
             Ok(queue.entries.len() < before)
-        })
-        .await
-    }
-
-    pub(crate) async fn hold_queue(&self, thread_id: &str, message: &str) -> Result<bool> {
-        let hold = QueueHold::new(message);
-        self.update_queue(thread_id, move |queue| {
-            if queue.entries.is_empty() || queue.hold.is_some() {
-                return Ok(false);
-            }
-            queue.hold = Some(hold);
-            Ok(true)
         })
         .await
     }
@@ -285,18 +338,74 @@ impl ClaudeSupervisor {
                 })
     }
 
-    pub(crate) async fn start_queued(
+    pub(crate) async fn start_next_queued(
         self: &Arc<Self>,
         thread_id: &str,
-        start: QueuedStart,
-    ) -> Result<QueuedOutcome, TurnStartError> {
+        expected: &str,
+    ) -> QueuedOutcome {
+        if self.refuse_while_closing().is_err() {
+            return QueuedOutcome::Waiting;
+        }
+        let _lifecycle = self.lifecycles.lock(thread_id).await;
+        if !self.is_idle_for_queue(thread_id).await {
+            return QueuedOutcome::Waiting;
+        }
+        let queue = match self.settle_starts(thread_id).await {
+            Ok(queue) => queue,
+            Err(error) => {
+                return QueuedOutcome::Failed {
+                    error: queue_unreadable(&error),
+                    held: None,
+                };
+            }
+        };
+        let Some(head) = queue.entries.first().filter(|head| head.id == expected) else {
+            return QueuedOutcome::Changed;
+        };
+        let stopped = match self.conversation_index.parent(thread_id).await {
+            Ok(parent) => parent.stopped,
+            Err(error) => {
+                return QueuedOutcome::Failed {
+                    error: queue_unreadable(&error),
+                    held: None,
+                };
+            }
+        };
+        if queue.hold.is_some()
+            || stopped
+            || queue
+                .entries
+                .iter()
+                .any(|entry| entry.delivery != Delivery::Queued)
+        {
+            return QueuedOutcome::Waiting;
+        }
+        match self.start_entry(thread_id, head).await {
+            EntryStart::Started(turn_id) => {
+                self.queue_drains.deferrals().remove(thread_id);
+                QueuedOutcome::Started(turn_id)
+            }
+            EntryStart::Vanished => QueuedOutcome::Changed,
+            EntryStart::Refused(error) if error.code == RpcCode::ServerBusy => {
+                QueuedOutcome::Waiting
+            }
+            EntryStart::Refused(error) => {
+                let held = self.refuse_head(thread_id, &head.id, &error).await;
+                QueuedOutcome::Failed { error, held }
+            }
+            EntryStart::Undecided(error) => QueuedOutcome::Failed { error, held: None },
+        }
+    }
+
+    pub(crate) async fn start_queued_now(
+        self: &Arc<Self>,
+        thread_id: &str,
+        id: &str,
+    ) -> Result<String, TurnStartError> {
         self.refuse_while_closing()?;
         let _lifecycle = self.lifecycles.lock(thread_id).await;
         if !self.is_idle_for_queue(thread_id).await {
-            return match start {
-                QueuedStart::Next(_) => Ok(QueuedOutcome::Waiting),
-                QueuedStart::Now(_) => Err(TurnStartError::not_idle()),
-            };
+            return Err(TurnStartError::not_idle());
         }
         let queue = self
             .settle_starts(thread_id)
@@ -307,44 +416,31 @@ impl ClaudeSupervisor {
             .iter()
             .any(|entry| entry.delivery != Delivery::Queued)
         {
-            return match start {
-                QueuedStart::Next(_) => Ok(QueuedOutcome::Waiting),
-                QueuedStart::Now(_) => Err(TurnStartError::not_idle()),
-            };
+            return Err(TurnStartError::not_idle());
         }
-        let entry = match &start {
-            QueuedStart::Next(expected) => {
-                let Some(head) = queue.entries.first() else {
-                    return Ok(QueuedOutcome::Changed);
-                };
-                if &head.id != expected {
-                    return Ok(QueuedOutcome::Changed);
-                }
-                let stopped = self
-                    .conversation_index
-                    .parent(thread_id)
-                    .await
-                    .map_err(|error| queue_unreadable(&error))?
-                    .stopped;
-                if queue.hold.is_some() || stopped {
-                    return Ok(QueuedOutcome::Waiting);
-                }
-                head.clone()
-            }
-            QueuedStart::Now(id) => match id {
-                Some(id) => queue.entry(id).cloned(),
-                None => queue.entries.first().cloned(),
-            }
-            .ok_or_else(|| TurnStartError {
-                data: None,
-                code: RpcCode::InvalidRequest,
-                message: format!(
-                    "queued submission not found: {}",
-                    id.as_deref().unwrap_or("(empty queue)")
-                ),
-            })?,
+        let not_found = || TurnStartError {
+            data: None,
+            code: RpcCode::InvalidRequest,
+            message: format!("queued submission not found: {id}"),
         };
-        let request = self.queued_request(thread_id, &entry).await?;
+        let entry = queue.entry(id).ok_or_else(not_found)?;
+        match self.start_entry(thread_id, entry).await {
+            EntryStart::Started(turn_id) => Ok(turn_id),
+            EntryStart::Vanished => Err(not_found()),
+            EntryStart::Refused(error) | EntryStart::Undecided(error) => Err(error),
+        }
+    }
+
+    async fn start_entry(self: &Arc<Self>, thread_id: &str, entry: &QueuedMessage) -> EntryStart {
+        let prepared = async {
+            let request = self.queued_request(thread_id, entry).await?;
+            let policy = self.conversation_launch_policy(thread_id).await?;
+            Ok::<_, TurnStartError>((request, policy))
+        };
+        let (request, policy) = match prepared.await {
+            Ok(prepared) => prepared,
+            Err(error) => return EntryStart::Refused(error),
+        };
         let id = entry.id.clone();
         let claimed = self
             .update_queue(thread_id, move |queue| {
@@ -354,41 +450,93 @@ impl ClaudeSupervisor {
                 entry.delivery = Delivery::Starting;
                 Ok(true)
             })
-            .await
-            .map_err(|error| queue_unreadable(&error))?;
-        if !claimed {
-            return Ok(QueuedOutcome::Changed);
-        }
-        let policy = self.conversation_launch_policy(thread_id).await?;
-        let started = self
-            .start_turn_with_policy(request, TurnOrigin::Queued, policy)
             .await;
-        let transferred = started.is_ok() || self.runtime_holds_input(thread_id, &entry.id).await;
-        if transferred {
-            self.queued_writes.guard().remove(thread_id);
+        match claimed {
+            Ok(true) => {}
+            Ok(false) => return EntryStart::Vanished,
+            Err(error) => return EntryStart::Refused(queue_unreadable(&error)),
         }
-        let id = entry.id.clone();
-        let settled = self
+        let error = match self
+            .start_turn_with_policy(request, TurnOrigin::Queued, policy)
+            .await
+        {
+            Ok(turn_id) => {
+                self.remove_started(thread_id, &entry.id).await;
+                return EntryStart::Started(turn_id);
+            }
+            Err(error) => error,
+        };
+        if self.runtime_holds_input(thread_id, &entry.id).await {
+            self.remove_started(thread_id, &entry.id).await;
+            return EntryStart::Undecided(error);
+        }
+        match self.settle_starts(thread_id).await {
+            Ok(queue)
+                if queue
+                    .entry(&entry.id)
+                    .is_some_and(|entry| entry.delivery == Delivery::Queued) =>
+            {
+                EntryStart::Refused(error)
+            }
+            Ok(_) => EntryStart::Undecided(error),
+            Err(settle) => {
+                warn!(%thread_id, queued = %entry.id, error = %format!("{settle:#}"), "a failed Claude queued start was not settled; the next drain settles it");
+                EntryStart::Undecided(error)
+            }
+        }
+    }
+
+    async fn remove_started(&self, thread_id: &str, id: &str) {
+        self.queued_writes.guard().remove(thread_id);
+        let started = id.to_owned();
+        if let Err(error) = self
             .update_queue(thread_id, move |queue| {
-                if transferred {
-                    queue.entries.retain(|entry| entry.id != id);
-                } else if let Some(entry) = queue
-                    .entries
-                    .iter_mut()
-                    .find(|entry| entry.id == id && entry.delivery == Delivery::Starting)
-                {
-                    entry.delivery = Delivery::Queued;
-                }
+                queue.entries.retain(|entry| entry.id != started);
                 if queue.entries.is_empty() {
                     queue.hold = None;
                 }
                 Ok(())
             })
-            .await;
-        if let Err(error) = settled {
-            warn!(%thread_id, queued = %entry.id, error = %format!("{error:#}"), "Claude queued start was not settled in its queue; the next drain reconciles it");
+            .await
+        {
+            warn!(%thread_id, queued = %id, error = %format!("{error:#}"), "a started Claude queued message is still listed; the next drain settles it");
         }
-        started.map(QueuedOutcome::Started)
+    }
+
+    async fn refuse_head(
+        &self,
+        thread_id: &str,
+        id: &str,
+        error: &TurnStartError,
+    ) -> Option<String> {
+        let id = id.to_owned();
+        let persistent = error.holds_queue();
+        let message = error.message.clone();
+        let held = self
+            .update_queue(thread_id, move |queue| {
+                let Some(head) = queue
+                    .entries
+                    .first_mut()
+                    .filter(|head| head.id == id && head.delivery == Delivery::Queued)
+                else {
+                    return Ok(None);
+                };
+                head.failures = head.failures.saturating_add(1);
+                if !persistent && head.failures < MAX_START_FAILURES {
+                    return Ok(None);
+                }
+                head.failures = 0;
+                if queue.hold.is_some() {
+                    return Ok(None);
+                }
+                queue.hold = Some(QueueHold::new(&message));
+                Ok(queue.hold.as_ref().map(|hold| hold.message.clone()))
+            })
+            .await;
+        held.unwrap_or_else(|error| {
+            warn!(%thread_id, error = %format!("{error:#}"), "a Claude queued start failure was not counted");
+            None
+        })
     }
 
     async fn queued_request(

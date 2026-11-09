@@ -26,7 +26,7 @@ pub(crate) use capacity::CapacityExceeded;
 pub(crate) use input::{ClaudeSelection, ClaudeTurnRequest, ClaudeUserInput};
 pub(crate) use supervisor::{
     ClaudeJobInspection, ClaudeNotification, ClaudeSupervisor, ParentMessage, QueueAddError,
-    QueuedOutcome, QueuedStart, ResumeDelivery, SessionRename, TurnControlError, TurnStartError,
+    QueuedOutcome, ResumeDelivery, SessionRename, TurnControlError,
 };
 
 /// Claude thread ids are prefixed so daemon routing is a pure string test.

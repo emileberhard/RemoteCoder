@@ -27,6 +27,12 @@ pub(crate) struct QueuedMessage {
     pub input: Value,
     #[serde(default, skip_serializing_if = "Delivery::is_queued")]
     pub delivery: Delivery,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub failures: u8,
+}
+
+fn is_zero(value: &u8) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -338,6 +344,7 @@ mod tests {
             id: id.to_owned(),
             input: json!([{"type":"text","text":text}]),
             delivery: Delivery::Queued,
+            failures: 0,
         }
     }
 
