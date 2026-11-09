@@ -115,12 +115,19 @@ pub(crate) enum QueueAddError {
 }
 
 impl TurnStartError {
-    pub(crate) fn holds_queue(&self) -> bool {
-        self.code == RpcCode::InvalidParams
-            || matches!(
-                self.data,
-                Some(TurnErrorData::Capacity(_) | TurnErrorData::ProviderUnavailable)
-            )
+    pub(crate) fn queue_hold(&self) -> Option<&'static str> {
+        match (&self.data, self.code) {
+            (Some(TurnErrorData::Capacity(_)), _) => {
+                Some("Claude is at capacity. Retry once another conversation finishes.")
+            }
+            (Some(TurnErrorData::ProviderUnavailable), _) => {
+                Some("Claude is unavailable. Check its sign-in or provider, then retry.")
+            }
+            (_, RpcCode::InvalidParams) => Some(
+                "This conversation's folder or provider can't be used. Restore it or start a new conversation.",
+            ),
+            _ => None,
+        }
     }
 
     fn not_idle() -> Self {
@@ -510,8 +517,7 @@ impl ClaudeSupervisor {
         error: &TurnStartError,
     ) -> Option<String> {
         let id = id.to_owned();
-        let persistent = error.holds_queue();
-        let message = error.message.clone();
+        let persistent = error.queue_hold();
         let held = self
             .update_queue(thread_id, move |queue| {
                 let Some(head) = queue
@@ -522,15 +528,21 @@ impl ClaudeSupervisor {
                     return Ok(None);
                 };
                 head.failures = head.failures.saturating_add(1);
-                if !persistent && head.failures < MAX_START_FAILURES {
-                    return Ok(None);
-                }
+                let message = match persistent {
+                    Some(message) => message.to_owned(),
+                    None if head.failures >= MAX_START_FAILURES => format!(
+                        "It failed to start {MAX_START_FAILURES} times in a row. Retry, or check the gateway log."
+                    ),
+                    None => return Ok(None),
+                };
                 head.failures = 0;
                 if queue.hold.is_some() {
                     return Ok(None);
                 }
-                queue.hold = Some(QueueHold::new(&message));
-                Ok(queue.hold.as_ref().map(|hold| hold.message.clone()))
+                queue.hold = Some(QueueHold {
+                    message: message.clone(),
+                });
+                Ok(Some(message))
             })
             .await;
         held.unwrap_or_else(|error| {
@@ -714,7 +726,7 @@ impl ClaudeSupervisor {
 fn queue_unreadable(error: &anyhow::Error) -> TurnStartError {
     TurnStartError {
         data: None,
-        code: RpcCode::InvalidParams,
+        code: RpcCode::Internal,
         message: format!("the Claude queue could not be read or updated: {error:#}"),
     }
 }

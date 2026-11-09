@@ -18,7 +18,6 @@ pub(crate) const MAX_THREAD_ENTRIES: usize = 100;
 pub(crate) const MAX_THREAD_BYTES: usize = 8 << 20;
 pub(crate) const MAX_TOTAL_BYTES: u64 = 32 << 20;
 pub(crate) const MAX_THREADS: usize = 256;
-const MAX_HOLD_MESSAGE_BYTES: usize = 1_024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -54,15 +53,6 @@ impl Delivery {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct QueueHold {
     pub message: String,
-}
-
-impl QueueHold {
-    pub(crate) fn new(message: &str) -> Self {
-        let end = message.floor_char_boundary(MAX_HOLD_MESSAGE_BYTES);
-        Self {
-            message: message[..end].to_owned(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -452,12 +442,16 @@ mod tests {
         let (_home, store) = store();
         store
             .update("claude_a", |queue| {
-                queue.hold = Some(QueueHold::new(&"x".repeat(4_096)));
+                queue.hold = Some(QueueHold {
+                    message: "Paused".to_owned(),
+                });
                 Ok(())
             })
             .unwrap();
-        let hold = store.load("claude_a").unwrap().hold.unwrap();
-        assert_eq!(hold.message.len(), MAX_HOLD_MESSAGE_BYTES);
+        assert_eq!(
+            store.load("claude_a").unwrap().hold.unwrap().message,
+            "Paused"
+        );
         assert!(store.has("claude_a"));
     }
 

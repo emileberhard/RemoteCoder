@@ -316,11 +316,7 @@ impl Gateway {
             json!({"provider":"claude","threadId":thread,"error":error,"hold":message}),
         );
         if let Err(error) = self
-            .send_user_alert(
-                "Queued Claude message paused",
-                &format!("The next queued message could not start: {message}"),
-                Some(thread),
-            )
+            .send_user_alert("Queued Claude message paused", message, Some(thread))
             .await
         {
             warn!(%thread, %error, "queued Claude hold alert was not delivered");

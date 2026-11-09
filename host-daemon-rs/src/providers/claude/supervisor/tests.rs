@@ -3854,9 +3854,9 @@ fn hold(agent: &ClaudeSupervisor, message: &str) {
     agent
         .queued_messages
         .update(QUEUE_THREAD, |queue| {
-            queue.hold = Some(crate::providers::claude::queued_messages::QueueHold::new(
-                message,
-            ));
+            queue.hold = Some(crate::providers::claude::queued_messages::QueueHold {
+                message: message.to_owned(),
+            });
             Ok(())
         })
         .unwrap();
@@ -4126,12 +4126,14 @@ async fn a_persistent_refusal_leaves_the_message_queued_and_holds_the_queue() {
     else {
         panic!("a conversation without a recorded selection cannot start its queue")
     };
-    assert!(error.holds_queue(), "{error}");
     let queued = agent.queued_messages(QUEUE_THREAD).await.unwrap();
     assert_eq!(held, queued.hold.map(|hold| hold.message));
-    assert!(
-        held.is_some(),
-        "the first persistent refusal holds the queue"
+    assert_eq!(
+        held.as_deref(),
+        Some(
+            "This conversation's folder or provider can't be used. Restore it or start a new conversation."
+        ),
+        "the first persistent refusal holds the queue with user-facing copy, not {error}"
     );
     assert_eq!(queued.entries.len(), 1);
     assert_eq!(
@@ -4181,6 +4183,10 @@ async fn start_failures_count_per_head_and_hold_after_three_in_a_row() {
     let held = attempt("second")
         .await
         .expect("the third failure in a row holds");
+    assert_eq!(
+        held,
+        "It failed to start 3 times in a row. Retry, or check the gateway log."
+    );
     let queued = agent.queued_messages(QUEUE_THREAD).await.unwrap();
     assert_eq!(queued.hold.map(|hold| hold.message), Some(held));
     assert_eq!(queued.entries[0].failures, 0, "a hold restarts the count");
