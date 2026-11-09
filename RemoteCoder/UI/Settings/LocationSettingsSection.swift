@@ -34,16 +34,6 @@ struct LiveNavigationSettingsSection: View {
                     .scaledFont(.subheadline)
                     .foregroundStyle(.red)
             }
-        } header: {
-            Text("Live location")
-        }
-
-        Section {
-            NavigationLink("Licenses") {
-                GoogleNavigationLicensesView()
-            }
-        } header: {
-            Text("Google Maps")
         } footer: {
             Text("Navigation data powered by Google Maps.")
         }
@@ -66,7 +56,7 @@ struct GoogleNavigationLicensesView: View {
                 .padding()
             }
         }
-        .navigationTitle("Google licenses")
+        .navigationTitle("Google Maps and Navigation")
         .inlineNavigationTitle()
         .task {
             await Task.yield()

@@ -20,14 +20,12 @@ extension EnvironmentValues {
 struct AutomationsAuthorityView: View {
     let workspace: ChatWorkspaceModel
     var body: some View {
-        NavigationStack {
-            if let authority = workspace.automationAuthority {
-                AutomationsView(workspace: workspace, authority: authority)
-            } else {
-                ContentUnavailableView("Automations unavailable", systemImage: "clock.arrow.circlepath",
-                    description: Text("No connected gateway reports an automation service."))
-                    .navigationTitle("Automations")
-            }
+        if let authority = workspace.automationAuthority {
+            AutomationsView(workspace: workspace, authority: authority)
+        } else {
+            ContentUnavailableView("Automations unavailable", systemImage: "clock.arrow.circlepath",
+                description: Text("No connected gateway reports an automation service."))
+                .navigationTitle("Automations")
         }
     }
 }

@@ -1,103 +1,103 @@
-import Observation
 import SwiftUI
 
-enum SettingsPane: String { case chat, accounts, hosts, cluster, automations, location, audio, keyboard }
-
-struct SettingsView: View {
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var windowVisible = true
-    @State private var presented = false
-    @Environment(\.dismiss) private var dismiss
-    @Environment(HostStore.self) private var gatewaySettings
-
-    let workspace: ChatWorkspaceModel
-    #if os(iOS)
-    @Environment(LiveNavigationSetupController.self) private var liveNavigationSetup
-    @State private var page: SettingsPane = .chat
-    #else
-    @AppStorage(SettingsPane.storageKey) private var page: SettingsPane = .chat
-    #endif
+struct SettingsPage<Content: View>: View {
+    let title: LocalizedStringKey
+    @ViewBuilder let content: Content
 
     var body: some View {
-        TabView(selection: $page.nativeSelectionFeedback()) {
-            Tab("Chat", systemImage: "text.bubble", value: SettingsPane.chat) {
-                SettingsFormPage {
-                    ThemeSettingsSection()
-                    #if os(iOS)
-                    HapticSettingsSection(models: workspace.newChatModelOptions(preferredHostID: workspace.selectedHostID))
-                    #endif
-                    NewChatSettingsSection(workspace: workspace)
-                    Section {
-                        NavigationLink("Licenses") { ThirdPartyLicensesView() }
-                    }
-                    CodexModelsSettingsSection(catalog: workspace.codexModelCatalog, preferences: workspace.modelPickerPreferences)
-                    ClaudeModelsSettingsSection(preferences: workspace.modelPickerPreferences)
-                    ReasoningEffortSettingsSection(workspace: workspace)
-                    ChatSettingsSection(workspace: workspace)
-                    Section {
-                        NavigationLink("Licenses") { ThirdPartyLicensesView() }
-                    }
-                }
-            }
+        Form { content }
+            .formStyle(.grouped)
+            .navigationTitle(title)
+            .inlineNavigationTitle()
+    }
+}
 
-            #if os(macOS)
-            Tab("Keyboard", systemImage: "keyboard", value: SettingsPane.keyboard) {
-                KeyboardShortcutsSettings()
-            }
-            #endif
+struct HostsSettingsPage: View {
+    let workspace: ChatWorkspaceModel
+    @Environment(HostStore.self) private var hosts
 
-            Tab("Accounts", systemImage: "person.crop.circle", value: SettingsPane.accounts) {
-                SettingsAccountsPage(workspace: workspace)
-            }
-            Tab("Hosts", systemImage: "server.rack", value: SettingsPane.hosts) {
-                GatewayHostsSettings(settings: gatewaySettings, workspace: workspace) { hosts in
-                    SettingsFormPage {
-                        hosts
-                        DiagnosticsSettingsSection()
-                    }
-                }
-            }
-
-            Tab("Automations", systemImage: "clock.arrow.circlepath", value: SettingsPane.automations) {
-                AutomationsAuthorityView(workspace: workspace)
-                    .environment(workspace.automationDrafts)
-                    .environment(\.automationSurfaceVisible, presented && windowVisible && scenePhase == .active && page == .automations)
-                    .environment(\.automationConversationOpener, { route in
-                        let address = try await workspace.prepareAutomationConversation(route)
-                        guard workspace.switchConversation(to: address) != .refusedWhileDictating else { return false }
-                        dismiss()
-                        return true
-                    })
-            }
-
-            Tab("Cluster", systemImage: "square.stack.3d.up", value: SettingsPane.cluster) {
-                ClusterSettingsView(workspace: workspace)
-            }
-
-            #if os(iOS)
-            Tab("Location", systemImage: "location.fill", value: SettingsPane.location) {
-                SettingsFormPage {
-                    if gatewaySettings.localConfiguration.googleMapsAPIKey?.isEmpty == false {
-                    LiveNavigationSettingsSection(setup: liveNavigationSetup, gatewayPolicy: workspace.gatewayPolicy, pushTokens: workspace.pushTokens, googleMapsAPIKey: gatewaySettings.localConfiguration.googleMapsAPIKey ?? "")
-                    } else {
-                        ContentUnavailableView("Navigation unavailable", systemImage: "location.slash")
-                    }
-                }
-            }
-            #endif
-
-            Tab("Audio", systemImage: "waveform", value: SettingsPane.audio) {
-                SettingsFormPage {
-                    #if os(iOS)
-                    RealtimeVoiceSettingsSection(workspace: workspace)
-                    #endif
-                    TranscriptionSettingsSection(settings: workspace.transcriptionSettings, library: workspace.dictationLibrary)
+    var body: some View {
+        GatewayHostsSettings(settings: hosts, workspace: workspace) { gateways in
+            SettingsPage(title: "Hosts") {
+                gateways
+                Section {
+                    NavigationLink("Cluster") { ClusterSettingsView(workspace: workspace) }
                 }
             }
         }
-        .settingsTabsChrome()
-        .modifier(WindowVisibility(isVisible: $windowVisible))
-        .onAppear { presented = true }
-        .onDisappear { presented = false }
     }
+}
+
+struct AutomationsSettingsPage: View {
+    let workspace: ChatWorkspaceModel
+    let isVisible: Bool
+    let dismissSettings: DismissAction
+
+    var body: some View {
+        AutomationsAuthorityView(workspace: workspace)
+            .environment(workspace.automationDrafts)
+            .environment(\.automationSurfaceVisible, isVisible)
+            .environment(\.automationConversationOpener, { route in
+                let address = try await workspace.prepareAutomationConversation(route)
+                guard workspace.switchConversation(to: address) != .refusedWhileDictating else { return false }
+                dismissSettings()
+                return true
+            })
+    }
+}
+
+struct VoiceSettingsPage: View {
+    let workspace: ChatWorkspaceModel
+
+    var body: some View {
+        #if os(iOS)
+        SettingsPage(title: "Voice & Dictation") {
+            RealtimeVoiceSettingsSection(workspace: workspace)
+            TranscriptionSettingsSection(settings: workspace.transcriptionSettings, library: workspace.dictationLibrary)
+        }
+        #else
+        SettingsPage(title: "Dictation") {
+            TranscriptionSettingsSection(settings: workspace.transcriptionSettings, library: workspace.dictationLibrary)
+        }
+        #endif
+    }
+}
+
+struct ModelsInPickersSection: View {
+    let workspace: ChatWorkspaceModel
+
+    var body: some View {
+        Section("Models in Pickers") {
+            CodexModelsSettingsRow(catalog: workspace.codexModelCatalog, preferences: workspace.modelPickerPreferences)
+            ClaudeModelsSettingsRow(hostEntries: workspace.codexModelCatalog.source?.service.catalog?.entries
+                                        .filter { $0.option.provider == .claude } ?? [],
+                                    preferences: workspace.modelPickerPreferences)
+        }
+    }
+}
+
+struct ProviderSettingsLabel: View {
+    let provider: AgentProvider
+    let value: String
+    @InterfaceScaledMetric(relativeTo: .body) private var markSize: CGFloat = 20
+
+    var body: some View {
+        LabeledContent {
+            Text(value)
+        } label: {
+            Label {
+                Text(provider.settingsTitle)
+            } icon: {
+                Image(provider.markImage)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(provider.markStyle)
+                    .frame(width: markSize, height: markSize)
+            }
+        }
+    }
+}
+
+extension AgentProvider {
+    var settingsTitle: String { self == .claude ? "Claude Code" : "Codex" }
 }

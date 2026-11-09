@@ -93,7 +93,7 @@ struct AccountsOverviewView: View {
                 }
             }
         }
-        .navigationTitle("Accounts & usage")
+        .navigationTitle("Accounts & Usage")
         .inlineNavigationTitle()
         .refreshable { await workspace.accountDirectory.refresh(interactive: true) }
         .task { await workspace.accountDirectory.refresh(interactive: true) }

@@ -16,35 +16,31 @@ enum CodexModelCatalogSourceState {
     }
 }
 
-struct CodexModelsSettingsSection: View {
+struct CodexModelsSettingsRow: View {
     let catalog: CodexModelCatalogSourceState
     let preferences: ModelPickerPreferences
 
-    private var shownCount: String? {
-        guard let entries = catalog.source?.service.catalog?.entries else { return nil }
-        return "\(entries.filter(preferences.codexModelVisibility.isVisible).count) of \(entries.count) shown"
+    var body: some View {
+        switch catalog {
+        case .available(let source):
+            NavigationLink {
+                CodexModelsSettingsPage(catalog: source, preferences: preferences)
+            } label: {
+                ProviderSettingsLabel(provider: .codex, value: shownCount(source) ?? "Not Loaded")
+            }
+            .accessibilityIdentifier("codex-models-settings")
+        case .noHosts:
+            ProviderSettingsLabel(provider: .codex, value: "No Host")
+                .foregroundStyle(.secondary)
+        case .hostUnavailable:
+            ProviderSettingsLabel(provider: .codex, value: "Unavailable")
+                .foregroundStyle(.secondary)
+        }
     }
 
-    var body: some View {
-        Section {
-            switch catalog {
-            case .available(let catalog):
-                NavigationLink {
-                    CodexModelsSettingsPage(catalog: catalog, preferences: preferences)
-                } label: {
-                    LabeledContent("Models", value: shownCount ?? "Not loaded")
-                }
-                .accessibilityIdentifier("codex-models-settings")
-            case .noHosts:
-                Text("Add a host that runs Codex to choose its models.")
-                    .foregroundStyle(.secondary)
-            case .hostUnavailable:
-                Text("The selected host is unavailable.")
-                    .foregroundStyle(.secondary)
-            }
-        } header: {
-            Text("Gateway models")
-        }
+    private func shownCount(_ source: CodexModelCatalogSource) -> String? {
+        guard let entries = source.service.catalog?.entries.filter({ $0.option.provider == .codex }) else { return nil }
+        return "\(entries.filter(preferences.codexModelVisibility.isVisible).count) of \(entries.count)"
     }
 }
 
@@ -53,10 +49,10 @@ private struct CodexModelsSettingsPage: View {
     let preferences: ModelPickerPreferences
 
     private var service: CodexModelCatalogService { catalog.service }
-    private var entries: [CodexModelCatalog.Entry] { service.catalog?.entries ?? [] }
+    private var entries: [CodexModelCatalog.Entry] { service.catalog?.entries.filter { $0.option.provider == .codex } ?? [] }
 
     var body: some View {
-        Form {
+        SettingsPage(title: "Codex") {
             Section {
                 LabeledContent("Source", value: catalog.sourceLabel)
                 LabeledContent("Updated") {
@@ -91,21 +87,29 @@ private struct CodexModelsSettingsPage: View {
                 }
             }
 
-            modelSection(entries.filter { !$0.isHiddenUpstream }, header: "Shown in pickers",
-                         footer: "New models appear automatically. Conversations keep their model even when you hide it.")
-            modelSection(entries.filter(\.isHiddenUpstream), header: "Hidden by the host",
-                         footer: "The host hides these by default. Turn one on to add it to the pickers.")
+            HostModelsSection(entries: entries.filter { !$0.isHiddenUpstream }, header: "Shown in Pickers",
+                              footer: "New models appear automatically. Conversations keep their model even when you hide it.",
+                              preferences: preferences)
+            HostModelsSection(entries: entries.filter(\.isHiddenUpstream), header: "Hidden by the Host",
+                              footer: "The host hides these by default. Turn one on to add it to the pickers.",
+                              preferences: preferences)
+            ReasoningLevelsSection(provider: .codex, models: entries.map(\.option), preferences: preferences)
         }
-        .navigationTitle("Gateway Models")
-        .inlineNavigationTitle()
     }
+}
 
-    @ViewBuilder
-    private func modelSection(_ entries: [CodexModelCatalog.Entry], header: String, footer: String) -> some View {
+struct HostModelsSection: View {
+    let entries: [CodexModelCatalog.Entry]
+    let header: LocalizedStringKey
+    let footer: LocalizedStringKey
+    let preferences: ModelPickerPreferences
+
+    var body: some View {
         if !entries.isEmpty {
             Section {
                 ForEach(entries) { entry in
-                    Toggle(isOn: visibilityBinding(for: entry)) {
+                    Toggle(isOn: Binding(get: { preferences.codexModelVisibility.isVisible(entry) },
+                                         set: { preferences.setModelVisible($0, for: entry) })) {
                         VStack(alignment: .leading, spacing: 4) {
                             ViewThatFits(in: .horizontal) {
                                 HStack(spacing: 6) {
@@ -136,10 +140,5 @@ private struct CodexModelsSettingsPage: View {
         [entry.summary, entry.option.acceptsImages ? nil : "Text only", entry.isUpstreamDefault ? "Host default" : nil]
             .compactMap { $0?.isEmpty == false ? $0 : nil }
             .joined(separator: " · ")
-    }
-
-    private func visibilityBinding(for entry: CodexModelCatalog.Entry) -> Binding<Bool> {
-        Binding(get: { preferences.codexModelVisibility.isVisible(entry) },
-                set: { preferences.setModelVisible($0, for: entry) })
     }
 }

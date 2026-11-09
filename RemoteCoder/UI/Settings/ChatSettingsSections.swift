@@ -1,27 +1,5 @@
 import SwiftUI
 
-struct ThemeSettingsSection: View {
-    @Environment(AppThemeStore.self) private var themeStore
-
-    var body: some View {
-        @Bindable var store = themeStore
-
-        Section("Appearance") {
-            Picker(selection: $store.selectedThemeID.nativeSelectionFeedback()) {
-                ForEach(AppThemeID.allCases) { themeID in
-                    Text(themeID.displayName).tag(themeID)
-                }
-            } label: {
-                HStack(spacing: 10) {
-                    ThemeSwatch(theme: store.theme)
-                    Text("Theme")
-                }
-            }
-            .drillDownPickerStyle()
-        }
-    }
-}
-
 struct ThemeSwatch: View {
     let theme: AppTheme
 
@@ -37,27 +15,7 @@ struct ThemeSwatch: View {
 
 struct ChatSettingsSection: View {
     let workspace: ChatWorkspaceModel
-
-    var body: some View {
-        Section("Chat behaviour") {
-            Toggle(isOn: Binding(
-                get: { SpeechPreferences.shared.isAutoSpeakEnabled },
-                set: { workspace.setAutoSpeakEnabled($0) }
-            )) {
-                Text("Speak replies")
-            }
-            Toggle(isOn: Bindable(workspace.notifications).isEnabled) {
-                Text("Completion notifications")
-            }
-            #if os(macOS)
-            QuickEntrySettingsToggle()
-            #endif
-        }
-    }
-}
-
-struct NewChatSettingsSection: View {
-    let workspace: ChatWorkspaceModel
+    @Environment(AppThemeStore.self) private var themeStore
     @AppStorage(NewChatDefaults.modelDefaultKey) private var modelDefault = NewChatDefaults.lastSelectedValue
     @AppStorage(NewChatDefaults.reasoningDefaultKey) private var reasoningDefault = NewChatDefaults.lastSelectedValue
 
@@ -98,9 +56,22 @@ struct NewChatSettingsSection: View {
     }
 
     var body: some View {
+        @Bindable var themes = themeStore
+
         Section {
-            Picker("Model", selection: modelDefaultBinding.nativeSelectionFeedback()) {
-                Text("Last selected").tag(NewChatDefaults.lastSelectedValue)
+            Picker(selection: $themes.selectedThemeID.nativeSelectionFeedback()) {
+                ForEach(AppThemeID.allCases) { themeID in
+                    Text(themeID.displayName).tag(themeID)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    ThemeSwatch(theme: themes.theme)
+                    Text("Theme")
+                }
+            }
+
+            Picker("New Chat Model", selection: modelDefaultBinding.nativeSelectionFeedback()) {
+                Text("Last Selected").tag(NewChatDefaults.lastSelectedValue)
                 ForEach(modelOptions) { option in
                     Text(option.pickerTitle).tag(option.id)
                 }
@@ -110,8 +81,8 @@ struct NewChatSettingsSection: View {
             }
             .accessibilityIdentifier("new-chat-default-model")
 
-            Picker("Reasoning effort", selection: reasoningDefaultBinding.nativeSelectionFeedback()) {
-                Text("Last selected").tag(NewChatDefaults.lastSelectedValue)
+            Picker("New Chat Reasoning", selection: reasoningDefaultBinding.nativeSelectionFeedback()) {
+                Text("Last Selected").tag(NewChatDefaults.lastSelectedValue)
                 Text("Automatic").tag(ReasoningSelection.automatic.id)
                 ForEach(reasoningEfforts) { effort in
                     Text(effort.label).tag(ReasoningSelection.effort(effort).id)
@@ -119,7 +90,7 @@ struct NewChatSettingsSection: View {
             }
             .accessibilityIdentifier("new-chat-default-reasoning")
         } header: {
-            Text("New chats")
+            Text("Chat")
         } footer: {
             if let unavailableFixedModelName {
                 Text(defaultModel.map { "\(unavailableFixedModelName) is hidden or unavailable, so new chats use \($0.displayName)." }
@@ -130,30 +101,7 @@ struct NewChatSettingsSection: View {
     }
 }
 
-struct ReasoningEffortSettingsSection: View {
-    let workspace: ChatWorkspaceModel
-
-    var body: some View {
-        Section {
-            ForEach(AgentProvider.allCases, id: \.self) { provider in
-                NavigationLink(provider == .claude ? "Claude Code" : "Codex") {
-                    ReasoningEffortProviderSettings(provider: provider, models: models(for: provider),
-                                                    preferences: workspace.modelPickerPreferences)
-                }
-            }
-        } header: {
-            Text("Reasoning levels")
-        }
-    }
-
-    private func models(for provider: AgentProvider) -> [ModelOption] {
-        let gateway = workspace.codexModelCatalog.source?.service.catalog?.entries.map(\.option)
-            .filter { $0.provider == provider } ?? []
-        return provider == .claude ? ClaudeModelCatalog.models + gateway : gateway
-    }
-}
-
-struct ReasoningEffortProviderSettings: View {
+struct ReasoningLevelsSection: View {
     let provider: AgentProvider
     let models: [ModelOption]
     let preferences: ModelPickerPreferences
@@ -164,7 +112,7 @@ struct ReasoningEffortProviderSettings: View {
     }
 
     var body: some View {
-        Form {
+        if !supportedEfforts.isEmpty {
             Section {
                 ForEach(supportedEfforts) { effort in
                     Toggle(effort.label, isOn: Binding(
@@ -174,12 +122,10 @@ struct ReasoningEffortProviderSettings: View {
                     .accessibilityIdentifier("visible-reasoning-\(provider.rawValue)-\(effort.rawValue)")
                 }
             } header: {
-                Text("Visible levels")
+                Text("Reasoning Levels")
             } footer: {
                 Text("Hidden selections move to the nearest visible level. Automatic is always available, including when all levels are hidden.")
             }
         }
-        .navigationTitle(provider == .claude ? "Claude Code" : "Codex")
-        .inlineNavigationTitle()
     }
 }

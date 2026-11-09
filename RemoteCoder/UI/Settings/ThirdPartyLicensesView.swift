@@ -18,10 +18,13 @@ struct ThirdPartyLicensesView: View {
                     ProgressView()
                 }
             }
-            Section("License texts") {
+            Section("License Texts") {
                 ForEach(files, id: \.self) { file in
                     NavigationLink(file.lastPathComponent) { LicenseTextView(file: file) }
                 }
+                #if os(iOS)
+                NavigationLink("Google Maps and Navigation") { GoogleNavigationLicensesView() }
+                #endif
             }
         }
         .navigationTitle("Licenses")

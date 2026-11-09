@@ -1,29 +1,31 @@
 import SwiftUI
 
-struct ClaudeModelsSettingsSection: View {
+struct ClaudeModelsSettingsRow: View {
+    let hostEntries: [CodexModelCatalog.Entry]
     let preferences: ModelPickerPreferences
 
     private var shownCount: Int {
         ClaudeModelCatalog.models.filter { preferences.claudeModelVisibility.isVisible(id: $0.id) }.count
+            + hostEntries.filter(preferences.codexModelVisibility.isVisible).count
     }
 
     var body: some View {
-        Section("Claude Code models") {
-            NavigationLink {
-                ClaudeModelsSettingsPage(preferences: preferences)
-            } label: {
-                LabeledContent("Models", value: "\(shownCount) of \(ClaudeModelCatalog.models.count) shown")
-            }
-            .accessibilityIdentifier("claude-models-settings")
+        NavigationLink {
+            ClaudeModelsSettingsPage(hostEntries: hostEntries, preferences: preferences)
+        } label: {
+            ProviderSettingsLabel(provider: .claude,
+                                  value: "\(shownCount) of \(ClaudeModelCatalog.models.count + hostEntries.count)")
         }
+        .accessibilityIdentifier("claude-models-settings")
     }
 }
 
 private struct ClaudeModelsSettingsPage: View {
+    let hostEntries: [CodexModelCatalog.Entry]
     let preferences: ModelPickerPreferences
 
     var body: some View {
-        Form {
+        SettingsPage(title: "Claude Code") {
             Section {
                 ForEach(ClaudeModelCatalog.models) { model in
                     Toggle(model.displayName, isOn: Binding(
@@ -33,12 +35,14 @@ private struct ClaudeModelsSettingsPage: View {
                     .accessibilityIdentifier("claude-model-visible-\(model.id)")
                 }
             } header: {
-                Text("Shown in pickers")
+                Text("Shown in Pickers")
             } footer: {
                 Text("New models appear automatically. Conversations keep their model even when you hide it.")
             }
+            HostModelsSection(entries: hostEntries, header: "From the Host",
+                              footer: "Claude models the host offers through other providers.", preferences: preferences)
+            ReasoningLevelsSection(provider: .claude, models: ClaudeModelCatalog.models + hostEntries.map(\.option),
+                                   preferences: preferences)
         }
-        .navigationTitle("Claude Code Models")
-        .inlineNavigationTitle()
     }
 }

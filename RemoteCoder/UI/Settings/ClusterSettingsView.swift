@@ -25,7 +25,7 @@ struct ClusterSettingsView: View {
     }
 
     var body: some View {
-        SettingsFormPage {
+        SettingsPage(title: "Cluster") {
             Section {
                 if let failure = model.persistenceFailure { AgentNote(text: failure) }
                 if let failure = model.operationFailure { AgentNote(text: failure) }

@@ -7,7 +7,10 @@ struct KeyboardShortcutsSettings: View {
     @State private var error: String?
 
     var body: some View {
-        SettingsFormPage {
+        SettingsPage(title: "Keyboard") {
+            Section {
+                QuickEntrySettingsToggle()
+            }
             if let shortcuts {
                 Section {
                     ForEach(ChatCommand.allCases, id: \.self) { command in

@@ -631,7 +631,7 @@ address, outcome and what was on screen), `window select` (a target change),
 `chat screen presents` and `transcript presents` (what the window actually
 shows), and `drawer state`. A tap whose `transcript presents` never names the
 tapped thread did not reach the screen.
-Settings → Hosts → **Export logs** shares the raw segments off the phone when
+Settings → **Export Logs** shares the raw segments off the phone when
 it cannot reach a gateway at all.
 
 ### Field telemetry

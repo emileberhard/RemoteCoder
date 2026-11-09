@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct DiagnosticsSettingsSection: View {
+struct AboutSettingsSection: View {
     @State private var exportedLog: URL?
     @State private var isExporting = false
 
@@ -16,7 +16,7 @@ struct DiagnosticsSettingsSection: View {
                 }
             if let exportedLog {
                 ShareLink(item: exportedLog) {
-                    Label("Share exported logs", systemImage: "square.and.arrow.up")
+                    Label("Share Exported Logs", systemImage: "square.and.arrow.up")
                 }
             }
             Button {
@@ -29,7 +29,7 @@ struct DiagnosticsSettingsSection: View {
                 }
             } label: {
                 HStack {
-                    Label("Export logs", systemImage: "square.and.arrow.up")
+                    Label("Export Logs", systemImage: "doc.zipper")
                     if isExporting {
                         Spacer()
                         ProgressView()
@@ -37,8 +37,7 @@ struct DiagnosticsSettingsSection: View {
                 }
             }
             .disabled(isExporting)
-        } header: {
-            Text("Diagnostics")
+            NavigationLink("Licenses") { ThirdPartyLicensesView() }
         }
     }
 }

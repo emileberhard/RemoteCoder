@@ -185,7 +185,7 @@ entrypoint linked above.
     defaults on demand. A reload applies the owner's default for an absent
     or unparseable value and writes nothing back: owners apply reloads to
     their in-memory state, not through the setters that persist a choice.
-  - Device-local by design: notifications, haptics, Mac zoom and quick entry,
+  - Device-local by design: Mac zoom and quick entry,
     working directory per host (host ids are per device), drawer
     folds and filter, and push and installation identity.
 - **Retirement is fenced synchronously.**
@@ -341,9 +341,7 @@ entrypoint linked above.
     all hosts. Target hints (turn count, connect, disconnect and
     `daemon/liveActivity/fleet/changed`) schedule one coalesced pass; it is
     described under *Live Activities and widgets*.
-  - **Audio.** Audio has one route. `ChatTargetModel.ownsAudioRoute` gates
-    spoken replies to the host on screen, and hiding or retiring a host stops
-    the reply it is speaking. Hiding a host completes its in-flight
+  - **Audio.** Audio has one route. Hiding a host completes its in-flight
     dictation into its own draft and releases the microphone. The voice surface
     follows `VoiceCall.callOwner`, the target whose thread the
     call is bound to, not the sidebar selection. `RemoteCoderAppModel` creates
@@ -954,7 +952,6 @@ entrypoint linked above.
     in Home" accessibility action, starts one in the host's remote home folder.
     The Mac `TapHoldButton` is a plain click, so there only the accessibility
     action remains.
-  - "Speak replies" lives in Settings → Chat.
   - Picking a different working directory immediately starts a fresh
     conversation, so a session never spans repositories. On an unsent draft
     it changes that draft's folder instead.
@@ -1215,7 +1212,7 @@ entrypoint linked above.
   - `CodexModelCatalogService` persists the last good list as
     `codex-models.json` in that target's storage directory. It refreshes on each
     gateway connection until one refresh succeeds, and on demand from Settings →
-    Chat → Codex models or the composer's Retry.
+    Models in Pickers → Codex or the composer's Retry.
   - Construction leaves an unread cache unknown. `ChatTargetModel` owns its
     asynchronous cache restoration; a storage actor reads, decodes, prepares and
     writes snapshots away from the main actor. Voice Mode and its configuration
@@ -1249,7 +1246,9 @@ entrypoint linked above.
     through `ModelPickerPreferences`, separately for each provider. New Codex models appear
     unless the host marks them `hidden`, and hidden ones can be opted in.
     Claude Code models use the same visibility policy with all families shown
-    by default; Settings → Chat → Claude Code models edits their alias IDs.
+    by default; Settings → Models in Pickers → Claude Code edits their alias IDs.
+    Host-reported Claude models keep Codex-catalog visibility and are listed on
+    that same page.
 - **Model defaults and restoration.**
   - `NewChatDefaults` owns independent new-chat model and reasoning policies:
     last manually selected (the default) or a fixed choice in Settings.
@@ -1297,15 +1296,15 @@ entrypoint linked above.
   conversation. `remotecoder://chat/voice?fresh=1` first starts a fresh chat with
   app defaults. `remotecoder://chat/call?id=` presents that exact voice call
   while it is live and is otherwise dropped.
-- Task-completion notifications are broker-backed and toggled in Settings. The
+- Task-completion notifications are broker-backed; the system's notification
+  settings are their only switch, so registration always carries the alert token. The
   iOS and Mac apps register for remote notifications (the Mac through
   `com.apple.developer.aps-environment`, both from `RC_APNS_ENVIRONMENT`),
   register their device with every host
   through `DeviceRegistration` (one per host, fed by `PushTokenSources`, fenced
   by connection generation, failure shown on the host's Settings row). iOS
   shows a small in-app banner when other sessions finish; the Mac shows the
-  system banner. With "Speak replies" on, every assistant message is queued in
-  `VoiceOutputController`.
+  system banner.
   Foreground presentation uses the scene's single in-app overlay. A refused
   cover dismissal can offer a retry only while active in the same scene epoch;
   inactivity clears it. Warm OS taps whose refused dismissal finishes before
@@ -1623,15 +1622,20 @@ entrypoint linked above.
   - `scripts/lint-glass` rejects raw `.glassEffect(` and
     `.buttonStyle(.glass/.glassProminent)`.
   - Reuse `GlassToolbarControl` for toolbar and menu capsules.
-- **Settings.** `SettingsView` is one `TabView` of `SettingsPane`s, and
-  `SettingsChrome` is its seam. On iOS it is a sheet from the chat screen with
-  sidebar-adaptable tabs, the system sheet background and a close button.
-  Settings presentation uses the system sheet transition, with no matched zoom
-  source or custom presentation animation. On the Mac it exists only as the
-  `Settings` scene (⌘,): toolbar panes, the last pane restored from
+- **Settings.** Each platform's `SettingsChrome` defines `SettingsView`; the
+  pages and sections it composes are shared in `UI/Settings` and use
+  `SettingsPage`, which never adds its own `NavigationStack`. On iOS it is a
+  sheet from the chat screen with the default system presentation and a close
+  button, and no matched zoom source or custom animation. One `NavigationStack`
+  root lists Hosts (with Cluster), Accounts & Usage and Automations, the chat
+  defaults, Models in Pickers (one page per provider for models and reasoning
+  levels), Voice & Dictation, Live Location (only with a Maps key) and About
+  (version, log export, licenses). On the Mac it exists only as the `Settings`
+  scene (⌘,): General, Keyboard (with quick entry), Accounts, Hosts,
+  Automations and Dictation panes, the last pane restored from
   `settings.selectedPane`, and no in-window settings sheet; the usage ring's
-  All Accounts opens its Accounts pane. The Mac omits the iPhone-only Haptics,
-  Location and Voice Mode sections.
+  All Accounts opens its Accounts pane. Settings holds no haptic or
+  notification switches; the system settings own those.
 - **Platform metrics.** Shared views take sizes from `ControlMetrics` (minimum
   hit target, row insets), `TypeMetrics` (fixed symbol sizes, scaled to the
   Mac's 13-point body, and the code font) and `ReadableContentWidth` instead of
@@ -1639,8 +1643,7 @@ entrypoint linked above.
   `.tooltip(_:)`, a Mac tooltip that does nothing on iOS. Do not use `.help` in
   shared views: on iOS it sets the accessibility hint.
 - **Haptics.** `docs/haptics.md` owns the tactile vocabulary, press/preview
-  behavior, audio policy, Standard/Strong tuning, the device comparison page and
-  verification. All app feedback goes through `HapticService` and the
+  behavior, audio policy, tuning and verification. All app feedback goes through `HapticService` and the
   `HapticEvent` / `StreamingHapticRecipe` catalogs; do not add raw generators
   or per-screen pattern constants. Semantic events submit synchronously through
   the service's window-attached native pool, shared with gesture players. Root
@@ -1781,19 +1784,6 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
     unchanged.
   - Settings cannot know which providers a gateway has configured, so a missing
     key surfaces when speech starts, as an error naming the host and provider.
-- `VoiceOutputController` (`@Observable @MainActor`) queues replies for Gemini
-  3.1 Flash TTS Preview through the host's relay; `SpeechPreferences` owns
-  "Speak replies".
-  - One streaming Gemini request both adapts Markdown-rich text for listening
-    and generates speech; there is no separate text post-processing model call.
-  - SpeechKit uses the low-latency Generate Content stream and starts playback
-    early only when measured delivery can stay uninterrupted; otherwise it
-    buffers to completion.
-  - The prompt is friendly and casual. It tells Gemini not to read Markdown
-    syntax, raw links, code, diffs or terminal output aloud, and to point the
-    listener back to the chat.
-  - Spoken replies are independent of Voice Mode, whose audio arrives over
-    WebRTC.
 - **Shared library opt-in.** The workspace owns `SharedDictationLibrary`; the
   device-local choice is off by default. It freezes a shared chat plan and
   journals original microphone buffers before provider resampling. Connected model/language controls edit the shared profile; composer UI contains no library status. The workspace owns and drains utility-priority original sealing and result writes independently of each other and of stop-to-text delivery, which checks the account through the store's synchronous session snapshot and never waits on the store actor. Failed result writes stay queued for the next publication pass and keep their status visible. The shared
