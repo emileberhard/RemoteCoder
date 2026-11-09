@@ -23,7 +23,7 @@ private struct ChatRenamePrompt: ViewModifier {
             .alert("Rename chat", item: $request) { request in
                 TextField("Chat name", text: $name)
                     .onChange(of: name) {
-                        if !workspace.supportsIndependentNames(request.address) { name = ConversationPinName.clamped(name) }
+                        if workspace.nameActions(for: request.address)?.canRegenerateName == false { name = ConversationPinName.clamped(name) }
                     }
                 Button("Rename") { commit(request.address) }
                     .disabled(trimmedName.isEmpty)

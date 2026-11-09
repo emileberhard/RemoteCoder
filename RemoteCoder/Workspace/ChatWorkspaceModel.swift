@@ -1660,18 +1660,13 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     func regenerateTitle(at address: ConversationAddress, onFailure: @escaping @MainActor (String) -> Void) {
-        model(for: address.hostID)?.regenerateTitle(threadID: address.threadID, onFailure: onFailure)
+        guard let owner = model(for: address.hostID), owner.conversationList.marks.nameActions(for: address.threadID).canRegenerateName else { return }
+        owner.regenerateTitle(threadID: address.threadID, onFailure: onFailure)
     }
 
     func pin(_ address: ConversationAddress, displayedTitle: String?) {
         guard let list = model(for: address.hostID)?.conversationList else { return }
-        if list.marks.usesPinFlag {
-            list.pin(threadID: address.threadID)
-        } else if let displayedTitle {
-            list.pin(threadID: address.threadID, name: displayedTitle)
-        } else {
-            return
-        }
+        list.pin(threadID: address.threadID, displayedTitle: displayedTitle)
         drawerPreferences.isPinnedFolded = false
     }
 
@@ -1683,16 +1678,16 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         model(for: address.hostID)?.conversationList.isPinned(address.threadID) == true
     }
 
-    func supportsIndependentNames(_ address: ConversationAddress) -> Bool {
-        model(for: address.hostID)?.conversationList.marks.usesPinFlag == true
+    func nameActions(for address: ConversationAddress) -> ConversationNameActions? {
+        model(for: address.hostID)?.conversationList.marks.nameActions(for: address.threadID)
     }
 
     func rename(_ address: ConversationAddress, name: String, onFailure: @escaping @MainActor (String) -> Void) {
-        guard let owner = model(for: address.hostID) else { return }
+        guard let owner = model(for: address.hostID), owner.conversationList.marks.nameActions(for: address.threadID).canRename else { return }
         if owner.conversationList.marks.usesPinFlag {
             owner.renameThread(threadID: address.threadID, name: name, onFailure: onFailure)
-        } else if owner.conversationList.isPinned(address.threadID) {
-            owner.conversationList.pin(threadID: address.threadID, name: name)
+        } else {
+            owner.conversationList.pin(threadID: address.threadID, displayedTitle: name)
             HapticService.shared.play(.success)
         }
     }

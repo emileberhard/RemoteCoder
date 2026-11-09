@@ -65,7 +65,8 @@ struct ConversationSidebarProjectionTests {
         ], marks: marks)])
         #expect(rows.map(\.title) == ["Alpha", "Zulu"])
         #expect(rows.map(\.isPinned) == [true, true])
-        #expect(rows.map(\.supportsIndependentNames) == [true, true])
+        #expect(rows.map(\.canRename) == [true, true])
+        #expect(rows.map(\.canRegenerateName) == [true, true])
         #expect(ConversationSidebarProjection.matches(title: rows[0].title, workingDirectory: "", hostName: nil, query: "Alpha"))
     }
 

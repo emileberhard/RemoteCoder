@@ -282,11 +282,11 @@ struct HistoryServiceTests {
         #expect(model.unloadedPinnedThreads.isEmpty)
         #expect(await gateway.headerReads.count == 8)
         if flagPin {
-            model.pin(threadID: "new")
+            model.pin(threadID: "new", displayedTitle: nil)
             #expect(model.isPinned("new"))
             #expect(model.marksReplica.pending.contains { $0.change == .pinFlag(threadID: "new") })
         } else {
-            model.pin(threadID: "new", name: "Legacy title")
+            model.pin(threadID: "new", displayedTitle: "Legacy title")
             #expect(model.marksReplica.pending.contains { $0.change == .pin(threadID: "new", name: "Legacy title") })
         }
 
@@ -691,7 +691,7 @@ struct HistoryServiceTests {
             marksStore: held, defaults: temporary.defaults)
         let loading = Task { _ = await model.knownThread(id: "same") }
         await held.waitForRead()
-        model.pin(threadID: "same", name: "Newer")
+        model.pin(threadID: "same", displayedTitle: "Newer")
         model.unpin(threadID: "other")
         await held.release()
         await loading.value
@@ -720,7 +720,7 @@ struct HistoryServiceTests {
             cache: HistoryPageCache(directory: directory.appending(path: "pages"))), marksRemote: gateway,
             hostID: hostID, threadStore: ConversationHeaderStore(hostID: hostID, directory: directory),
             marksStore: disk, defaults: temporary.defaults)
-        model.pin(threadID: "same", name: "New")
+        model.pin(threadID: "same", displayedTitle: "New")
         model.retireHeaderReads()
         await model.syncMarks()
         model.quiesce()
@@ -750,8 +750,8 @@ struct HistoryServiceTests {
         try FileManager.default.removeItem(at: marksDirectory)
         try Data([1]).write(to: marksDirectory)
         await gateway.failMarks(true)
-        model.pin(threadID: "draft", name: "First")
-        model.pin(threadID: "draft", name: "Latest")
+        model.pin(threadID: "draft", displayedTitle: "First")
+        model.pin(threadID: "draft", displayedTitle: "Latest")
         await model.drain()
         #expect(await model.flushMarks() == false)
         try FileManager.default.removeItem(at: marksDirectory)
@@ -775,10 +775,10 @@ struct HistoryServiceTests {
             marksStore: marksStore, defaults: temporary.defaults)
         await model.syncMarks()
         await gateway.holdNextMarksUpdate()
-        model.pin(threadID: "admitted", name: "Keep")
+        model.pin(threadID: "admitted", displayedTitle: "Keep")
         await gateway.waitForHeldMarksUpdate()
         model.quiesce()
-        model.pin(threadID: "blocked", name: "Closed")
+        model.pin(threadID: "blocked", displayedTitle: "Closed")
         var joined = false
         let (started, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         let drain = Task {
@@ -798,7 +798,7 @@ struct HistoryServiceTests {
         #expect(replica.effective.pinName(for: "admitted") == "Keep")
         #expect(replica.effective.pinName(for: "blocked") == nil)
         model.resume()
-        model.pin(threadID: "reopened", name: "Open")
+        model.pin(threadID: "reopened", displayedTitle: "Open")
         await model.drain()
         #expect(await model.flushMarks())
         #expect(model.pinnedName(for: "reopened") == "Open")
@@ -829,7 +829,7 @@ struct HistoryServiceTests {
         #expect(try isUnread(offline) == false)
         await gateway.failMarks(true)
         offline.markSeen(threadID: header.id, completedAt: 1_001)
-        offline.pin(threadID: header.id, name: "Keep")
+        offline.pin(threadID: header.id, displayedTitle: "Keep")
         await offline.syncMarks()
         offline.quiesce()
         await offline.drain()

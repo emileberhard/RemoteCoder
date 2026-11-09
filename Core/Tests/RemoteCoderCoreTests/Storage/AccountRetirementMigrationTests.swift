@@ -73,8 +73,8 @@ struct AccountRetirementMigrationTests {
             return
         }
         #expect(!marks.isReadStateKnown)
-        #expect(marks.effective.pinNames["codex_chat"] == "Codex pin")
-        #expect(marks.effective.pinNames[thread] == "Pending Claude pin")
+        #expect(marks.effective.pinName(for: "codex_chat") == "Codex pin")
+        #expect(marks.effective.pinName(for: thread) == "Pending Claude pin")
         let hostKey = HistoryPageKey(hostID: "ws://mini.test:8766/ws", provider: "native", threadID: thread, generation: 0, request: "tail")
         #expect(await HistoryPageCache(directory: pagesURL).value(for: hostKey)?.data == Data("cached history".utf8))
         #expect(ConversationIndex.legacyEntriesSynchronously(directory: root)[thread] == conversation)
@@ -171,7 +171,7 @@ struct AccountRetirementMigrationTests {
             temporary.storage.directory(for: .host(host)).appending(path: ConversationMarksStore.fileName)))
         #expect(marks.pending.contains { $0.change == .pin(threadID: "unsynced", name: "Keep") })
         #expect(!marks.isReadStateKnown)
-        #expect(marks.effective.pinNames["default-old"] == "Host pin")
+        #expect(marks.effective.pinName(for: "default-old") == "Host pin")
     }
 
     @Test func unindexedSubmissionsAndRestoredDraftsKeepTheirIdentity() async throws {
@@ -539,8 +539,8 @@ struct AccountRetirementMigrationTests {
             discovered: { _ in }, finishedHost: { _ in })
         #expect(outcome.issues.isEmpty)
         let restored = try JSONDecoder().decode(ConversationMarksReplica.self, from: Data(contentsOf: target.appending(path: ConversationMarksStore.fileName)))
-        #expect(restored.effective.pinNames["edited"] == nil)
-        #expect(restored.effective.pinNames["unsynced"] == "Retain")
+        #expect(restored.effective.pinName(for: "edited") == nil)
+        #expect(restored.effective.pinName(for: "unsynced") == "Retain")
         #expect(restored.pending.last?.change == marks.pending.last?.change)
     }
 

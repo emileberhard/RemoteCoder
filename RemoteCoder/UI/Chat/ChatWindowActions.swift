@@ -338,7 +338,7 @@ fileprivate struct ChatWindowActionContext {
     var commandState: ChatWindowCommandState {
         let conversation = screen.openAddress
         let isPinned = conversation.map(workspace.isPinned) == true
-        let supportsIndependentNames = conversation.map(workspace.supportsIndependentNames) == true
+        let nameActions = conversation.flatMap(workspace.nameActions(for:))
         let settlement = conversationSettlement(conversation)
         let settingsModel = showsConversationSettings ? screen.selectedModel : nil
         let fastModel = settingsModel.flatMap { $0.supportsFastMode ? $0 : nil }
@@ -346,9 +346,9 @@ fileprivate struct ChatWindowActionContext {
         if conversation == nil {
             enabled.subtract([.fork, .togglePin, .copyReference, .markUnread])
         }
-        if !isPinned && screen.openConversationTitle == nil && !supportsIndependentNames { enabled.remove(.togglePin) }
-        if conversation == nil || (!isPinned && !supportsIndependentNames) { enabled.remove(.rename) }
-        if conversation == nil || (isPinned && !supportsIndependentNames) { enabled.remove(.regenerateName) }
+        if !isPinned && screen.openConversationTitle == nil && nameActions?.canRename != true { enabled.remove(.togglePin) }
+        if nameActions?.canRename != true { enabled.remove(.rename) }
+        if nameActions?.canRegenerateName != true { enabled.remove(.regenerateName) }
         if !find.hasMatches { enabled.subtract([.findNext, .findPrevious]) }
         if !screen.composerSendState.canSend { enabled.remove(.send) }
         if screen.composerStopState.readyTurn == nil { enabled.remove(.stop) }

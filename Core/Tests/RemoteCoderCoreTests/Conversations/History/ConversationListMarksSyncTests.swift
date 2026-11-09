@@ -25,7 +25,7 @@ struct ConversationListMarksSyncTests {
             #expect(!list.marksNeedSync)
 
             await gateway.setAvailable(false)
-            list.pin(threadID: "done", name: "Keep")
+            list.pin(threadID: "done", displayedTitle: "Keep")
             try await waitUntil { await gateway.failedWrites > 0 }
             #expect(list.marksNeedSync)
 
@@ -41,7 +41,7 @@ struct ConversationListMarksSyncTests {
         try await withList(gateway, stored: nil) { list in
             await list.syncMarks()
             await gateway.setAvailable(false)
-            list.pin(threadID: "done", name: "Keep")
+            list.pin(threadID: "done", displayedTitle: "Keep")
             try await waitUntil { await gateway.failedWrites == 1 }
 
             await gateway.holdReads()
@@ -95,6 +95,38 @@ struct ConversationListMarksSyncTests {
         }
     }
 
+    @Test(arguments: [4, 5])
+    func persistedNamelessPinsAreDroppedOnLegacyReadBeforeSending(schemaVersion: Int) async throws {
+        let gateway = FlakyMarksGateway()
+        await gateway.setSchemaVersion(schemaVersion)
+        await gateway.setRetirementReadAvailable()
+        await gateway.setAvailable(true)
+        await gateway.setRejectWrites(true)
+        let pinID = UUID(), unknownID = UUID(), readID = UUID(), namedID = UUID()
+        let pending: [ConversationMarksReplica.Pending] = [
+            .init(id: pinID, change: .pinFlag(threadID: "known")),
+            .init(id: unknownID, change: .pinFlag(threadID: "unknown")),
+            .init(id: readID, change: .markRead(threadID: "later", through: 500)),
+            .init(id: namedID, change: .pin(threadID: "named", name: "Older saved name")),
+        ]
+        let stored = ConversationMarksReplica(acknowledged: .init(schemaVersion: 5, revision: 1, readBaseline: 0, threads: [:]),
+                                              pending: pending)
+        let known = try ThreadFixture.basic("known", updatedAt: 10, preview: "Preview", fields: ["name": "Shown title"])
+        try await withList(gateway, stored: stored, headers: [known]) { list in
+            await list.syncMarks()
+            let expected: [ConversationMarksReplica.Pending] = schemaVersion < 5
+                ? [pending[2], pending[3]]
+                : pending
+            #expect(list.marksReplica.pending == expected)
+            #expect(await gateway.attemptedUpdates == [expected.map(\.change)])
+            await gateway.setRejectWrites(false)
+            await list.syncMarks()
+            #expect(await gateway.attemptedUpdates == [expected.map(\.change), expected.map(\.change)])
+            #expect(await gateway.updates == [expected.map(\.change)])
+            #expect(list.marksReplica.pending.isEmpty)
+        }
+    }
+
     @Test func aNewHostsQueuedGlobalActionStaysGlobalDuringItsFirstMarksLoad() async throws {
         let gateway = FlakyMarksGateway()
         await gateway.setAvailable(true)
@@ -116,7 +148,8 @@ struct ConversationListMarksSyncTests {
         }
     }
 
-    private func withList(_ gateway: FlakyMarksGateway, stored: ConversationMarksReplica?, _ body: (ConversationList) async throws -> Void) async throws {
+    private func withList(_ gateway: FlakyMarksGateway, stored: ConversationMarksReplica?, headers: [ConversationHeader] = [],
+                          _ body: (ConversationList) async throws -> Void) async throws {
         let temporary = TemporaryHostStorage()
         let suiteName = "RemoteCoderCoreTests.MarksSync.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -124,9 +157,14 @@ struct ConversationListMarksSyncTests {
         let target = ExecutionTarget(hostID: UUID())
         let directory = temporary.storage.directory(for: .target(hostID: target.hostID))
         if let stored { try #require(await ConversationMarksStore(directory: directory).save(stored)) }
+        let threadStore = ConversationHeaderStore.scoped(to: target, storage: temporary.storage)
+        if !headers.isEmpty {
+            await threadStore.save(snapshot: .init(threads: headers, lastSuccessfulRefreshAt: nil, revision: 1))
+            await threadStore.flush()
+        }
         let list = ConversationList(service: GatewayHistoryService(gateway: gateway,
             cache: HistoryPageCache(directory: directory.appending(path: "pages"))), marksRemote: gateway,
-            hostID: target.hostID, threadStore: ConversationHeaderStore.scoped(to: target, storage: temporary.storage),
+            hostID: target.hostID, threadStore: threadStore,
             marksStore: ConversationMarksStore(directory: directory), defaults: defaults)
         try await body(list)
         list.quiesce()
@@ -142,16 +180,21 @@ actor FlakyMarksGateway: CodexHistoryGateway, ConversationMarksRemote {
     enum Failure: Error { case unavailable, unexpectedCall }
     let historyHostID = "flaky-marks-fixture"
     private var isAvailable = false
+    private var schemaVersion = 2
+    private var rejectsWrites = false
     private var retirementScopesAvailable = false
     private var retirementReadAvailable = false
     private var holdsReads = false
     private var heldRead: CheckedContinuation<Void, Never>?
     private(set) var failedWrites = 0
     private(set) var updates: [[ConversationMarkChange]] = []
+    private(set) var attemptedUpdates: [[ConversationMarkChange]] = []
 
     func setRetirementReadAvailable() { retirementReadAvailable = true }
     func setRetirementScopesAvailable() { retirementScopesAvailable = true }
     func setAvailable(_ available: Bool) { isAvailable = available }
+    func setSchemaVersion(_ version: Int) { schemaVersion = version }
+    func setRejectWrites(_ value: Bool) { rejectsWrites = value }
     func holdReads() { holdsReads = true }
     var isHoldingRead: Bool { heldRead != nil }
     func releaseRead() {
@@ -164,12 +207,17 @@ actor FlakyMarksGateway: CodexHistoryGateway, ConversationMarksRemote {
         guard isAvailable else { throw Failure.unavailable }
         let capability = retirementReadAvailable ? #", "supportsRetiredScopeRead": true"# : ""
         return try JSONDecoder().decode(ConversationMarks.self, from: Data("""
-            {"schemaVersion":2,"revision":1,"readBaseline":0,
+            {"schemaVersion":\(schemaVersion),"revision":1,"readBaseline":0,
              "threads":{"done":{"revision":1,"settlement":{"state":"settled","through":100}}}\(capability)}
             """.utf8))
     }
-    func updateConversationMarks(_ changes: [ConversationMarkChange]) throws -> ConversationMarks? {
-        guard isAvailable else { failedWrites += 1; throw Failure.unavailable }
+    func updateConversationMarks(_ changes: [ConversationMarkChange]) async throws -> ConversationMarks? {
+        attemptedUpdates.append(changes)
+        guard isAvailable, !rejectsWrites else { failedWrites += 1; throw Failure.unavailable }
+        if schemaVersion < 5, changes.contains(where: { if case .pinFlag = $0 { true } else { false } }) {
+            failedWrites += 1
+            throw Failure.unavailable
+        }
         if !retirementScopesAvailable, changes.contains(where: { if case .markRetiredScopeRead = $0 { true } else { false } }) {
             failedWrites += 1
             throw Failure.unavailable

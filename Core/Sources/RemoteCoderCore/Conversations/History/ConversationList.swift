@@ -252,15 +252,12 @@ final class ConversationList {
 
     func isPinned(_ threadID: String) -> Bool { marks.isPinned(threadID) }
 
-    func pin(threadID: String) {
-        guard marks.usesPinFlag else { return }
-        recordMark(.pinFlag(threadID: threadID))
-    }
-
-    func pin(threadID: String, name: String) {
-        guard !marks.usesPinFlag else { return }
-        guard let name = ConversationPinName.normalized(name) else { return }
-        recordMark(.pin(threadID: threadID, name: name))
+    func pin(threadID: String, displayedTitle: String?) {
+        if marks.usesPinFlag {
+            recordMark(.pinFlag(threadID: threadID))
+        } else if let displayedTitle, let name = ConversationPinName.normalized(displayedTitle) {
+            recordMark(.pin(threadID: threadID, name: name))
+        }
     }
 
     func unpin(threadID: String) {

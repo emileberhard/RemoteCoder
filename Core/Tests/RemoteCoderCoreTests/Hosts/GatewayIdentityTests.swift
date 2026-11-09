@@ -84,7 +84,9 @@ struct GatewayIdentityTests: ConversationHistoryFixtures {
         #expect(reopened.document(for: merged).content.expandedText == "First draft\n\nSecond draft")
         let marks = try JSONDecoder().decode(ConversationMarksReplica.self,
             from: Data(contentsOf: target.appending(path: ConversationMarksStore.fileName)))
-        #expect(marks.effective.pinNames == ["one": "One", "two": "Two"])
+        #expect(marks.effective.pinnedThreadIDs == ["one", "two"])
+        #expect(marks.effective.pinName(for: "one") == "One")
+        #expect(marks.effective.pinName(for: "two") == "Two")
         #expect(Set(marks.pending.map(\.id)) == Set(firstMarks.pending.map(\.id) + secondMarks.pending.map(\.id)))
         await reopened.retire()
         let recording = temporary.storage.root.appending(path: "dictation-recordings/\(UUID())/recording.json")

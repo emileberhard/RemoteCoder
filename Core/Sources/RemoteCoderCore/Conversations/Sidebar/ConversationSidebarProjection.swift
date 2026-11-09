@@ -20,7 +20,8 @@ struct ConversationSidebarRow: Identifiable, Equatable, Sendable {
     let isSelected: Bool
     let isLoading: Bool
     let activity: CodexGatewayDaemon.ActivityState?
-    var supportsIndependentNames = false
+    var canRename = false
+    var canRegenerateName = true
     var isAutomation = false
     var questionCount: Int? = nil
     var settlement: Settlement = .unavailable
@@ -297,6 +298,7 @@ enum ConversationSidebarProjection {
                 if host.marks.purpose(of: thread.id) == .probe, !live.isLive, !isSelected { continue }
                 let pinnedName = host.marks.pinName(for: thread.id)
                 let isPinned = host.marks.isPinned(thread.id)
+                let nameActions = host.marks.nameActions(for: thread.id)
                 let isAutomation = host.marks.purpose(of: thread.id) == .automation
                 let isSettled = !isPinned && rank.isSettled && !(arrangement.unreadOnly && isUnread)
                 if arrangement.unreadOnly, !isSelected, isSettled || (!isUnread && !rank.isUnread) { continue }
@@ -317,7 +319,8 @@ enum ConversationSidebarProjection {
                     isSelected: isSelected,
                     isLoading: host.loadingThreadID == thread.id,
                     activity: activity,
-                    supportsIndependentNames: host.marks.usesPinFlag,
+                    canRename: nameActions.canRename,
+                    canRegenerateName: nameActions.canRegenerateName,
                     isAutomation: isAutomation,
                     questionCount: questionCount,
                     settlement: !host.marks.offersSettlement ? .unavailable : isSettled ? .settled : .unsettled,

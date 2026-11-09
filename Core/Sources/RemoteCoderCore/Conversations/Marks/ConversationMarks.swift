@@ -194,6 +194,11 @@ enum ConversationMarkChange: Codable, Equatable, Sendable {
     }
 }
 
+struct ConversationNameActions: Equatable, Sendable {
+    let canRename: Bool
+    let canRegenerateName: Bool
+}
+
 struct ConversationMarks: Codable, Equatable, Sendable {
     static let settlementSchemaVersion = 2
     static let changesViewSchemaVersion = 4
@@ -223,9 +228,12 @@ struct ConversationMarks: Codable, Equatable, Sendable {
 
     func isPinned(_ threadID: String) -> Bool { threads[threadID]?.isPinned == true }
 
-    var pinnedThreadIDs: Set<String> { Set(threads.compactMap { $0.value.isPinned ? $0.key : nil }) }
+    func nameActions(for threadID: String) -> ConversationNameActions {
+        let pinned = isPinned(threadID)
+        return ConversationNameActions(canRename: usesPinFlag || pinned, canRegenerateName: usesPinFlag || !pinned)
+    }
 
-    var pinNames: [String: String] { threads.compactMapValues(\.pinName) }
+    var pinnedThreadIDs: Set<String> { Set(threads.compactMap { $0.value.isPinned ? $0.key : nil }) }
 
     func purpose(of threadID: String) -> ConversationPurpose? { threads[threadID]?.purpose }
 
@@ -315,7 +323,7 @@ struct ConversationMarks: Codable, Equatable, Sendable {
                 else { $0.pinName = ConversationPinName.normalized(name) }
             }
         case let .pinFlag(threadID):
-            update(threadID) { $0.pinned = true }
+            if usesPinFlag { update(threadID) { $0.pinned = true } }
         case let .unpin(threadID):
             update(threadID) { $0.pinName = nil; $0.pinned = false }
         case let .setPurpose(threadID, purpose):
@@ -502,6 +510,7 @@ struct ConversationMarksReplica: Codable, Equatable, Sendable {
             switch entry.change {
             case .settle, .unsettle: !marks.offersSettlement
             case .setChangesView: !marks.offersChangesViews
+            case .pinFlag: !marks.usesPinFlag
             default: false
             }
         }

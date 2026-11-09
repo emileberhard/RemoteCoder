@@ -19,6 +19,19 @@ struct ConversationMarksTests {
         #expect(old.pinName(for: "t") == "Legacy name")
     }
 
+    @Test func nameActionsAndFlagProjectionFollowTheAcknowledgedSchema() {
+        let legacy = ConversationMarks(schemaVersion: 4, revision: 1, readBaseline: 0,
+                                       threads: ["pinned": ThreadMarks(pinName: "Kept")])
+        #expect(legacy.nameActions(for: "pinned") == .init(canRename: true, canRegenerateName: false))
+        #expect(legacy.nameActions(for: "ordinary") == .init(canRename: false, canRegenerateName: true))
+        #expect(!legacy.applying(.pinFlag(threadID: "ordinary")).isPinned("ordinary"))
+        let current = ConversationMarks(schemaVersion: 5, revision: 1, readBaseline: 0,
+                                        threads: ["pinned": ThreadMarks(pinned: true)])
+        #expect(current.nameActions(for: "pinned") == .init(canRename: true, canRegenerateName: true))
+        #expect(current.nameActions(for: "ordinary") == .init(canRename: true, canRegenerateName: true))
+        #expect(current.applying(.pinFlag(threadID: "ordinary")).isPinned("ordinary"))
+    }
+
     @Test func retiringAnOlderReplicaKeepsItsPendingNamedPinAgainstSchemaFive() throws {
         let source = ConversationMarksReplica(acknowledged: .init(schemaVersion: 4, revision: 1, readBaseline: 0, threads: [:]),
             pending: [.init(id: UUID(), change: .pin(threadID: "retired", name: "Name chosen offline"))])
@@ -49,7 +62,7 @@ struct ConversationMarksTests {
         let source = ConversationMarksReplica(acknowledged: .init(schemaVersion: 2, revision: 1, readBaseline: 100,
             threads: ["saved": ThreadMarks(markedUnread: true, pinName: "Pinned after settling", settlement: .settled(through: 200))]))
         try host.adopt(source, sourceID: UUID())
-        #expect(host.effective.pinNames["saved"] == "Pinned after settling")
+        #expect(host.effective.pinName(for: "saved") == "Pinned after settling")
         #expect(host.effective.threads["saved"]?.settlement == .settled(through: 200))
         #expect(!host.isReadStateKnown)
         #expect(host.pending.isEmpty)

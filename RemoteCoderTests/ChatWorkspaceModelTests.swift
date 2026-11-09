@@ -427,7 +427,7 @@ struct ChatWorkspaceModelTests {
         #expect(mini.target.conversationList.pinnedName(for: shared) == "Mini side")
         // The same thread id on the other host is a different conversation.
         #expect(book.target.conversationList.pinnedName(for: shared) == nil)
-        #expect(book.target.conversationList.marks.pinNames.isEmpty)
+        #expect(book.target.conversationList.marks.pinnedThreadIDs.isEmpty)
 
         fixture.workspace.pin(miniAddress, displayedTitle: "Mini renamed")
         #expect(mini.target.conversationList.marks.pinName(for: shared) == "Mini renamed")
