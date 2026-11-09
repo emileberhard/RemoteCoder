@@ -16,17 +16,17 @@ import type { ConversationSidebarRow } from "../../workspace/conversation-sideba
 import { chatCommands } from "../chat/chat-commands";
 import { MenuItem } from "../design-system/menu";
 import { useRun, useWorkspace } from "../workspace-context";
-import type { PinNameIntent } from "./pin-name-dialog";
+import type { PinnedChatRename } from "./pinned-chat-rename-dialog";
 
 export function ConversationRowMenu({
   row,
   open,
-  namePin,
+  renamePinned,
   settle,
 }: {
   row: ConversationSidebarRow;
   open(): void;
-  namePin(intent: PinNameIntent): void;
+  renamePinned(rename: PinnedChatRename): void;
   settle(row: ConversationSidebarRow): void;
 }) {
   const workspace = useWorkspace();
@@ -41,10 +41,7 @@ export function ConversationRowMenu({
       </MenuItem>
       {row.isPinned ? (
         <>
-          <MenuItem
-            icon={<Pencil size={16} />}
-            onSelect={() => namePin({ kind: "rename", address, name: row.title })}
-          >
+          <MenuItem icon={<Pencil size={16} />} onSelect={() => renamePinned({ address, name: row.title })}>
             Rename
           </MenuItem>
           <MenuItem
@@ -59,7 +56,7 @@ export function ConversationRowMenu({
           <MenuItem
             icon={<Pin size={16} />}
             disabled={row.isPinned === null}
-            onSelect={() => namePin({ kind: "pin", address, name: "" })}
+            onSelect={() => run(() => workspace.pinConversation(address, row.title))}
           >
             Pin
           </MenuItem>

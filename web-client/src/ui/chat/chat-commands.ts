@@ -87,7 +87,7 @@ export const chatCommands: Record<ChatCommand, Definition> = {
   focusComposer: { title: "Focus Composer", Icon: TextCursorInput, inPalette: true },
   attachFile: { title: "Attach File…", Icon: Paperclip, inPalette: true },
   toggleFastMode: { title: "Fast Mode", Icon: Zap, inPalette: true },
-  togglePin: { title: "Pin…", Icon: Pin, inPalette: true },
+  togglePin: { title: "Pin", Icon: Pin, inPalette: true },
   rename: { title: "Rename…", Icon: Pencil, inPalette: true },
   copyReference: { title: "Copy Thread ID", Icon: Copy, inPalette: true },
   settle: {

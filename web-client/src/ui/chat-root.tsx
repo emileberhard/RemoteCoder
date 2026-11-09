@@ -23,7 +23,7 @@ import { Inspector } from "./chat/inspector";
 import { MediaProvider, VoiceDialog } from "./chat/media";
 import { Transcript } from "./chat/transcript/transcript";
 import { HistorySidebar } from "./conversations/history-sidebar";
-import { PinNameDialog, type PinNameIntent } from "./conversations/pin-name-dialog";
+import { type PinnedChatRename, PinnedChatRenameDialog } from "./conversations/pinned-chat-rename-dialog";
 import { DeploymentUpdate } from "./deployment-update";
 import { DiagramThemeContext, useDarkAppearance, visualTheme } from "./design-system/appearance";
 import { IconButton } from "./design-system/icon-button";
@@ -36,7 +36,7 @@ import { useRun, useSnapshot, useWorkspace } from "./workspace-context";
 const compactQuery = "(max-width: 760px)";
 type Modal =
   | { kind: "settings"; tab: SettingsTab }
-  | { kind: "pin"; intent: PinNameIntent }
+  | { kind: "rename"; rename: PinnedChatRename }
   | { kind: "directory" | "voice" | "palette" | "changes" };
 
 export function ChatRoot() {
@@ -119,7 +119,7 @@ export function ChatRoot() {
       openSettings: () => setModal({ kind: "settings", tab: "chat" }),
       togglePalette: () =>
         setModal((current) => (current?.kind === "palette" ? undefined : { kind: "palette" })),
-      namePin: (intent) => setModal({ kind: "pin", intent }),
+      renamePinned: (rename) => setModal({ kind: "rename", rename }),
     }),
     [compact, sidebarOpen, inspector],
   );
@@ -171,7 +171,7 @@ export function ChatRoot() {
           hidden={compact ? !drawer : sidebarHidden}
           onNavigate={() => setDrawer(false)}
           openSettings={(tab) => setModal({ kind: "settings", tab })}
-          namePin={chatWindow.namePin}
+          renamePinned={chatWindow.renamePinned}
         />
         <main className="main">
           <ChatHeader host={host} compact={compact} actions={actions} />
@@ -223,7 +223,7 @@ export function ChatRoot() {
         {modal?.kind === "changes" && conversation && (
           <ChangesReview key={addressKey(conversation.address)} conversation={conversation} close={close} />
         )}
-        {modal?.kind === "pin" && <PinNameDialog intent={modal.intent} close={close} />}
+        {modal?.kind === "rename" && <PinnedChatRenameDialog rename={modal.rename} close={close} />}
         {modal?.kind === "voice" && conversation && (
           <VoiceDialog key={addressKey(conversation.address)} conversation={conversation} close={close} />
         )}

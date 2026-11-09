@@ -26,7 +26,7 @@ import { useRun, useSnapshot, useWorkspace } from "../workspace-context";
 import { ActivityIndicator, ConversationRow } from "./conversation-row";
 import { ConversationRowMenu } from "./conversation-row-menu";
 import { NewChatButton } from "./new-chat-button";
-import type { PinNameIntent } from "./pin-name-dialog";
+import type { PinnedChatRename } from "./pinned-chat-rename-dialog";
 import { ViewOptionsButton } from "./view-options";
 
 const visibleDraftLimit = 3;
@@ -37,12 +37,12 @@ export function HistorySidebar({
   hidden,
   onNavigate,
   openSettings,
-  namePin,
+  renamePinned,
 }: {
   hidden: boolean;
   onNavigate(): void;
   openSettings(tab: SettingsTab): void;
-  namePin(intent: PinNameIntent): void;
+  renamePinned(rename: PinnedChatRename): void;
 }) {
   const workspace = useWorkspace();
   const run = useRun();
@@ -281,7 +281,7 @@ export function HistorySidebar({
           <ConversationRowMenu
             row={menuRow}
             open={() => open(menuRow)}
-            namePin={namePin}
+            renamePinned={renamePinned}
             settle={(row) => settle([row])}
           />
         )}
