@@ -76,8 +76,7 @@ impl Gateway {
         };
         self.review.ingest(message, recorded.is_new);
         if recorded.is_new && method == "thread/name/updated" {
-            self.live_activity_title_revision
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.invalidate_live_activity_title(thread_id.as_deref());
             self.refresh_live_activity().await;
         }
         if recorded.is_new

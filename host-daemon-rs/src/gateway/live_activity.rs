@@ -231,6 +231,21 @@ impl Gateway {
         *self.apns_live_activity_task.lock().await = Some(live_activity_task);
     }
 
+    pub(super) fn invalidate_live_activity_title(&self, thread: Option<&str>) {
+        let mut pending = self
+            .live_activity_title_invalidations
+            .lock()
+            .expect("Live Activity title invalidations poisoned");
+        match (pending.as_mut(), thread) {
+            (Some(threads), Some(thread))
+                if threads.len() < MAX_FINISHED_TURNS || threads.contains(thread) =>
+            {
+                threads.insert(thread.to_owned());
+            }
+            _ => *pending = None,
+        }
+    }
+
     pub(super) async fn refresh_live_activity(&self) {
         let snapshot = active_tasks_live_activity_snapshot(&*self.core.lock().await);
         self.publish_live_activity(snapshot).await;
@@ -353,9 +368,6 @@ impl Gateway {
         mut rx: watch::Receiver<ActiveTasksLiveActivitySnapshot>,
     ) {
         let mut titles = HashMap::new();
-        let mut title_revision = self
-            .live_activity_title_revision
-            .load(std::sync::atomic::Ordering::Acquire);
         rx.mark_changed();
         let mut retrying = false;
         loop {
@@ -369,12 +381,20 @@ impl Gateway {
             }
             tokio::time::sleep(COALESCE_WINDOW).await;
             let snapshot = rx.borrow_and_update().clone();
-            let current_revision = self
-                .live_activity_title_revision
-                .load(std::sync::atomic::Ordering::Acquire);
-            if current_revision != title_revision {
-                titles.clear();
-                title_revision = current_revision;
+            let invalidations = {
+                let mut pending = self
+                    .live_activity_title_invalidations
+                    .lock()
+                    .expect("Live Activity title invalidations poisoned");
+                std::mem::replace(&mut *pending, Some(Default::default()))
+            };
+            match invalidations {
+                Some(threads) => {
+                    for thread in threads {
+                        titles.remove(&thread);
+                    }
+                }
+                None => titles.clear(),
             }
             let probe = rx.clone();
             let projection = tokio::select! {
