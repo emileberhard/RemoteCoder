@@ -24,6 +24,7 @@ import {
   SquarePen,
   TextCursorInput,
   UnfoldVertical,
+  WandSparkles,
   Zap,
 } from "lucide-react";
 import { useEffect } from "react";
@@ -43,6 +44,7 @@ export type ChatCommand =
   | "toggleFastMode"
   | "togglePin"
   | "rename"
+  | "regenerateName"
   | "copyReference"
   | "settle"
   | "markUnread"
@@ -89,6 +91,7 @@ export const chatCommands: Record<ChatCommand, Definition> = {
   toggleFastMode: { title: "Fast Mode", Icon: Zap, inPalette: true },
   togglePin: { title: "Pin", Icon: Pin, inPalette: true },
   rename: { title: "Rename…", Icon: Pencil, inPalette: true },
+  regenerateName: { title: "Regenerate Name", Icon: WandSparkles, inPalette: true },
   copyReference: { title: "Copy Thread ID", Icon: Copy, inPalette: true },
   settle: {
     title: "Settle Conversation",

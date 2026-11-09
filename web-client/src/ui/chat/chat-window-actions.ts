@@ -45,6 +45,8 @@ export function useChatWindowActions(chatWindow: ChatWindow): ChatWindowActions 
             return row?.isPinned != null;
           case "rename":
             return row?.canRename === true;
+          case "regenerateName":
+            return row?.canRegenerateName === true;
           case "settle":
             return row !== undefined && (row.settlement === "settled" || row.canSettle);
           case "markUnread":
@@ -80,7 +82,7 @@ export function useChatWindowActions(chatWindow: ChatWindow): ChatWindowActions 
           case "toggleInspector":
             return chatWindow.inspectorOpen ? "Hide Inspector" : "Show Inspector";
           case "togglePin":
-            return row?.isPinned ? "Unpin" : "Pin…";
+            return row?.isPinned ? "Unpin" : "Pin";
           case "copyReference":
             return link ? "Copy Link" : "Copy Thread ID";
           case "settle":
@@ -128,6 +130,8 @@ export function useChatWindowActions(chatWindow: ChatWindow): ChatWindowActions 
             return run(() => workspace.pinConversation(address, row.title));
           case "rename":
             return address && row && chatWindow.renameChat({ address, name: row.title });
+          case "regenerateName":
+            return address && run(() => workspace.regenerateTitle(address));
           case "copyReference":
             return address && run(() => navigator.clipboard.writeText(link ?? address.threadId));
           case "settle":
