@@ -133,12 +133,20 @@ impl Gateway {
     pub(super) async fn spawn_claude_restart_recovery(self: &Arc<Self>) {
         let gateway = Arc::clone(self);
         let task = tokio::spawn(async move {
-            gateway.recover_claude_restart().await;
-            if let Some(agent) = gateway.claude_agent()
-                && gateway.claude_recovery_ready.load(Ordering::Acquire)
-            {
-                gateway.claude_queue_loop(agent).await;
-            }
+            let recovery = async {
+                gateway.recover_claude_restart().await;
+                if let Some(agent) = gateway.claude_agent() {
+                    agent.sweep_queue_drains();
+                }
+            };
+            let drains = async {
+                if let Some(agent) = gateway.claude_agent()
+                    && gateway.serves_claude_queue()
+                {
+                    Arc::clone(&gateway).claude_queue_loop(agent).await;
+                }
+            };
+            tokio::join!(recovery, drains);
         });
         *self.claude_recovery_task.lock().await = Some(task);
     }
@@ -680,6 +688,18 @@ mod tests {
         Arc<ClaudeSupervisor>,
         tokio_util::task::AbortOnDropHandle<()>,
     ) {
+        let started = claude_gateway(stub);
+        started.0.mark_listening();
+        started
+    }
+
+    fn claude_gateway(
+        stub: &StubClaude,
+    ) -> (
+        Arc<Gateway>,
+        Arc<ClaudeSupervisor>,
+        tokio_util::task::AbortOnDropHandle<()>,
+    ) {
         let gateway = Gateway::with_state_paths(
             Arc::new(CodexAppServer::new(
                 PathBuf::from("/bin/true"),
@@ -699,7 +719,6 @@ mod tests {
             McpTokens::default(),
         );
         gateway.set_claude_agent(Arc::clone(&agent));
-        gateway.mark_listening();
         let owner = gateway.clone();
         let ingress = tokio::spawn(async move { owner.claude_notification_loop(events).await });
         (
@@ -707,6 +726,57 @@ mod tests {
             agent,
             tokio_util::task::AbortOnDropHandle::new(ingress),
         )
+    }
+
+    #[tokio::test]
+    async fn queues_drain_while_another_conversations_recovery_still_waits() {
+        const OTHER: &str = "claude_99999999-2222-4333-8444-555555555555";
+        let stub = StubClaude::new();
+        crate::providers::claude::restart::Store::beside(&stub.turn_state_path())
+            .write(
+                &crate::providers::claude::restart::Journal::capture(
+                    None,
+                    vec![stub.item(SESSION, ItemStatus::Captured)],
+                    None,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let (gateway, agent, _ingress) = claude_gateway(&stub);
+        gateway.open_claude_queue().await;
+        let input = json!([{"type": "text", "text": "queued"}]);
+        let mut compactions = Vec::new();
+        for thread in [THREAD, OTHER] {
+            agent.queue_add(thread, "m", input.clone()).await.unwrap();
+            compactions.push(gateway.admission.admit_compaction(thread).unwrap());
+        }
+        gateway.spawn_claude_restart_recovery().await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while agent.queue_deferral(OTHER).is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("another conversation's queue drains while recovery waits");
+        assert!(
+            gateway
+                .claude_restart
+                .has_pending_for(THREAD)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            agent.queue_deferral(THREAD),
+            None,
+            "the recovering conversation's own queue waits for its resume"
+        );
+        assert_eq!(
+            agent.queued_messages(THREAD).await.unwrap().entries.len(),
+            1
+        );
+        let task = gateway.claude_recovery_task.lock().await.take().unwrap();
+        task.abort();
+        let _ = task.await;
     }
 
     #[tokio::test]

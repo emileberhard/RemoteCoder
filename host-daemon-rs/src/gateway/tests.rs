@@ -241,9 +241,7 @@ fn method_specs_keep_owned_routing_and_request_budgets() {
     ));
 }
 
-#[tokio::test]
-async fn host_info_reports_the_gateway_home_directory() {
-    let gateway = test_gateway();
+pub(super) async fn host_info_reply(gateway: &Arc<Gateway>) -> Value {
     let (tx, mut rx) = mpsc::channel(1);
     let mut object = request("host/info", json!({}));
     object.insert("id".to_string(), json!(7));
@@ -258,14 +256,20 @@ async fn host_info_reports_the_gateway_home_directory() {
     let Some(ClientCommand::Text(text)) = rx.recv().await else {
         panic!("expected a JSON reply")
     };
-    let reply: Value = serde_json::from_str(&text).expect("reply json");
+    serde_json::from_str(&text).expect("reply json")
+}
+
+#[tokio::test]
+async fn host_info_reports_the_gateway_home_directory() {
+    let gateway = test_gateway();
+    let reply = host_info_reply(&gateway).await;
     let home = std::env::var("HOME").expect("HOME");
     assert_eq!(reply["id"], 7);
     assert_eq!(reply["result"]["homeDirectory"], home);
     assert_eq!(reply["result"]["speechAvailable"], true);
     assert_eq!(
-        reply["result"]["claudeQueue"],
-        gateway.claude_settings.enabled
+        reply["result"]["claudeQueue"], false,
+        "no queue loop runs before the gateway starts Claude"
     );
     assert_eq!(
         reply["result"]["automationsAuthority"],

@@ -164,6 +164,11 @@ impl ClaudeSupervisor {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn queue_deferral(&self, thread_id: &str) -> Option<String> {
+        self.queue_drains.deferrals().get(thread_id).cloned()
+    }
+
     pub(crate) fn defer_queue(&self, thread_id: &str, reason: &str) -> bool {
         let mut deferrals = self.queue_drains.deferrals();
         if deferrals.get(thread_id).is_some_and(|last| last == reason) {

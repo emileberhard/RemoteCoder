@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
@@ -33,7 +34,26 @@ fn started_turn(turn_id: &str) -> Value {
 }
 
 impl Gateway {
+    pub(super) async fn open_claude_queue(&self) {
+        let Some(agent) = self.claude_agent() else {
+            return;
+        };
+        match agent.wait_for_notification_ingress().await {
+            Ok(()) => self.claude_queue_ready.store(true, Ordering::Release),
+            Err(error) => {
+                warn!(error = %format!("{error:#}"), "Claude queued messages are unavailable");
+            }
+        }
+    }
+
+    pub(super) fn serves_claude_queue(&self) -> bool {
+        self.claude_queue_ready.load(Ordering::Acquire)
+    }
+
     pub(super) async fn claude_queue_add(&self, params: &Value) -> RpcResult {
+        if !self.serves_claude_queue() {
+            return Err(RpcError::queue_unsupported());
+        }
         let thread = required(params, "threadId")?;
         let id = required(params, "clientUserMessageId")?;
         let input = params
@@ -371,6 +391,16 @@ mod tests {
         (gateway, events)
     }
 
+    fn serve_ingress(mut events: mpsc::Receiver<ClaudeNotification>) {
+        tokio::spawn(async move {
+            while let Some(message) = events.recv().await {
+                if let ClaudeNotification::IngressBarrier(acknowledged) = message {
+                    let _ = acknowledged.send(());
+                }
+            }
+        });
+    }
+
     fn add(id: &str) -> Value {
         json!({"threadId": THREAD, "clientUserMessageId": id,
             "input": [{"type": "text", "text": format!("queued {id}")}]})
@@ -405,8 +435,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_queue_is_advertised_and_accepts_adds_only_while_its_drains_can_run() {
+        let (gateway, events) = claude_gateway();
+        drop(events);
+        gateway.open_claude_queue().await;
+        let unsupported = |error: RpcError| {
+            assert_eq!(error.code, RpcCode::MethodNotFound, "{error:?}");
+            assert_eq!(error.kind(), Some("queueUnsupported"));
+        };
+        unsupported(gateway.claude_queue_add(&add("m")).await.unwrap_err());
+        assert_eq!(
+            crate::gateway::tests::host_info_reply(&gateway).await["result"]["claudeQueue"],
+            false,
+            "a gateway whose notification ingress never started does not advertise the queue"
+        );
+
+        let (gateway, events) = claude_gateway();
+        unsupported(gateway.claude_queue_add(&add("m")).await.unwrap_err());
+        serve_ingress(events);
+        gateway.open_claude_queue().await;
+        assert_eq!(
+            crate::gateway::tests::host_info_reply(&gateway).await["result"]["claudeQueue"],
+            true
+        );
+        gateway.claude_queue_add(&add("m")).await.unwrap();
+        assert_eq!(
+            gateway
+                .claude_agent()
+                .unwrap()
+                .queued_messages(THREAD)
+                .await
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn an_unreadable_queue_refuses_an_add_definitely() {
-        let (gateway, _events) = claude_gateway();
+        let (gateway, events) = claude_gateway();
+        serve_ingress(events);
+        gateway.open_claude_queue().await;
         let file = crate::providers::claude::queued_messages::path(
             &gateway.claude_settings.claude_home,
             THREAD,

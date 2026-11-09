@@ -94,7 +94,7 @@ impl Gateway {
             }
             OwnedRoute::HostInfo => host_info(
                 self.claude_settings.router.is_some(),
-                self.claude_settings.enabled,
+                self.serves_claude_queue(),
             ),
             OwnedRoute::ModelList => self.model_list(params).await,
             OwnedRoute::Rename => self.rename_thread(&params).await,

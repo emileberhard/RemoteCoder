@@ -284,6 +284,7 @@ pub(crate) struct Gateway {
     claude_restart: ClaudeRestartDriver,
     claude_recovery_task: Mutex<Option<JoinHandle<()>>>,
     claude_recovery_ready: AtomicBool,
+    claude_queue_ready: AtomicBool,
     control: control::ControlConnection,
     native_mutation_transport: Mutex<Option<NativeMutationTransport>>,
     native_mutations: native_mutations::PendingNativeMutations,
@@ -481,6 +482,7 @@ impl Gateway {
             identity: tokio::sync::OnceCell::new(),
             cluster_link: tokio::sync::OnceCell::new(),
             claude_recovery_ready: AtomicBool::new(!claude_settings.enabled),
+            claude_queue_ready: AtomicBool::new(false),
             review: conversation_review::Runtime::new(
                 gateway.clone(),
                 claude_settings.router.clone(),
@@ -685,6 +687,7 @@ impl Gateway {
                 )
             };
             *self.claude_notification_task.lock().await = Some(claude_notification_task);
+            self.open_claude_queue().await;
             self.jobs
                 .apply_pending_stops(crate::agents::jobs::model::Provider::Claude)
                 .await?;
