@@ -182,8 +182,9 @@ HTTP response, or as `upstreamRejected` on a WebSocket connect.
 
 The gateway reviews completed turns for both Codex and Claude. Titles apply only
 to user turns with a native name or preview and a readable latest user request. Done
-suggestions also apply to agent-initiated turns. Pins, purpose rows and delegated
-agents are excluded from both questions; threads must be idle and non-ephemeral. A
+suggestions also apply to agent-initiated turns. Purpose rows and delegated
+agents are excluded from both questions; user-chosen names are excluded from
+automatic titles, and pins from done suggestions. Threads must be idle and non-ephemeral. A
 text snapshot reads the entire conversation in chronological native item pages.
 It keeps user and assistant text in full and reduces tools to their type and a
 short name; tool arguments, output, patches and attachments are excluded.
@@ -257,8 +258,8 @@ Early titles do not wait for the first turn to finish. Fifteen seconds after a
 conversation's first `turn/started`, the gateway asks the same writer for a
 title while the turn runs, so the answer sees the agent's early exploration. No
 judge is involved. It applies only to an unnamed, non-ephemeral thread whose only
-turn is that one, still in progress, with a user message; pins, purpose rows and
-delegated agents are excluded. A turn that already finished belongs to the
+turn is that one, still in progress, with a user message; user-chosen names,
+purpose rows and delegated agents are excluded. A turn that already finished belongs to the
 completed-turn review, which also judges an early title like any other. Each
 `turn/started` first checks the name and turn count, so only a plausible first
 turn holds one of the 32 early-title slots per gateway account context through
@@ -269,7 +270,8 @@ the same owner as reviewed renames, so a manual rename in the meantime wins.
 new title on demand, without a judge, and returns `{"name": ...}`. The question
 names the current title to replace; an echo gets one repair question and a
 second echo fails the request. Because the user asked, pins, purposes, delegated
-agents and an existing manual name do not exclude the thread. It is new work
+agents and an existing manual name do not exclude the thread. The request clears
+the user-chosen-name protection. It is new work
 for either provider: a draining gateway refuses it, and it holds account and
 conversation admission while the writer runs.
 
@@ -286,8 +288,9 @@ rotation applies on the next completed turn. An unreadable key fails the check.
 Both providers share their host's key and one request slot.
 
 Checks are best effort: busy slots drop work until a later turn, and a failed
-consumer leaves its own state unchanged. Pinned names, probes, automations, ephemeral threads
-and delegated agents are excluded. New activity in that thread or a native
+consumer leaves its own state unchanged. Probes, automations, ephemeral threads
+and delegated agents are excluded from both questions. User-chosen names exclude
+automatic titles; pins exclude done suggestions. New activity in that thread or a native
 rename invalidates pending title work, and the native title, latest completed turn, text and marks are
 checked again before renaming through the existing provider naming path.
 Shutdown cancels owned tasks. Every new completion gets a correlated `review`

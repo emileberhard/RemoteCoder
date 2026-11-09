@@ -33,6 +33,6 @@ Unknown keys remain with their owning client. Values native defaults cannot repr
 | `codex.fastModeEnabled` | Last Fast choice, default false; applied only to models supporting Fast. |
 | `appearance.selectedThemeID` | Native theme ID; absent/unrecognized uses Caribbean Sunset in memory. |
 
-Pinned conversations are **not synced preferences** in native apps. Their per-host pin-name stores, drawer folds/filter, working directories, host/installation identities, notifications and haptics stay device-local. No Pinned replica is invented here. Drawer mode, account nicknames, transcription, automatic speech and realtime voice stay with native clients until a browser feature consumes them.
+Pinned conversations are **not synced preferences**. Their per-host flags use the gateway's conversation marks replica, shared with native clients. Drawer folds/filter, working directories, host/installation identities, notifications and haptics stay device-local. Drawer mode, account nicknames, transcription, automatic speech and realtime voice stay with their existing owners.
 
 The initial Codex model comes from `NewChatDefaults.initialCodexModelID` through the existing native model generator (`bun scripts/generate-native-models.ts`), alongside the Claude catalog. Its generated `src/protocol/native-model-defaults.json` is consumed by the workspace and verified against the owning Swift source; do not add another fallback model constant.
