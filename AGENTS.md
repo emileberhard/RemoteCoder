@@ -160,8 +160,9 @@ the private [operations entrypoint](https://github.com/emileberhard/RemoteCoder-
     only for a change spanning that coverage or an explicit user request. State
     the reason and select the smallest relevant suite; it is never a routine
     prerequisite for a gateway change, cleanup, merge, or release.
-  - **Releases:** the release workflow requires green main CI on the exact tagged commit (see
-    [Releasing](#releasing)). Run any relevant targeted iOS tests and live
+  - **Releases:** tag without waiting for CI. The store track requires green
+    main CI on the exact tagged commit and maintainer delivery runs its own
+    checks (see [Releasing](#releasing)). Run any relevant targeted iOS tests and live
     probes according to the changed behavior above before tagging.
 - `scripts/build_cache.py` owns the total RemoteCoder-Build cap, including pinned
   data and every sub-owner. Reclaim only proven rebuildable payloads under their
@@ -216,11 +217,14 @@ hosted rendering/history suites. Each macOS lane skips when a main push or
 same-repository pull request already passed its exact inputs: the top-level
 entries it can read. The `reuse` job owns each lane's excluded entries; when a
 lane starts reading another top-level path, stop excluding it there. The `passed`
-job records passing lanes and is the single verdict. Release admission waits for that exact main CI
+job records passing lanes and is the single verdict. The release's store track waits for that exact main CI
 commit; releases do not rerun it. `scripts/select-xcode` selects `.xcode-version`
 without changing the host's default Xcode.
 
-The public tag workflow reserves the next global App Store Connect build
+A tag starts two public workflows. `Delivery` admits the tag and hands it to
+maintainer delivery at once; it shares no concurrency group, so a new release
+never waits behind an earlier one's store track. `Release` waits for green main
+CI before any store credential is used. It reserves the next global App Store Connect build
 number shared by both platforms, retains the exact reservation for retries, archives iOS and macOS on
 hosted runners and cloud-signs checked App Store exports. `Config/entitlements-*.json`
 covers every shipped bundle. The upload fence checks earlier attempts' upload
@@ -236,9 +240,10 @@ The protected `testflight` environment supplies `APP_BUNDLE_ID`, the ASC key,
 releaseConfig) and the optional Maps key. Provider and gateway credentials never
 enter release bundles. `scripts/release-config.py` validates this boundary.
 
-The public workflow also hands the exact tag, commit and run ID to the private
+`Delivery` hands the exact tag, commit and its run ID to the private
 [operations entrypoint](https://github.com/emileberhard/RemoteCoder-deploy/blob/main/AGENTS.md).
-It independently admits the tag and successful public CI before running the
+It independently admits the tag and checks the commit on its own hosts, rather
+than waiting for hosted CI, before running the
 Mini's gateway build and planned restart/recovery. It independently archives the
 same commit locally for ad hoc iPhone and Developer ID Mac delivery, preserving
 the existing semver-derived direct build numbers, cache/capacity leases and host

@@ -13,15 +13,24 @@ live in Config/InfoPlists; private local configuration stays ignored by filename
 Public CI compiles every shipping platform and test target and runs the existing
 70 product checks on an iPhone 17 Pro running iOS 27.0. CI explicitly boots the
 device and waits for `simctl bootstatus -b`, preserving the existing worker's
-device/runtime and boot-readiness boundary. The public tag workflow admits
+device/runtime and boot-readiness boundary. A tag starts two public workflows.
+`Delivery` hands the admitted tag to private delivery at once and has no
+concurrency group, so a newer tag's handoff never queues behind an earlier
+release's store track; the private workflow serializes delivery and re-admits
+the tag. `Release` admits
 the exact green main commit before exposing signing credentials, reserves
 one ASC build number shared by both platforms and persists
 one reservation artifact per run. Archives, verified exports and signed entitlement
 checks run on hosted macOS. This keeps public repositories free of personal
 runners and avoids billed hosted builds in the private deployment repository.
 
-The private workflow independently checks tag identity, main ancestry, ordering,
-the public release run and green main CI. Only it may use personal runners. The Linux lane uses a private
+The private workflow independently checks tag identity, main ancestry, ordering
+and the public release run, then runs the release checks on its own hosts:
+`verify-all` on the Mac and `scripts/gateway-check.py cargo` on Linux. Hosted CI
+took 14 to 27 minutes and the same checks take about six on the Mac, so waiting
+for it was most of the time from tag to device. Hosted CI still gates the store
+track, which means a release can reach the operator's hosts while its store
+upload fails; the next patch fixes that. Only the private workflow may use personal runners. The Linux lane uses a private
 runner and the public `scripts/build-linux-host.py` bundle contract: one native
 gateway, the target-approved complete Codex package, the verified Claude
 executable, licenses and the user systemd unit. The tag supplies the same version
@@ -38,6 +47,9 @@ the existing monotonic semver-derived build numbers; hosted App Store builds use
 the ASC reservation. Neither path depends on the other's build numbers.
 
 The release cache publishes the direct artifacts and dSYMs for fleet catch-up.
+The gateway deploy and the direct deliveries may finish in either order: a
+delivered platform joins the publication when the gateway publishes, or
+attaches to it afterwards.
 The Mac direct completion marker replaces the old App Store package as the
 publication boundary. Existing releases through 3.73.0 keep their old package
 marker so retained signed cache entries remain readable. Both paths verify
@@ -88,7 +100,7 @@ titles are presentation only. The receipt reuses the existing release-state
 artifact owner and needs no additional cross-repository token permission. Main
 CI uses a distinct group per pushed SHA and never cancels an admitted commit
 when a newer push arrives. The explicit `gateway-release` build kind builds its binary
-and checks runtime approval without repeating green CI fmt, clippy or tests.
+and checks runtime approval without repeating the gate's fmt, clippy or tests.
 Retained gateway copies are signature/identity checked before reuse; new copies
 are verified under a .partial sibling and renamed before deployment.
 
