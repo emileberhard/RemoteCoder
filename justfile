@@ -120,7 +120,9 @@ scripts-test-local:
     #!/usr/bin/env bash
     set -euo pipefail
     unset $(compgen -e | grep '^RC_' || true)
-    uv run --project dev-tools --locked --quiet python -m unittest discover -s scripts/tests -p 'test_*.py'
+    printf '%s\n' scripts/tests/test_*.py | xargs -n 1 basename |
+        uv run --project dev-tools --locked --quiet xargs -P "$(getconf _NPROCESSORS_ONLN)" -n 1 \
+            python -m unittest discover -s scripts/tests -p
 
 [private]
 tools-test-local: dev-tools-test-local agent-calls-test-local scripts-test-local
