@@ -2090,17 +2090,22 @@ The authenticated health summary exposes the corresponding `activeTurnCount` and
 `activeTurnInventoryAvailable`; a zero count proves idleness only when that
 availability flag is true.
 
-Queued messages are Codex-only and natively owned. Codex's durable per-thread
-queue (`thread/queue/*`) is the only queue and scheduler: it starts the oldest
-message as its own turn when the running one completes or fails, and pauses
-after an interrupt until `thread/queue/start`. The gateway governs the add, start
-and delete mutations like other new work, refuses every queue method on a
-`claude_` thread, and keeps a bounded durable lease of the messages it queued so
-a successor turn is attributed by its `clientUserMessageId`, never by position,
+Queued messages share one wire contract (`thread/queue/*`) and one scheduler per
+thread: the oldest message starts as its own turn when the running one
+completes or fails, and the queue pauses after an interrupt until
+`thread/queue/start`. On Codex threads Codex's durable native queue is that
+scheduler; the gateway governs the add, start and delete mutations like other
+new work and keeps a bounded durable lease of the messages it queued, so a
+successor turn is attributed by its `clientUserMessageId`, never by position,
 and is reported through the same journal, APNs and Live Activity path while the
-app is away. `thread/queue/changed` is stored like other thread notifications;
-clients read `thread/queue/list` after it, on reconnect and after relaunch.
-`host-daemon-rs/AGENTS.md` (*Gateway RPCs*) owns the contract.
+app is away. On `claude_` threads the gateway owns the queue (`QueuedMessages`
+beside the thread's identity index) and its drain owner starts each head
+through the ordinary `turn/start` admission and capture path, so the same
+attribution and reporting apply; `host/info.claudeQueue` advertises it.
+`thread/queue/changed` is stored like other thread notifications; clients read
+`thread/queue/list` after it, on reconnect and after relaunch.
+`host-daemon-rs/AGENTS.md` (*Gateway RPCs*, and *Claude provider* for the
+Claude queue) owns the contract.
 
 Conversation agent inspection preserves collected native headers when optional
 execution enrichment is incomplete. External jobs and exact ancestry come from

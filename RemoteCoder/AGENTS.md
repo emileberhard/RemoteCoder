@@ -664,23 +664,24 @@ entrypoint linked above.
   that replaces their rows (`ConversationState.takeDiscardedSteers`). If
   quiescence or retirement revokes dispatch while that merge persists, the
   merged receipt persists as "Not sent", retaining its input and attachments
-  across Keep Open and cold recovery. With no such steer, Codex reads its server
-  queue and starts the first FIFO entry,
+  across Keep Open and cold recovery. With no such steer, a thread whose
+  gateway serves its queue reads that queue and starts the first FIFO entry,
   including messages queued by another device. Failed queue reads stay unknown.
   Stop with nothing pending ends the work; retirement cancels the continuation.
-- A queued message (Codex only) lives in Codex's server-owned thread queue,
-  never in an app-side execution queue. Its submission carries a queue receipt;
+- A queued message lives in its thread's server-owned queue, never in an
+  app-side execution queue: Codex's native queue, or the gateway's Claude queue
+  where `host/info.claudeQueue` is true (`ChatTargetModel.supportsQueue`). Its submission carries a queue receipt;
   its row stays in its own `local-` turn below every turn that starts before it
   (`ConversationState.ensureTurn`) and reads "Queueing", "Queued", "Not sent"
-  or "Unconfirmed". `thread/queue/add` is not idempotent, so an uncertain add
-  is never resent. Membership comes only from `thread/queue/list`, matched by
+  or "Unconfirmed". Codex's `thread/queue/add` is not idempotent, so an
+  uncertain add is never resent on either provider. Membership comes only from `thread/queue/list`, matched by
   `clientUserMessageId` and read after `thread/queue/changed`, on opening and
   after a failed action, behind a read fence. Absence unconfirms a receipt only
   when the same read confirms the thread idle, because a started entry leaves
   the queue before its canonical user item arrives. A restored receipt is
   unconfirmed until listed. The canonical `userMessage` with the matching
   `clientId` moves the row into its turn as an ordinary first message. Stop
-  pauses the queue (Codex skips dispatch after an interrupt); a queued row
+  pauses the queue (both providers skip dispatch after an interrupt); a queued row
   offers Send Now (`thread/queue/start`, only while no turn runs) and Remove
   from Queue (`thread/queue/delete`).
 - A delivery failure stays on its own row: the label carries the submission's
@@ -1043,8 +1044,8 @@ entrypoint linked above.
     view is first responder, `AppKeyMonitor` moves focus to the key window's
     composer first; the sidebar keeps type-select, and Space and control keys pass
     through. Switching conversations keeps composer focus.
-  - While a Codex turn runs and the draft is an ordinary message, the send
-    control is an `AppMenu` with a primary action: a tap or Return steers, and
+  - While a turn runs in a thread whose gateway serves its queue and the draft
+    is an ordinary message, the send control is an `AppMenu` with a primary action: a tap or Return steers, and
     a long press (click and hold on the Mac) offers Steer and Queue. Queue keeps
     the keyboard up and is also a named accessibility action.
     Shift- or Option-Return inserts a newline, and Return never sends while IME

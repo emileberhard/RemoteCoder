@@ -44,6 +44,7 @@ surface:
 | Agent tools on both providers | `just gateway-e2e-agent-tools-live` |
 | iPhone tool transport, image inference and saved originals | `just gateway-e2e-device-tools-live` |
 | Codex queued messages (FIFO successor turns with their canonical `clientId`, none in the running turn, idle afterwards, held after Stop, Send Now; creates a thread) | `just gateway-e2e-queue-live` |
+| Claude queued messages (isolated gateway, host router: FIFO successor turns with their canonical `clientId`, none in the running turn, Remove from Queue, idle afterwards, held after Stop, Send Now, scoped `thread/queue/changed`, survival across a planned restart) | `just gateway-e2e-claude-queue-isolated /absolute/gateway/binary` |
 | File upload handoff on both providers | `just gateway-e2e-upload-live` |
 | Voice resume context | `just voice-probe-resume-context` |
 
@@ -455,19 +456,22 @@ blocks startup or provider journal retirement.
   A turn that ends between the check and the interrupt still has its running
   descendants interrupted, and the pinned app-server can leave that late
   parent interrupt unanswered until the 30 s control timeout (`-32603`).
-- Queued messages are Codex's native durable queue (`src/gateway/queue.rs`),
-  the only queue and scheduler. Codex starts the oldest message as its own turn
-  after the running one completes or fails and pauses the queue after an
-  interrupt.
+- Queued messages run as their own turns, oldest first, after the running one
+  completes or fails, and pause after an interrupt. Codex threads use Codex's
+  native durable queue (`src/gateway/queue.rs`); `claude_` threads use the
+  gateway-owned queue under *Claude provider* (*Queued messages*). Each thread
+  has exactly one queue and one scheduler.
   - `thread/queue/add` (`{threadId, input, clientUserMessageId}`),
     `thread/queue/start` (`{threadId, queuedSubmissionId?}`) and
     `thread/queue/delete` (`{threadId, queuedSubmissionId}`) are governed
-    native mutations: conversation admission, identity, the client-owner takeover
-    check, the compaction guard (`-32009`) and the per-thread native-mutation
-    marker apply, so a second change is refused while one is unverified.
-    `thread/queue/list` passes through; update and reorder are not served.
-  - Any `thread/queue/*` on a `claude_` thread is refused before routing with
-    `-32601`, `data.kind` `queueUnsupported` and `retryable: false`.
+    mutations on both providers: conversation admission, identity, the
+    client-owner takeover check and the compaction guard (`-32009`) apply. On
+    Codex the per-thread native-mutation marker also applies, so a second
+    change is refused while one is unverified. `thread/queue/list` passes
+    through on Codex and is a gateway query on Claude.
+  - Update and reorder are not served: on a `claude_` thread they are refused
+    before routing with `-32601`, `data.kind` `queueUnsupported` and
+    `retryable: false`.
   - The gateway leases the messages it queues: `queued_submissions` in the turn
     state, written before Codex sees the add, at most 100 per thread and 256
     threads (`-32001`, `capacity`). A native refusal removes the entry. An
@@ -527,7 +531,7 @@ blocks startup or provider journal retirement.
   correlated to its request (`src/rpc/upstream_errors.rs`), pinned by a test to
   the fork commit in `docs/codex/compatibility.json`.
 - `host/info` returns the gateway process's `homeDirectory`, physical `hostname`,
-  `automationsAuthority`, `speechAvailable` and `fleetLiveActivity` capabilities. These are the
+  `automationsAuthority`, `speechAvailable`, `fleetLiveActivity` and `claudeQueue` capabilities. These are the
   authoritative inputs for client feature availability and physical-host routing.
   Missing capabilities stay unknown/unavailable, never guessed from a display
   name. It is the only way a client learns the home directory; `command/exec` serves
@@ -1689,6 +1693,53 @@ Claude. The `RC_CLAUDE_*` settings are in
     through this check. A missing transcript never creates an empty session under
     an existing id.
   - Busy threads are refused per thread; there is no host-wide Claude turn cap.
+- **Queued messages are gateway-owned.** `QueuedMessages`
+  (`src/providers/claude/queued_messages.rs`) keeps one private
+  `remotecoder-history/<key>.queue` file per thread beside `.minted`, written
+  under that thread's shared private-state lock and removed when empty. An
+  unreadable or unknown-version file fails visibly and is never overwritten.
+  Each entry's id is the client's `clientUserMessageId`, which is also its
+  `queuedSubmissionId`. Growth beyond 1 MiB of encoded input per message
+  (`claude/message`'s bound), 100 messages or 8 MiB per thread, 256 threads or
+  32 MiB in total is refused with typed `capacity` (`-32001`); nothing is
+  evicted. `host/info.claudeQueue` advertises the path.
+  - `thread/queue/add` is idempotent for the same id and input. A different
+    input under a queued id, or an id the thread already ran, is running or
+    carries in restart recovery, is refused with `-32009` and no new entry.
+    `thread/queue/list` pages entries (1–100, an opaque string cursor) and adds
+    `hold {reason: refused | newerTurns, message}` while held.
+    `thread/queue/start` is Send Now: it starts the named entry, or the first,
+    only while the thread is idle, and answers like Codex
+    (`-32600` "thread already has an active or pending turn" otherwise). It
+    bypasses a Stop and a hold. `thread/queue/delete` returns `{deleted}`; an
+    entry whose start is in flight stays and returns false.
+  - Every committed change emits `thread/queue/changed`, which is stored and
+    routed like other scoped Claude content.
+  - The supervisor requests a drain when a turn completes or its stream fails.
+    The drain owner (`src/gateway/claude_queue.rs`) starts after Claude restart
+    recovery inside the same task slot, so shutdown aborts it, and it runs at
+    most four threads at a time with a 30 s sweep for deferred work. It admits
+    the head through the ordinary `turn/start` admission, dispatch validation
+    and turn-context capture. A head starts only when the thread has no turn,
+    no start reservation and no unconsumed input, so it never folds into a
+    running or agent-initiated turn, and it runs with the thread's recorded
+    model, effort, Fast and cwd. A takeover, compaction or start reservation
+    defers it without counting a failure.
+  - Starting claims the entry under the lifecycle lock. It leaves the queue
+    exactly when its turn opened or the runtime holds its input; otherwise it
+    returns to the queue. A claim found later is settled from the session
+    transcript: a recorded id is dropped, any other is requeued.
+  - Stop (`Parent.stopped`) pauses the queue. A refusal that will persist
+    (invalid params, capacity or an unavailable provider), or three
+    consecutive start failures, holds it as `refused` and sends one push. At
+    startup, a user turn newer than the oldest entry, other than a restart
+    continuation, holds it as `newerTurns`. A user turn, typed or
+    queue-started, clears the Stop and the hold.
+  - An unheld, non-empty queue counts as pending work, so a job thread is not
+    closed as quiescent while it would still run. A queued add records its
+    installation as the `take_photo` driver, which the queue-started turn keeps.
+  - The queue file is not part of restart capture: it survives as is, the
+    resumed turn runs first, and the drain owner starts the head afterwards.
 - **A fork copies the conversation through a finished turn.** `thread/fork` on
   a `claude_…` thread runs in the source's host-default Claude profile
   (`src/gateway/claude_fork.rs`).
