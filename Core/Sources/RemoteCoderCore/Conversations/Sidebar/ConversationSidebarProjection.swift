@@ -20,6 +20,7 @@ struct ConversationSidebarRow: Identifiable, Equatable, Sendable {
     let isSelected: Bool
     let isLoading: Bool
     let activity: CodexGatewayDaemon.ActivityState?
+    var supportsIndependentNames = false
     var isAutomation = false
     var questionCount: Int? = nil
     var settlement: Settlement = .unavailable
@@ -236,7 +237,7 @@ enum ConversationSidebarProjection {
         guard marks.offersSettlement, !thread.isDelegatedAgent else { return .unavailable }
         let live = ConversationDrawerRank(thread, activity: activity, questionAskTimes: questionAskTimes,
                                           waitingSince: waitingSince, marks: marks, settlementEdit: settlementEdit, at: now)
-        return marks.pinName(for: thread.id) == nil && held(live, captured).isSettled ? .settled : .unsettled
+        return !marks.isPinned(thread.id) && held(live, captured).isSettled ? .settled : .unsettled
     }
 
     private static func drawerRank(of thread: ConversationHeader, on host: ConversationSidebarHostInput,
@@ -290,8 +291,9 @@ enum ConversationSidebarProjection {
                 let isUnread = live.isUnread
                 if host.marks.purpose(of: thread.id) == .probe, !live.isLive, !isSelected { continue }
                 let pinnedName = host.marks.pinName(for: thread.id)
+                let isPinned = host.marks.isPinned(thread.id)
                 let isAutomation = host.marks.purpose(of: thread.id) == .automation
-                let isSettled = pinnedName == nil && rank.isSettled && !(arrangement.unreadOnly && isUnread)
+                let isSettled = !isPinned && rank.isSettled && !(arrangement.unreadOnly && isUnread)
                 if arrangement.unreadOnly, !isSelected, isSettled || (!isUnread && !rank.isUnread) { continue }
                 let sidebarDate = Date(timeIntervalSince1970: TimeInterval(thread.latestActivityAt))
                 let row = ConversationSidebarRow(
@@ -305,11 +307,12 @@ enum ConversationSidebarProjection {
                     dateLabel: dateLabel(sidebarDate),
                     ageLabel: ConversationSidebarDate.age(of: sidebarDate, now: now),
                     workingDirectory: condensedPaths.condensedPath(thread.cwd, remoteHomePath: host.remoteHomePath),
-                    isPinned: pinnedName != nil,
+                    isPinned: isPinned,
                     isUnread: isUnread,
                     isSelected: isSelected,
                     isLoading: host.loadingThreadID == thread.id,
                     activity: activity,
+                    supportsIndependentNames: host.marks.usesPinFlag,
                     isAutomation: isAutomation,
                     questionCount: questionCount,
                     settlement: !host.marks.offersSettlement ? .unavailable : isSettled ? .settled : .unsettled,
@@ -320,9 +323,8 @@ enum ConversationSidebarProjection {
                 slots.append(Slot(
                     row: row,
                     rank: rank,
-                    pinnedName: pinnedName,
                     isSettled: isSettled,
-                    project: arrangement.mode == .projects && pinnedName == nil && !isSettled && !isAutomation
+                    project: arrangement.mode == .projects && !isPinned && !isSettled && !isAutomation
                         ? project(of: thread, on: host, condensedPaths: condensedPaths) : nil
                 ))
             }
@@ -332,7 +334,7 @@ enum ConversationSidebarProjection {
         var items: [ConversationSidebarItem] = []
         items.reserveCapacity(slots.count + 8)
         let searching = !terms.isEmpty
-        let pinned = slots.prefix { $0.pinnedName != nil }
+        let pinned = slots.prefix { $0.row.isPinned }
         if !pinned.isEmpty {
             let fold = fold(isFolded: arrangement.isPinnedFolded, searching: searching)
             items.append(.pinnedHeader(ConversationSectionSummary(pinned.map(\.row), fold: fold)))
@@ -473,20 +475,19 @@ enum ConversationSidebarProjection {
     private struct Slot {
         let row: ConversationSidebarRow
         let rank: ConversationDrawerRank
-        let pinnedName: String?
         let isSettled: Bool
         let project: Project?
 
         private var sectionOrder: Int { row.isAutomation ? 0 : isSettled ? 2 : 1 }
 
         func precedes(_ other: Slot) -> Bool {
-            switch (pinnedName, other.pinnedName) {
-            case let (name?, otherName?):
-                let order = name.localizedStandardCompare(otherName)
+            switch (row.isPinned, other.row.isPinned) {
+            case (true, true):
+                let order = row.title.localizedStandardCompare(other.row.title)
                 if order != .orderedSame { return order == .orderedAscending }
-            case (.some, nil): return true
-            case (nil, .some): return false
-            case (nil, nil):
+            case (true, false): return true
+            case (false, true): return false
+            case (false, false):
                 if sectionOrder != other.sectionOrder { return sectionOrder < other.sectionOrder }
                 if sectionOrder != 2, rank.tier != other.rank.tier { return rank.tier.rawValue < other.rank.tier.rawValue }
                 if rank.recency != other.rank.recency { return rank.recency > other.rank.recency }

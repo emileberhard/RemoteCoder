@@ -251,7 +251,7 @@ struct HistoryServiceTests {
         #expect(await gateway.headerReads.count == 1)
     }
 
-    @MainActor @Test func unavailablePinnedHeadersBackOffAndNeverAdoptAnotherIdentity() async throws {
+    @MainActor @Test(arguments: [false, true]) func unavailablePinnedHeadersBackOffAndNeverAdoptAnotherIdentity(flagPin: Bool) async throws {
         let hostID = UUID()
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
@@ -259,8 +259,8 @@ struct HistoryServiceTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let gateway = HistoryGatewayFixture()
         let marksStore = ConversationMarksStore(directory: directory)
-        let marks = ConversationMarks(schemaVersion: 2, revision: 1, readBaseline: 0,
-                                      threads: ["missing": ThreadMarks(revision: 1, pinName: "Unloaded pin")])
+        let marks = ConversationMarks(schemaVersion: flagPin ? 5 : 2, revision: 1, readBaseline: 0,
+                                      threads: ["missing": ThreadMarks(revision: 1, pinName: flagPin ? nil : "Unloaded pin", pinned: flagPin)])
         #expect(await marksStore.save(ConversationMarksReplica(acknowledged: marks)))
         let model = ConversationList(service: GatewayHistoryService(gateway: gateway,
             cache: HistoryPageCache(directory: directory.appending(path: "pages"))), marksRemote: gateway,
@@ -273,7 +273,7 @@ struct HistoryServiceTests {
             await model.recoverProtectedHeaders(now: date.addingTimeInterval(TimeInterval(offset + 29)))
             #expect(await gateway.headerReads.count == count)
             #expect(model.threads.isEmpty)
-            #expect(model.unloadedPinnedThreads == ["missing": "Unloaded pin"])
+            #expect(model.unloadedPinnedThreads == ["missing": flagPin ? "Unknown title" : "Unloaded pin"])
         }
         #expect(await gateway.headerReads == Array(repeating: "missing", count: 7))
         await gateway.setCodexHeaders(try [header("missing", time: 1)])

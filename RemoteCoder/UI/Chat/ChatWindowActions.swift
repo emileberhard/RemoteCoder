@@ -88,7 +88,7 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
     case findInConversation, findNext, findPrevious
     case commandPalette, toggleSidebar, toggleInspector, reviewChanges, refresh
     case send, stop, focusComposer, attachFile, toggleFastMode
-    case togglePin, rename, copyReference, showAgents, settle, markUnread
+    case togglePin, rename, regenerateName, copyReference, showAgents, settle, markUnread
     case unreadOnly, markAllRead, collapseAllSections, expandAllSections
     case returnToParent, previousConversation, nextConversation, nextNeedingAttention
 
@@ -116,7 +116,7 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
         case .nextNeedingAttention: KeyboardShortcut("u", modifiers: [.command, .shift])
         case .settle: KeyboardShortcut("s", modifiers: [.command, .shift])
         case .fork, .toggleFastMode,
-             .togglePin, .rename, .copyReference, .showAgents, .markUnread,
+             .togglePin, .rename, .regenerateName, .copyReference, .showAgents, .markUnread,
              .unreadOnly, .markAllRead, .collapseAllSections, .expandAllSections: nil
         }
     }
@@ -145,7 +145,9 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
         case .focusComposer: "character.cursor.ibeam"
         case .attachFile: "paperclip"
         case .toggleFastMode: "bolt"
-        case .togglePin, .rename: "pin"
+        case .togglePin: "pin"
+        case .rename: "pencil"
+        case .regenerateName: "wand.and.sparkles"
         case .copyReference: "doc.on.doc"
         case .showAgents: "person.2"
         case .settle: ConversationSettlementSymbol.settle
@@ -182,6 +184,7 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
         case .toggleFastMode: "Fast Mode"
         case .togglePin: actions?.isPinned == true ? "Unpin" : "Pin"
         case .rename: "Rename…"
+        case .regenerateName: "Regenerate Name"
         case .copyReference: actions?.conversation.map { $0.codexDesktopLink == nil } == true ? "Copy Thread ID" : "Copy Link"
         case .showAgents: "Show Subagents"
         case .settle: actions?.isConversationSettled == true ? "Unsettle Conversation" : "Settle Conversation"
@@ -254,6 +257,7 @@ struct ChatWindowActionsPublisher: View {
     let selectConversation: (ConversationAddress) -> Void
     let fork: (ConversationAddress) -> Void
     let renamePinnedChat: (ConversationAddress) -> Void
+    let regenerateName: (ConversationAddress) -> Void
     let toggleAgents: () -> Void
     let attachFile: () -> Void
     let toggleCommandPalette: (ChatWindowActions) -> Void
@@ -292,6 +296,7 @@ struct ChatWindowActionsPublisher: View {
             selectConversation: selectConversation,
             fork: fork,
             renamePinnedChat: renamePinnedChat,
+            regenerateName: regenerateName,
             toggleAgents: toggleAgents,
             attachFile: attachFile,
             toggleCommandPalette: toggleCommandPalette,
@@ -323,6 +328,7 @@ fileprivate struct ChatWindowActionContext {
     let selectConversation: (ConversationAddress) -> Void
     let fork: (ConversationAddress) -> Void
     let renamePinnedChat: (ConversationAddress) -> Void
+    let regenerateName: (ConversationAddress) -> Void
     let toggleAgents: () -> Void
     let attachFile: () -> Void
     let toggleCommandPalette: (ChatWindowActions) -> Void
@@ -331,7 +337,7 @@ fileprivate struct ChatWindowActionContext {
 
     var commandState: ChatWindowCommandState {
         let conversation = screen.openAddress
-        let isPinned = conversation.flatMap(workspace.pinnedName(for:)) != nil
+        let isPinned = conversation.map(workspace.isPinned) == true
         let settlement = conversationSettlement(conversation)
         let settingsModel = showsConversationSettings ? screen.selectedModel : nil
         let fastModel = settingsModel.flatMap { $0.supportsFastMode ? $0 : nil }
@@ -339,8 +345,9 @@ fileprivate struct ChatWindowActionContext {
         if conversation == nil {
             enabled.subtract([.fork, .togglePin, .copyReference, .markUnread])
         }
-        if !isPinned && screen.openConversationTitle == nil { enabled.remove(.togglePin) }
-        if !isPinned { enabled.remove(.rename) }
+        if !isPinned && screen.openConversationTitle == nil && conversation.map(workspace.supportsIndependentNames) != true { enabled.remove(.togglePin) }
+        if conversation == nil || (!isPinned && conversation.map(workspace.supportsIndependentNames) != true) { enabled.remove(.rename) }
+        if conversation == nil || (isPinned && conversation.map(workspace.supportsIndependentNames) != true) { enabled.remove(.regenerateName) }
         if !find.hasMatches { enabled.subtract([.findNext, .findPrevious]) }
         if !screen.composerSendState.canSend { enabled.remove(.send) }
         if screen.composerStopState.readyTurn == nil { enabled.remove(.stop) }
@@ -398,16 +405,18 @@ fileprivate struct ChatWindowActionContext {
         case .toggleFastMode: screen.selectFastMode(screen.fastModeSelection != true, for: screen.activeSessionID)
         case .togglePin:
             if let address = screen.openAddress {
-                if workspace.pinnedName(for: address) != nil {
+                if workspace.isPinned(address) {
                     workspace.unpin(address)
                     HapticService.shared.play(.toggleOff)
-                } else if let title = screen.openConversationTitle {
+                } else if let title = screen.openConversationTitle ?? (workspace.supportsIndependentNames(address) ? "" : nil) {
                     workspace.pin(address, name: title)
                     HapticService.shared.play(.toggleOn)
                 }
             }
         case .rename:
             if let address = screen.openAddress { renamePinnedChat(address) }
+        case .regenerateName:
+            if let address = screen.openAddress { regenerateName(address) }
         case .copyReference:
             if let address = screen.openAddress { HapticService.shared.copy(address.codexDesktopLink ?? address.threadID) }
         case .showAgents:

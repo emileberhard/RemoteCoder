@@ -1672,6 +1672,29 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         model(for: address.hostID)?.conversationList.unpin(threadID: address.threadID)
     }
 
+    func isPinned(_ address: ConversationAddress) -> Bool {
+        model(for: address.hostID)?.conversationList.isPinned(address.threadID) == true
+    }
+
+    func supportsIndependentNames(_ address: ConversationAddress) -> Bool {
+        model(for: address.hostID)?.conversationList.marks.usesPinFlag == true
+    }
+
+    func conversationTitle(_ address: ConversationAddress) -> String? {
+        guard let list = model(for: address.hostID)?.conversationList,
+              let header = list.header(id: address.threadID) else { return nil }
+        return list.pinnedName(for: address.threadID) ?? header.displayTitle
+    }
+
+    func rename(_ address: ConversationAddress, name: String, onFailure: @escaping @MainActor (String) -> Void) {
+        guard let owner = model(for: address.hostID) else { return }
+        if owner.conversationList.marks.usesPinFlag {
+            owner.renameThread(threadID: address.threadID, name: name, onFailure: onFailure)
+        } else if owner.conversationList.isPinned(address.threadID) {
+            owner.conversationList.pin(threadID: address.threadID, name: name)
+        }
+    }
+
     func pinnedName(for address: ConversationAddress) -> String? {
         return model(for: address.hostID)?.conversationList.pinnedName(for: address.threadID)
     }

@@ -50,6 +50,15 @@ extension GatewayClient {
         )
     }
 
+    func renameThread(threadID: String, name: String) async throws {
+        struct Request: Encodable { let threadId: String; let name: String }
+        _ = try await call(
+            method: "thread/name/set",
+            params: encodeToJSONValue(Request(threadId: threadID, name: name)),
+            timeout: timeouts.threadSetup
+        )
+    }
+
     func regenerateTitle(threadID: String) async throws {
         _ = try await call(
             method: "conversation/title/regenerate",

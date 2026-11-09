@@ -42,18 +42,20 @@ struct ThreadMarks: Codable, Equatable, Sendable {
     var seenThrough: Int64?
     var markedUnread: Bool
     var pinName: String?
+    var pinned: Bool
     var purpose: ConversationPurpose?
     var settlement: ConversationSettlement?
     var doneThrough: Int64?
     var changesView: ChangesView?
 
-    init(revision: UInt64 = 0, seenThrough: Int64? = nil, markedUnread: Bool = false, pinName: String? = nil,
+    init(revision: UInt64 = 0, seenThrough: Int64? = nil, markedUnread: Bool = false, pinName: String? = nil, pinned: Bool = false,
          purpose: ConversationPurpose? = nil, settlement: ConversationSettlement? = nil, doneThrough: Int64? = nil,
          changesView: ChangesView? = nil) {
         self.revision = revision
         self.seenThrough = seenThrough
         self.markedUnread = markedUnread
         self.pinName = pinName
+        self.pinned = pinned
         self.purpose = purpose
         self.settlement = settlement
         self.doneThrough = doneThrough
@@ -66,14 +68,17 @@ struct ThreadMarks: Codable, Equatable, Sendable {
         seenThrough = try container.decodeIfPresent(Int64.self, forKey: .seenThrough)
         markedUnread = try container.decodeIfPresent(Bool.self, forKey: .markedUnread) ?? false
         pinName = try container.decodeIfPresent(String.self, forKey: .pinName)
+        pinned = try container.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         purpose = try container.decodeIfPresent(ConversationPurpose.self, forKey: .purpose)
         settlement = try container.decodeIfPresent(ConversationSettlement.self, forKey: .settlement)
         doneThrough = try container.decodeIfPresent(Int64.self, forKey: .doneThrough)
         changesView = try container.decodeIfPresent(ChangesView.self, forKey: .changesView)
     }
 
+    var isPinned: Bool { pinned || pinName != nil }
+
     var isEmpty: Bool {
-        seenThrough == nil && !markedUnread && pinName == nil && purpose == nil && settlement == nil && doneThrough == nil
+        seenThrough == nil && !markedUnread && !isPinned && purpose == nil && settlement == nil && doneThrough == nil
             && changesView == nil
     }
 }
@@ -106,6 +111,7 @@ enum ConversationMarkChange: Codable, Equatable, Sendable {
     case markAllRead(through: Int64)
     case markRetiredScopeRead(scopeID: String, through: Int64)
     case pin(threadID: String, name: String)
+    case pinFlag(threadID: String)
     case unpin(threadID: String)
     case setPurpose(threadID: String, purpose: ConversationPurpose)
     case settle(threadID: String, through: Int64)
@@ -123,7 +129,12 @@ enum ConversationMarkChange: Codable, Equatable, Sendable {
         case "markAllRead": self = .markAllRead(through: try container.decode(Int64.self, forKey: .through))
         case "markRetiredScopeRead": self = .markRetiredScopeRead(scopeID: try container.decode(String.self, forKey: .scopeId),
             through: try container.decode(Int64.self, forKey: .through))
-        case "pin": self = .pin(threadID: try thread(), name: try container.decode(String.self, forKey: .name))
+        case "pin":
+            if let name = try container.decodeIfPresent(String.self, forKey: .name) {
+                self = .pin(threadID: try thread(), name: name)
+            } else {
+                self = .pinFlag(threadID: try thread())
+            }
         case "unpin": self = .unpin(threadID: try thread())
         case "setPurpose":
             self = .setPurpose(threadID: try thread(), purpose: try container.decode(ConversationPurpose.self, forKey: .purpose))
@@ -157,6 +168,9 @@ enum ConversationMarkChange: Codable, Equatable, Sendable {
             try container.encode("pin", forKey: .op)
             try container.encode(threadID, forKey: .threadId)
             try container.encode(name, forKey: .name)
+        case let .pinFlag(threadID):
+            try container.encode("pin", forKey: .op)
+            try container.encode(threadID, forKey: .threadId)
         case let .unpin(threadID):
             try container.encode("unpin", forKey: .op)
             try container.encode(threadID, forKey: .threadId)
@@ -183,6 +197,7 @@ enum ConversationMarkChange: Codable, Equatable, Sendable {
 struct ConversationMarks: Codable, Equatable, Sendable {
     static let settlementSchemaVersion = 2
     static let changesViewSchemaVersion = 4
+    static let pinFlagSchemaVersion = 5
 
     var schemaVersion: Int
     var revision: UInt64
@@ -191,6 +206,8 @@ struct ConversationMarks: Codable, Equatable, Sendable {
     var supportsRetiredScopeRead: Bool? = nil
 
     private enum CodingKeys: String, CodingKey { case schemaVersion, revision, readBaseline, threads, supportsRetiredScopeRead }
+
+    var usesPinFlag: Bool { schemaVersion >= Self.pinFlagSchemaVersion }
 
     var offersSettlement: Bool { schemaVersion >= Self.settlementSchemaVersion }
 
@@ -202,7 +219,11 @@ struct ConversationMarks: Codable, Equatable, Sendable {
 
     func marks(for threadID: String) -> ThreadMarks? { threads[threadID].flatMap { $0.isEmpty ? nil : $0 } }
 
-    func pinName(for threadID: String) -> String? { threads[threadID]?.pinName }
+    func pinName(for threadID: String) -> String? { usesPinFlag ? nil : threads[threadID]?.pinName }
+
+    func isPinned(_ threadID: String) -> Bool { threads[threadID]?.isPinned == true }
+
+    var pinnedThreadIDs: Set<String> { Set(threads.compactMap { $0.value.isPinned ? $0.key : nil }) }
 
     var pinNames: [String: String] { threads.compactMapValues(\.pinName) }
 
@@ -211,7 +232,7 @@ struct ConversationMarks: Codable, Equatable, Sendable {
     func settlement(of threadID: String) -> ConversationSettlement? { threads[threadID]?.settlement }
 
     func isProbablyDone(_ thread: ConversationHeader) -> Bool {
-        guard let marks = threads[thread.id], marks.purpose == nil, marks.pinName == nil,
+        guard let marks = threads[thread.id], marks.purpose == nil, !marks.isPinned,
               let doneThrough = marks.doneThrough else { return false }
         return thread.latestActivityAt <= doneThrough
     }
@@ -244,7 +265,7 @@ struct ConversationMarks: Codable, Equatable, Sendable {
     func isSettled(_ thread: ConversationHeader, isLive: Bool, at now: Int64) -> Bool {
         guard offersSettlement, !isLive else { return false }
         let marks = threads[thread.id]
-        guard marks?.pinName == nil, !isUnread(thread) else { return false }
+        guard marks?.isPinned != true, !isUnread(thread) else { return false }
         switch marks?.settlement {
         case let .settled(through) where marks?.purpose != nil || thread.latestActivityAt <= through:
             return true
@@ -289,9 +310,14 @@ struct ConversationMarks: Codable, Equatable, Sendable {
         case .markRetiredScopeRead:
             break
         case let .pin(threadID, name):
-            update(threadID) { $0.pinName = ConversationPinName.normalized(name) }
+            update(threadID) {
+                if usesPinFlag { $0.pinned = true }
+                else { $0.pinName = ConversationPinName.normalized(name) }
+            }
+        case let .pinFlag(threadID):
+            update(threadID) { $0.pinned = true }
         case let .unpin(threadID):
-            update(threadID) { $0.pinName = nil }
+            update(threadID) { $0.pinName = nil; $0.pinned = false }
         case let .setPurpose(threadID, purpose):
             update(threadID) { $0.purpose = purpose }
         case let .settle(threadID, through):
@@ -299,6 +325,7 @@ struct ConversationMarks: Codable, Equatable, Sendable {
                 marks.markedUnread = false
                 if through > (marks.seenThrough ?? .min) { marks.seenThrough = through }
                 marks.pinName = nil
+                marks.pinned = false
                 marks.settlement = .settled(through: through)
             }
         case let .unsettle(threadID, through):
@@ -340,7 +367,10 @@ extension ConversationMarks {
         }
         let undo = settled.map { header -> ConversationSettlementEdit in
             var changes: [ConversationMarkChange] = [.unsettle(threadID: header.id, through: header.latestActivityAt)]
-            if let name = pinName(for: header.id) { changes.append(.pin(threadID: header.id, name: name)) }
+            if isPinned(header.id) {
+                if let name = pinName(for: header.id) { changes.append(.pin(threadID: header.id, name: name)) }
+                else { changes.append(.pinFlag(threadID: header.id)) }
+            }
             if isUnread(header) { changes.append(.markUnread(threadID: header.id)) }
             return ConversationSettlementEdit(threadID: header.id, changes: changes)
         }

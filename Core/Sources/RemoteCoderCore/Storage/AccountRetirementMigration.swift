@@ -273,7 +273,7 @@ enum AccountRetirementMigration {
             try Ledger.save(progress, to: journal)
         }
         try ConversationHeaderStore.adoptRetiredAccountHistory(from: folder.appending(path: "history/\(hostID.uuidString).json"),
-                                                              hostID: hostID, storage: storage, pinned: Set(marks.effective.pinNames.keys))
+                                                              hostID: hostID, storage: storage, pinned: marks.effective.pinnedThreadIDs)
         try mergeStagedFiles(from: folder.appending(path: "upload-staging"), into: host.appending(path: "upload-staging"))
         let draftsURL = folder.appending(path: "drafts")
         if FileManager.default.fileExists(atPath: draftsURL.appending(path: "drafts.store").path) {
@@ -303,9 +303,9 @@ enum AccountRetirementMigration {
         if let source, let accountID {
             try current.adopt(storedMarks(in: source), sourceID: accountID)
         }
-        let pinNames = current.effective.pinNames
+        let pinnedThreadIDs = current.effective.pinnedThreadIDs
         let legacyPins = pins.sorted { $0.key < $1.key }.compactMap { thread, name -> ConversationMarksReplica.Pending? in
-            guard pinNames[thread] == nil else { return nil }
+            guard !pinnedThreadIDs.contains(thread) else { return nil }
             return .init(id: identifier("legacy-pin|\(accountID?.uuidString ?? "default")|\(thread)"), change: .pin(threadID: thread, name: name))
         }
         if !legacyPins.isEmpty {

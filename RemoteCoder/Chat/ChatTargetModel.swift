@@ -88,7 +88,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         case lifecycle, metadataStatus, metadataAction, inventoryRefresh, scheduledActivityRead
         case conversationActivity, historyAutoRefresh, historyInvalidation(String), warmConversations
         case routeMove, codexModelCacheLoad, codexModelRefresh, takeOver, marksSync, historyHeaderRecovery, historyRetry
-        case titleRegeneration(String)
+        case titleRegeneration(String), titleRename(String)
     }
     /// Turn dispatch is unstructured on purpose — a send must outlive the view
     /// that started it — so the model owns the handles and cancels them when its
@@ -170,6 +170,22 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
                 self.logger.error("take over failed thread=\(threadID) error=\(error.localizedDescription)")
                 self.takeOver = ConversationTakeOver(threadID: threadID, failure: error.localizedDescription)
                 feedback(.error)
+            }
+        }
+    }
+
+    func renameThread(threadID: String, name: String, onFailure: @escaping @MainActor (String) -> Void) {
+        guard acceptsWork else { return }
+        ownedTasks.start(.titleRename(threadID)) { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.gateway.renameThread(threadID: threadID, name: name)
+                self.haptics.play(.success)
+            } catch is CancellationError {
+            } catch {
+                self.logger.error("rename failed thread=\(threadID) error=\(error.localizedDescription)")
+                self.haptics.play(.error)
+                onFailure(error.localizedDescription)
             }
         }
     }

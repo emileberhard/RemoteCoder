@@ -250,7 +250,13 @@ final class ConversationList {
         marks.pinName(for: threadID)
     }
 
+    func isPinned(_ threadID: String) -> Bool { marks.isPinned(threadID) }
+
     func pin(threadID: String, name: String) {
+        if marks.usesPinFlag {
+            recordMark(.pinFlag(threadID: threadID))
+            return
+        }
         guard let name = ConversationPinName.normalized(name) else { return }
         recordMark(.pin(threadID: threadID, name: name))
     }
@@ -696,7 +702,7 @@ final class ConversationList {
     var unloadedPinnedThreads: [String: String] {
         let loaded = Set(threads.map(\.id))
         return marks.threads.reduce(into: [:]) { result, entry in
-            if !loaded.contains(entry.key), let name = entry.value.pinName { result[entry.key] = name }
+            if !loaded.contains(entry.key), entry.value.isPinned { result[entry.key] = marks.pinName(for: entry.key) ?? "Unknown title" }
         }
     }
 
@@ -818,7 +824,7 @@ final class ConversationList {
     }
 
     private var pinnedThreadIDs: Set<String> {
-        Set(marks.threads.compactMap { $0.value.pinName != nil ? $0.key : nil })
+        marks.pinnedThreadIDs
     }
 
     private var priorityThreadIDs: Set<String> { protectedThreadIDs.union(pinnedThreadIDs) }

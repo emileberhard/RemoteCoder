@@ -21,11 +21,15 @@ struct ConversationHistoryActions {
 
     func rowMenuItems(for row: ConversationSidebarRow) -> [ContextMenuItem] {
         var items: [ContextMenuItem] = []
-        if row.isPinned {
+        if row.isPinned || row.supportsIndependentNames {
             items.append(ContextMenuItem(title: "Rename", systemImage: "pencil") { rename(row) })
+        }
+        if row.isPinned {
             items.append(ContextMenuItem(title: "Unpin", systemImage: "pin.slash") { unpin(row.address) })
         } else {
             items.append(ContextMenuItem(title: "Pin", systemImage: "pin") { pin(row) })
+        }
+        if !row.isPinned || row.supportsIndependentNames {
             items.append(ContextMenuItem(title: "Regenerate Name", systemImage: "wand.and.sparkles") { regenerateName(row.address) })
         }
         items.append(ContextMenuItem(title: "Move under…", systemImage: "person.2") { moveUnder(row.address) })

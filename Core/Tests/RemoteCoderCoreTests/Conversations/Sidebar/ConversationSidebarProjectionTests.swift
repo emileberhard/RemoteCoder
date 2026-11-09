@@ -56,6 +56,19 @@ struct ConversationSidebarProjectionTests {
         #expect(miniRow.id != bookRow.id)
     }
 
+    @Test func schemaFivePinsSortAndSearchByConversationTitles() throws {
+        let marks = ConversationMarks(schemaVersion: 5, revision: 1, readBaseline: 0,
+            threads: ["a": ThreadMarks(pinned: true), "b": ThreadMarks(pinned: true)])
+        let rows = sidebarRows(hosts: [host(mini, name: "Mini", threads: [
+            try thread("a", updatedAt: 1, preview: "Zulu"),
+            try thread("b", updatedAt: 2, preview: "Alpha"),
+        ], marks: marks)])
+        #expect(rows.map(\.title) == ["Alpha", "Zulu"])
+        #expect(rows.map(\.isPinned) == [true, true])
+        #expect(rows.map(\.supportsIndependentNames) == [true, true])
+        #expect(ConversationSidebarProjection.matches(title: rows[0].title, workingDirectory: "", hostName: nil, query: "Alpha"))
+    }
+
     @Test func rowsMergeByPinThenRecencyThenStableAddress() throws {
         let rows = sidebarRows(hosts: [
             host(mini, name: "Mac Mini", threads: [

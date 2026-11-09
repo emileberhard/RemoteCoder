@@ -1482,7 +1482,7 @@ entrypoint linked above.
   persisted cache instead of replacing it, so older known conversations stay
   listed. Pull-to-refresh (iOS) requests up to 200 through cursor pagination, then
   merges and persists them.
-- Rows have a context menu to pin, rename, unpin, regenerate an unpinned row's
+- Rows have a context menu to pin, rename, unpin, regenerate a row's
   name through `conversation/title/regenerate`, mark as read or unread, fork,
   settle (not while it is running) or unsettle, and copy a reference. On iOS a
   leading swipe toggles read state and a trailing swipe settles or unsettles.
@@ -1505,12 +1505,11 @@ entrypoint linked above.
     status messages mark themselves with `ScrollItemMenuObstruction`; the
     snapshot leaves out the part of a row they cover, and a press there opens
     nothing. The row's `.accessibilityActions` list the same items.
-- A row's title is its local pin name, then the provider thread's `name`, then
-  its `preview`. `thread/name/updated` retitles the cached row on its own host,
-  so producers such as automations name their threads through
-  `thread/name/set` instead of teaching the app their prompt format.
-  Pinning never asks for a name: it stores the title the row shows as the pin
-  name, which the gateway then stops retitling; Rename edits it.
+- With marks schema 5, pins are flags and titles come from the provider thread's
+  `name`, then its `preview`; Rename uses `thread/name/set`, and Regenerate Name
+  is available on pinned and unpinned rows. `thread/name/updated` retitles the
+  cached row on its own host. Below schema 5 the pin name remains the title,
+  Rename edits that name, and Regenerate Name is available only when unpinned.
 - There is no close button: the scrim tap or a leftward drag closes the drawer.
 - `ConversationDrawer` is gesture-owned, not a scroll view.
   - One `DrawerPanGesture` (`UIGestureRecognizerRepresentable`) owns horizontal

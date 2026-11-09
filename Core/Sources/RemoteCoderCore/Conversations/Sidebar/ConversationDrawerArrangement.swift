@@ -40,7 +40,7 @@ struct ConversationDrawerRank: Equatable, Sendable {
             guard marks.offersSettlement else { self = .unavailable; return }
             guard let thread = marks.threads[threadID], let settlement = thread.settlement else { self = .automatic; return }
             guard case .settled = settlement else { self = .explicit(settlement, isPinned: false); return }
-            self = .explicit(settlement, isPinned: thread.pinName != nil)
+            self = .explicit(settlement, isPinned: thread.isPinned)
         }
     }
 

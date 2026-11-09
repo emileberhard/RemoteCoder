@@ -52,6 +52,7 @@ struct ChatCommands: Commands {
             Divider()
             command(.togglePin)
             command(.rename)
+            command(.regenerateName)
             command(.copyReference)
             command(.showAgents)
             Divider()

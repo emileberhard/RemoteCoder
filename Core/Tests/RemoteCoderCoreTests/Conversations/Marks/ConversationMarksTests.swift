@@ -3,6 +3,47 @@ import Testing
 @testable import RemoteCoderCore
 
 struct ConversationMarksTests {
+    @Test func schemaFivePinsAndLegacyPendingNamesKeepTheirWireContracts() throws {
+        let json = #"{"acknowledged":{"schemaVersion":5,"revision":3,"readBaseline":0,"threads":{"saved":{"revision":3,"pinned":true}}},"pending":[{"id":"11111111-1111-1111-1111-111111111111","change":{"op":"pin","threadId":"old","name":"My chosen name"}}]}"#
+        let replica = try JSONDecoder().decode(ConversationMarksReplica.self, from: Data(json.utf8))
+        #expect(replica.effective.isPinned("saved"))
+        #expect(replica.effective.isPinned("old"))
+        #expect(replica.effective.pinName(for: "old") == nil)
+        let pending = try JSONSerialization.jsonObject(with: JSONEncoder().encode(replica.pending[0].change)) as? NSDictionary
+        #expect(pending == ["op": "pin", "threadId": "old", "name": "My chosen name"])
+        let flag = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ConversationMarkChange.pinFlag(threadID: "new"))) as? NSDictionary
+        #expect(flag == ["op": "pin", "threadId": "new"])
+        #expect(try JSONDecoder().decode(ConversationMarkChange.self, from: JSONEncoder().encode(ConversationMarkChange.pinFlag(threadID: "new"))) == .pinFlag(threadID: "new"))
+        let old = ConversationMarks(schemaVersion: 4, revision: 1, readBaseline: 0, threads: [:])
+            .applying(.pin(threadID: "t", name: "Legacy name"))
+        #expect(old.pinName(for: "t") == "Legacy name")
+    }
+
+    @Test func retiringAnOlderReplicaKeepsItsPendingNamedPinAgainstSchemaFive() throws {
+        let source = ConversationMarksReplica(acknowledged: .init(schemaVersion: 4, revision: 1, readBaseline: 0, threads: [:]),
+            pending: [.init(id: UUID(), change: .pin(threadID: "retired", name: "Name chosen offline"))])
+        var target = ConversationMarksReplica(acknowledged: .init(schemaVersion: 5, revision: 1, readBaseline: 0, threads: [:]))
+        try target.adopt(source, sourceID: UUID())
+        #expect(target.effective.isPinned("retired"))
+        #expect(target.pending.map(\.change) == [.pin(threadID: "retired", name: "Name chosen offline")])
+        let persisted = try JSONDecoder().decode(ConversationMarksReplica.self, from: JSONEncoder().encode(target))
+        #expect(persisted.pending == target.pending)
+    }
+
+    @Test func schemaFiveSettleUndoRestoresPinAndSuppressesAutomaticSettlement() throws {
+        let header = try thread("t", completedAt: 100)
+        let marks = ConversationMarks(schemaVersion: 5, revision: 1, readBaseline: .max,
+                                      threads: ["t": ThreadMarks(pinned: true, doneThrough: 100)])
+        #expect(!marks.isSettled(header, isLive: false, at: 1_000_000))
+        #expect(!marks.isProbablyDone(header))
+        let edit = marks.settling([header], newestRequestAt: [:])
+        let settled = edit.edits[0].changes.reduce(marks) { $0.applying($1) }
+        #expect(!settled.isPinned("t"))
+        let restored = edit.undo[0].changes.reduce(settled) { $0.applying($1) }
+        #expect(restored.isPinned("t"))
+        #expect(edit.undo[0].changes.contains(.pinFlag(threadID: "t")))
+    }
+
     @Test func unknownHostRetainsTheFinalPinOfASettledSource() throws {
         var host = ConversationMarksReplica()
         let source = ConversationMarksReplica(acknowledged: .init(schemaVersion: 2, revision: 1, readBaseline: 100,

@@ -310,7 +310,9 @@ private struct ChatScreen: View {
                 CommandPalette(catalog: commandPalette, dismiss: { self.commandPalette = nil })
             }
         }
-        .pinnedChatRenamePrompt($renamingPinnedChat, workspace: workspace)
+        .pinnedChatRenamePrompt($renamingPinnedChat, workspace: workspace) { address in
+            screen.openAddress == address ? screen.openConversationTitle : nil
+        }
         #if os(iOS)
         .reasoningPickerOverlay()
         #endif
@@ -347,6 +349,9 @@ private struct ChatScreen: View {
                 selectConversation: { selectConversation($0) },
                 fork: forkConversation,
                 renamePinnedChat: { renamingPinnedChat = $0 },
+                regenerateName: { address in
+                    workspace.regenerateTitle(at: address) { screen.present(.conversation("Could not regenerate name: \($0)")) }
+                },
                 toggleAgents: toggleAgents,
                 attachFile: { fileImportRequest += 1 },
                 toggleCommandPalette: { actions in
