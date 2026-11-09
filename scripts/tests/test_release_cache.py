@@ -393,6 +393,27 @@ class ReleasePublicationTests(unittest.TestCase):
                 module.attach("3.44.0", "mac")
             self.assertEqual(module.read_published()["version"], "3.45.0")
 
+    def test_apps_delivered_before_the_gateway_join_its_publication(self):
+        with self.on("mini"):
+            directory = module.admit("3.74.0", self.commit)
+            write(directory / module.MAC_APP / "Contents/Info.plist", b"app 3.74.0")
+            write(module.mac_completion(directory), b"")
+            write(module.symbol_directory("ios", "3.74.0") / "symbols/RemoteCoder.app.dSYM/Contents/Info.plist", b"dsym")
+            self.assertIsNone(module.attach("3.74.0", "mac"))
+            self.assertIsNone(module.read_published())
+            gateway = directory / module.gateway_bundle.NAME
+            write(gateway / "Contents/MacOS/gateway", b"gateway 3.74.0")
+            package = self.root / "mini/.codex/packages/standalone/releases/0.1.0"
+            write(package / "bin/codex", b"codex")
+            write(package / "codex-package.json", b"{}")
+            published = module.publish("3.74.0", gateway, package)
+            self.assertEqual(set(published["artifacts"]), {"gateway", "codex-package", "mac-app", "mac-receipt"})
+            write(directory / module.IOS_APP, b"ipa")
+            self.assertEqual(
+                set(module.attach("3.74.0", "ios")["artifacts"]),
+                {"gateway", "codex-package", "mac-app", "mac-receipt", "ios-symbols"},
+            )
+
     def test_catch_up_mirrors_the_published_release_with_verified_fingerprints(self):
         record = self.publish_on_mini("3.45.0")
         plan = self.catch_up({"gateway": "3.44.1", "app": "development"})

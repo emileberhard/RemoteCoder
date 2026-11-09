@@ -36,6 +36,7 @@ COMMIT = r"[0-9a-f]{40}"
 FINGERPRINT = r"(tree|sha256):[0-9a-f]{64}"
 TEAM = maintainer_config().get("xcodeSettings", {}).get("DEVELOPMENT_TEAM", "")
 APP_IDENTIFIER = maintainer_config().get("xcodeSettings", {}).get("RC_BUNDLE_ID", "com.example.RemoteCoder")
+IOS_APP = "RemoteCoder-direct.ipa"
 MAC_APP = "RemoteCoderMac-direct.app"
 MAC_PACKAGE = "RemoteCoderMac.pkg"
 MIRRORED = ("gateway", "mac-app", "mac-package", "mac-receipt", "ios-symbols", "mac-symbols")
@@ -132,10 +133,11 @@ def admit(version: str, commit: str) -> Path:
     directory = RELEASES / version
     directory.mkdir(parents=True, exist_ok=True)
     recorded = directory / "commit"
-    if not recorded.exists():
-        recorded.write_text(commit + "\n")
-    elif recorded.read_text().strip() != commit:
-        raise ValueError(f"{directory} belongs to another commit")
+    with cache_lease(True):
+        if not recorded.exists():
+            recorded.write_text(commit + "\n")
+        elif recorded.read_text().strip() != commit:
+            raise ValueError(f"{directory} belongs to another commit")
     prune()
     return directory
 
@@ -232,6 +234,9 @@ def publish(version: str, gateway: Path, package: Path) -> dict:
             artifacts = current["artifacts"] | artifacts
         elif current is not None and version_key(current["version"]) > version_key(version):
             raise ValueError(f"{current['version']} is already published; {version} cannot replace it")
+        for platform in ("ios", "mac"):
+            if delivered(version, platform):
+                artifacts |= platform_artifacts(version, platform)
         record = {"version": version, "commit": commit, "artifacts": artifacts}
         write_json(published_path(), record)
     return record
@@ -242,7 +247,12 @@ def symbol_directory(platform: str, version: str) -> Path:
     return DEPLOYMENTS / f"{kind}-{platform}-{version}-{build_number(version)}"
 
 
-def attach(version: str, platform: str) -> dict:
+def delivered(version: str, platform: str) -> bool:
+    directory = RELEASES / version
+    return (mac_completion(directory) if platform == "mac" else directory / IOS_APP).exists()
+
+
+def platform_artifacts(version: str, platform: str) -> dict:
     directory = RELEASES / version
     required = {"mac-app": directory / MAC_APP} if platform == "mac" else {}
     if platform == "mac" and version_key(version) > (3, 73, 0):
@@ -251,10 +261,17 @@ def attach(version: str, platform: str) -> dict:
     symbols = symbol_directory(platform, version)
     if symbols.is_dir():
         artifacts[f"{platform}-symbols"] = entry(symbols)
+    return artifacts
+
+
+def attach(version: str, platform: str) -> dict | None:
+    artifacts = platform_artifacts(version, platform)
     with cache_lease(True):
         record = read_published()
-        if record is None or record["version"] != version:
+        if record is not None and version_key(record["version"]) > version_key(version):
             raise ValueError(f"{version} is not the published release")
+        if record is None or record["version"] != version:
+            return None
         record["artifacts"] |= artifacts
         write_json(published_path(), record)
     return record
@@ -555,7 +572,7 @@ def main() -> None:
     publication.add_argument("version")
     publication.add_argument("gateway", type=Path)
     publication.add_argument("package", type=Path)
-    attachment = operations.add_parser("attach", help="add a platform's verified artifacts to the published release")
+    attachment = operations.add_parser("attach", help="add a delivered platform's artifacts to this release once its gateway is published")
     attachment.add_argument("version")
     attachment.add_argument("platform", choices=("ios", "mac"))
     symbols = operations.add_parser("retain-symbols", help="keep a release archive's dSYMs for perf-trace")
