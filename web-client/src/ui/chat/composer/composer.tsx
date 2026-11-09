@@ -344,7 +344,7 @@ export function Composer({
             <DictationControl />
             {conversation?.activeTurnId &&
               (conversation.header.provider !== "claude" ||
-                (workspace.selectedHost && workspace.claudeQueue(workspace.selectedHost.host.id))) && (
+                workspace.claudeQueue(conversation.address.hostId)) && (
                 <IconButton
                   label="Queue message"
                   disabled={

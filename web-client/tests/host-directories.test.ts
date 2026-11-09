@@ -210,3 +210,17 @@ for (const reentrant of [false, true]) {
     directories.dispose();
   });
 }
+
+test("Claude queue support is reread on each connection without forgetting the home path", async () => {
+  const { rpc, directories } = setup();
+  expect(await directories.resolveClaudeQueue()).toBe(true);
+  expect(await directories.resolveClaudeQueue()).toBe(true);
+  expect(rpc.calls.filter((call) => call.method === "host/info")).toHaveLength(1);
+
+  rpc.claudeQueue = false;
+  directories.connectionChanged();
+  expect(directories.claudeQueue).toBeUndefined();
+  expect(directories.home).toEqual({ status: "ready", value: "/home/fixture" });
+  expect(await directories.resolveClaudeQueue()).toBe(false);
+  expect(rpc.calls.filter((call) => call.method === "host/info")).toHaveLength(2);
+});

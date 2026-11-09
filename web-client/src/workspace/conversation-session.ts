@@ -98,6 +98,7 @@ export class ConversationSession {
       receipts(): ReadonlyMap<string, SubmissionReceipt>;
       reconcileReceipts(conversation: ConversationState): void;
       syncClaudeSubscriptions(host: HostState): Promise<void>;
+      claudeQueue(hostId: string): Promise<boolean | undefined>;
       applyActivity(host: HostState, value: unknown): void;
       receiveQuestions(host: HostState, threadId: string, inventory: Questions): void;
       replay(target: ExecutionTarget, notification: Frame): void;
@@ -564,6 +565,21 @@ export class ConversationSession {
     const controller = conversation.controller;
     const read = ++conversation.queueRead;
     try {
+      if (conversation.header.provider === "claude") {
+        const supported = await this.actions.claudeQueue(this.host.host.id);
+        if (
+          controller.signal.aborted ||
+          conversation.controller !== controller ||
+          conversation.queueRead !== read
+        )
+          return;
+        if (supported === undefined) return;
+        if (!supported) {
+          conversation.queue = { status: "ready", value: { entries: [], hold: null } };
+          this.publish();
+          return;
+        }
+      }
       const result = object(
         await this.host.rpc.call(
           "thread/queue/list",

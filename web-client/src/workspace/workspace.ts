@@ -102,6 +102,7 @@ export class Workspace {
       event: (target, frame) => this.event(target, frame),
       disconnected: (host) => {
         if (host.status !== "connecting") this.preferences.invalidate(host);
+        this.directoryOwners.get(host.host.id)?.directories.connectionChanged();
         this.sessions.disconnected(host);
         this.sidebar.disconnected(host);
       },
@@ -154,6 +155,8 @@ export class Workspace {
       (target, notification) => this.event(target, notification),
       (host, value) => this.sidebar.receiveActivity(host, value),
       (host, threadId, inventory) => this.sidebar.receiveQuestions(host, threadId, inventory),
+      (hostId) =>
+        this.directoryOwners.get(hostId)?.directories.resolveClaudeQueue() ?? Promise.resolve(undefined),
     );
     this.preferences = new SyncedPreferenceExchange(
       storage,

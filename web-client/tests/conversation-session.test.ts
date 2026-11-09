@@ -156,6 +156,17 @@ test("Claude history uses its scoped content route, reads its gateway queue and 
   expect(workspace.getSnapshot().error).toBeUndefined();
 });
 
+test("A host without the Claude queue lists nothing and is never asked for it", async () => {
+  const { workspace, harness } = await setupClaude(["mini"], undefined, false);
+  harness.calls = [];
+  await workspace.selectConversation({ hostId: "mini", threadId: "claude_owned" });
+  expect(workspace.selectedConversation?.queue).toEqual({
+    status: "ready",
+    value: { entries: [], hold: null },
+  });
+  expect(harness.calls.map((call) => call.method)).not.toContain("thread/queue/list");
+});
+
 test("A held Claude queue exposes its pause reason with its entries", async () => {
   const { workspace, harness } = await setupClaude();
   const previous = harness.handler;
@@ -166,7 +177,7 @@ test("A held Claude queue exposes its pause reason with its entries", async () =
   };
   harness.handler = (method, params) =>
     method === "thread/queue/list"
-      ? { data: [entry], nextCursor: null, hold: { reason: "refused", message: "Start refused" } }
+      ? { data: [entry], nextCursor: null, hold: { message: "Start refused" } }
       : previous?.(method, params);
   await workspace.selectConversation({ hostId: "mini", threadId: "claude_owned" });
   expect(workspace.selectedConversation?.queue).toEqual({

@@ -208,8 +208,22 @@ export class HostDirectories {
   resolveHomePath(): Promise<string> {
     this.controller.signal.throwIfAborted();
     if (this.homeState.status === "ready") return Promise.resolve(this.homeState.value);
+    return this.readHostInfo();
+  }
+
+  async resolveClaudeQueue(): Promise<boolean | undefined> {
+    if (this.queuesClaude === undefined) await this.readHostInfo().catch(() => undefined);
+    return this.queuesClaude;
+  }
+
+  connectionChanged() {
+    this.queuesClaude = undefined;
+  }
+
+  private readHostInfo(): Promise<string> {
+    this.controller.signal.throwIfAborted();
     if (this.homeTask) return this.homeTask;
-    this.homeState = { status: "loading" };
+    if (this.homeState.status !== "ready") this.homeState = { status: "loading" };
     const task = Promise.resolve().then(async () => {
       try {
         this.controller.signal.throwIfAborted();
@@ -221,7 +235,7 @@ export class HostDirectories {
         this.publish();
         return path;
       } catch (error) {
-        if (!this.controller.signal.aborted) {
+        if (!this.controller.signal.aborted && this.homeState.status !== "ready") {
           this.homeState = { status: "failed", error: failure(error) };
           this.publish();
         }

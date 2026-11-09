@@ -38,6 +38,7 @@ export class ConversationSessions {
     private readonly replay: (target: ExecutionTarget, notification: Frame) => void,
     private readonly receiveActivity: (host: HostState, value: unknown) => void,
     private readonly receiveQuestions: (host: HostState, threadId: string, inventory: Questions) => void,
+    private readonly claudeQueue: (hostId: string) => Promise<boolean | undefined>,
   ) {}
   get snapshot(): ReadonlyMap<string, Conversation> {
     return new Map([...this.sessions].map(([key, session]) => [key, session.snapshot]));
@@ -94,6 +95,7 @@ export class ConversationSessions {
       applyActivity: (host, value) => this.applyActivity(host, value),
       receiveQuestions: this.receiveQuestions,
       replay: this.replay,
+      claudeQueue: this.claudeQueue,
     });
     this.sessions.set(addressKey(address), session);
     return session;
