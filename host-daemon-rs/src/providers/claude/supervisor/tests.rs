@@ -3770,17 +3770,9 @@ async fn stop_and_refusal_holds_pause_the_queue_until_send_now_or_a_user_turn() 
     );
     echo_and_finish(&agent, group, "second").await;
 
+    assert!(agent.hold_queue(QUEUE_THREAD, "cwd is gone").await.unwrap());
     assert!(
-        agent
-            .hold_queue(QUEUE_THREAD, "cwd is gone")
-            .await
-            .unwrap()
-    );
-    assert!(
-        !agent
-            .hold_queue(QUEUE_THREAD, "again")
-            .await
-            .unwrap(),
+        !agent.hold_queue(QUEUE_THREAD, "again").await.unwrap(),
         "an existing hold is not reported twice"
     );
     assert_eq!(
@@ -3818,60 +3810,229 @@ async fn stop_and_refusal_holds_pause_the_queue_until_send_now_or_a_user_turn() 
     let _ = child.kill().await;
 }
 
-#[tokio::test]
-async fn a_stale_starting_entry_is_dropped_only_with_delivery_evidence() {
-    use super::queue::{QueuedOutcome, QueuedStart};
-    let (home, agent, _events, _group, mut child) = queue_agent().await;
-    queue(&agent, "delivered").await;
-    queue(&agent, "lost").await;
-    agent
-        .queued_messages
-        .update(QUEUE_THREAD, |queue| {
-            for entry in &mut queue.entries {
-                entry.starting = true;
-            }
-            Ok(())
-        })
-        .unwrap();
-    assert!(
-        !agent.queue_delete(QUEUE_THREAD, "lost").await.unwrap(),
-        "a starting message cannot be removed"
-    );
+fn record_user_message(home: &ClaudeTestSettings, id: &str) {
     let transcript = crate::providers::claude::timeline::session_path_for_cwd(
         &home.settings.claude_home,
         "/tmp",
         "11111111-2222-4333-8444-555555555555",
     );
     fs::create_dir_all(transcript.parent().unwrap()).unwrap();
-    fs::write(
-        &transcript,
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    std::io::Write::write_all(
+        &mut file,
         format!(
             "{}\n",
-            json!({"type":"user","uuid":"delivered","message":{"role":"user","content":"queued delivered"}})
-        ),
+            json!({"type":"user","uuid":id,"message":{"role":"user","content":format!("queued {id}")}})
+        )
+        .as_bytes(),
     )
     .unwrap();
+}
 
+async fn delivery(
+    agent: &ClaudeSupervisor,
+    id: &str,
+) -> Option<crate::providers::claude::queued_messages::Delivery> {
+    agent
+        .queued_messages(QUEUE_THREAD)
+        .await
+        .unwrap()
+        .entry(id)
+        .map(|entry| entry.delivery)
+}
+
+async fn replace_runtime(agent: &ClaudeSupervisor) -> tokio::process::Child {
+    let (runtime, child) = placeholder_runtime(&request(QUEUE_THREAD, false)).await;
+    agent
+        .runtimes
+        .lock()
+        .await
+        .insert(QUEUE_THREAD.to_owned(), runtime);
+    child
+}
+
+#[tokio::test]
+async fn an_input_written_before_its_process_died_settles_from_the_session_transcript() {
+    use super::queue::{QueuedOutcome, QueuedStart};
+    use crate::providers::claude::queued_messages::Delivery;
+    for recorded in [false, true] {
+        let (home, agent, _events, _group, mut dead) = queue_agent().await;
+        queue(&agent, "first").await;
+        queue(&agent, "second").await;
+        dead.kill().await.unwrap();
+        dead.wait().await.unwrap();
+        agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Next("first".into()))
+            .await
+            .expect_err("a prompt written to an exited process fails");
+        assert_eq!(
+            delivery(&agent, "first").await,
+            Some(Delivery::Written),
+            "a failure after the write never requeues directly"
+        );
+        assert!(!agent.queue_delete(QUEUE_THREAD, "first").await.unwrap());
+        if recorded {
+            record_user_message(&home, "first");
+        }
+        let mut child = replace_runtime(&agent).await;
+        let next = agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Next("first".into()))
+            .await
+            .unwrap();
+        if recorded {
+            assert_eq!(next, QueuedOutcome::Changed, "a recorded input is dropped");
+            assert_eq!(queued_ids(&agent).await, vec!["second".to_owned()]);
+            assert!(matches!(
+                agent
+                    .start_queued(QUEUE_THREAD, QueuedStart::Next("second".into()))
+                    .await
+                    .unwrap(),
+                QueuedOutcome::Started(_)
+            ));
+            assert_eq!(active_input(&agent).await.as_deref(), Some("second"));
+        } else {
+            assert!(matches!(next, QueuedOutcome::Started(_)), "{next:?}");
+            assert_eq!(active_input(&agent).await.as_deref(), Some("first"));
+            assert_eq!(queued_ids(&agent).await, vec!["second".to_owned()]);
+        }
+        agent.runtimes.lock().await.clear();
+        let _ = child.kill().await;
+    }
+}
+
+#[tokio::test]
+async fn a_stop_during_the_start_never_runs_the_message_twice() {
+    use super::queue::{QueuedOutcome, QueuedStart};
+    use crate::providers::claude::queued_messages::Delivery;
+    for recorded in [false, true] {
+        let (home, agent, _events, _group, mut stopped) = queue_agent().await;
+        let reaper = tokio::spawn(async move { stopped.wait().await });
+        queue(&agent, "first").await;
+        queue(&agent, "second").await;
+        agent.stop_parent(QUEUE_THREAD).await.unwrap();
+        let error = agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Now(Some("first".into())))
+            .await
+            .expect_err("a Stop that lands before the submit fails the start");
+        assert!(error.message.contains("stopped"), "{error}");
+        reaper.await.unwrap().unwrap();
+        assert_eq!(delivery(&agent, "first").await, Some(Delivery::Written));
+        if recorded {
+            record_user_message(&home, "first");
+        }
+        let mut child = replace_runtime(&agent).await;
+        assert_eq!(
+            agent
+                .start_queued(QUEUE_THREAD, QueuedStart::Next("first".into()))
+                .await
+                .unwrap(),
+            if recorded {
+                QueuedOutcome::Changed
+            } else {
+                QueuedOutcome::Waiting
+            },
+            "the Stop still holds the queue"
+        );
+        let QueuedOutcome::Started(_) = agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Now(None))
+            .await
+            .unwrap()
+        else {
+            panic!("the Stop continuation's Send Now starts the head")
+        };
+        let ran = if recorded { "second" } else { "first" };
+        assert_eq!(active_input(&agent).await.as_deref(), Some(ran));
+        let left = if recorded {
+            Vec::new()
+        } else {
+            vec!["second".to_owned()]
+        };
+        assert_eq!(
+            queued_ids(&agent).await,
+            left,
+            "the stopped message runs at most once"
+        );
+        agent.runtimes.lock().await.clear();
+        let _ = child.kill().await;
+    }
+}
+
+#[tokio::test]
+async fn a_written_entry_waits_while_a_retired_process_could_still_consume_it() {
+    use super::queue::{QueuedOutcome, QueuedStart};
+    use crate::providers::claude::queued_messages::Delivery;
+    let (_home, agent, _events, _group, mut child) = queue_agent().await;
+    queue(&agent, "first").await;
+    let (retired, mut retired_child) = placeholder_runtime(&request(QUEUE_THREAD, false)).await;
+    agent
+        .queued_messages
+        .update(QUEUE_THREAD, |queue| {
+            queue.entries[0].delivery = Delivery::Written;
+            Ok(())
+        })
+        .unwrap();
+    agent.queued_writes.guard().insert(
+        QUEUE_THREAD.to_owned(),
+        ("first".to_owned(), retired.process_group_id),
+    );
     assert_eq!(
         agent
-            .start_queued(QUEUE_THREAD, QueuedStart::Next("delivered".into()))
+            .start_queued(QUEUE_THREAD, QueuedStart::Next("first".into()))
             .await
             .unwrap(),
-        QueuedOutcome::Changed
+        QueuedOutcome::Waiting
     );
-    assert_eq!(queued_ids(&agent).await, vec!["lost".to_owned()]);
-    assert!(
-        !agent.queued_messages(QUEUE_THREAD).await.unwrap().entries[0].starting,
-        "an unrecorded message returns to the queue"
+    assert_eq!(
+        agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Now(None))
+            .await
+            .unwrap_err()
+            .code,
+        RpcCode::InvalidRequest,
+        "Send Now waits for the retired process too"
     );
+    drop(retired);
+    retired_child.kill().await.unwrap();
+    retired_child.wait().await.unwrap();
     assert!(matches!(
         agent
-            .start_queued(QUEUE_THREAD, QueuedStart::Next("lost".into()))
+            .start_queued(QUEUE_THREAD, QueuedStart::Next("first".into()))
             .await
             .unwrap(),
         QueuedOutcome::Started(_)
     ));
-    assert_eq!(active_input(&agent).await.as_deref(), Some("lost"));
+    assert_eq!(active_input(&agent).await.as_deref(), Some("first"));
+    agent.runtimes.lock().await.clear();
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+async fn an_interrupted_claim_returns_to_the_queue_even_when_the_transcript_lists_it() {
+    use super::queue::{QueuedOutcome, QueuedStart};
+    use crate::providers::claude::queued_messages::Delivery;
+    let (home, agent, _events, _group, mut child) = queue_agent().await;
+    queue(&agent, "first").await;
+    agent
+        .queued_messages
+        .update(QUEUE_THREAD, |queue| {
+            queue.entries[0].delivery = Delivery::Starting;
+            Ok(())
+        })
+        .unwrap();
+    assert!(!agent.queue_delete(QUEUE_THREAD, "first").await.unwrap());
+    record_user_message(&home, "unrelated");
+    assert!(matches!(
+        agent
+            .start_queued(QUEUE_THREAD, QueuedStart::Next("first".into()))
+            .await
+            .unwrap(),
+        QueuedOutcome::Started(_)
+    ));
+    assert_eq!(active_input(&agent).await.as_deref(), Some("first"));
     agent.runtimes.lock().await.clear();
     let _ = child.kill().await;
 }
@@ -3929,7 +4090,10 @@ async fn a_persistent_refusal_leaves_the_message_queued_and_holds_the_queue() {
     assert!(error.holds_queue(), "{error}");
     let queued = agent.queued_messages(QUEUE_THREAD).await.unwrap();
     assert_eq!(queued.entries.len(), 1);
-    assert!(!queued.entries[0].starting);
+    assert_eq!(
+        queued.entries[0].delivery,
+        crate::providers::claude::queued_messages::Delivery::Queued
+    );
 }
 
 #[tokio::test]
@@ -3938,10 +4102,7 @@ async fn a_job_thread_with_an_unheld_queue_still_has_pending_work() {
     assert!(!agent.queue_has_pending_work(QUEUE_THREAD).await.unwrap());
     queue(&agent, "next").await;
     assert!(agent.queue_has_pending_work(QUEUE_THREAD).await.unwrap());
-    agent
-        .hold_queue(QUEUE_THREAD, "held")
-        .await
-        .unwrap();
+    agent.hold_queue(QUEUE_THREAD, "held").await.unwrap();
     assert!(!agent.queue_has_pending_work(QUEUE_THREAD).await.unwrap());
     agent.runtimes.lock().await.clear();
     let _ = child.kill().await;

@@ -501,6 +501,7 @@ pub(crate) struct ClaudeSupervisor {
     conversation_index: crate::providers::claude::conversation_index::Store,
     queued_messages: Arc<crate::providers::claude::queued_messages::QueuedMessages>,
     queue_drains: queue::DrainRequests,
+    queued_writes: queue::QueuedWrites,
     job_changes: tokio::sync::watch::Sender<()>,
 }
 
@@ -526,6 +527,7 @@ impl ClaudeSupervisor {
                 ),
             ),
             queue_drains: queue::DrainRequests::default(),
+            queued_writes: queue::QueuedWrites::default(),
             settings,
             notifications,
             journal,

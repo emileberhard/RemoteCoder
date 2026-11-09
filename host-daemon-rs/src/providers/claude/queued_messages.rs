@@ -25,8 +25,23 @@ const MAX_HOLD_MESSAGE_BYTES: usize = 1_024;
 pub(crate) struct QueuedMessage {
     pub id: String,
     pub input: Value,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub starting: bool,
+    #[serde(default, skip_serializing_if = "Delivery::is_queued")]
+    pub delivery: Delivery,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Delivery {
+    #[default]
+    Queued,
+    Starting,
+    Written,
+}
+
+impl Delivery {
+    fn is_queued(&self) -> bool {
+        *self == Self::Queued
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -322,7 +337,7 @@ mod tests {
         QueuedMessage {
             id: id.to_owned(),
             input: json!([{"type":"text","text":text}]),
-            starting: false,
+            delivery: Delivery::Queued,
         }
     }
 
@@ -397,7 +412,11 @@ mod tests {
             let store = std::sync::Arc::clone(&store);
             std::thread::spawn(move || {
                 answer
-                    .send((store.has("claude_a"), store.has("claude_b"), store.threads()))
+                    .send((
+                        store.has("claude_a"),
+                        store.has("claude_b"),
+                        store.threads(),
+                    ))
                     .unwrap();
             });
         }

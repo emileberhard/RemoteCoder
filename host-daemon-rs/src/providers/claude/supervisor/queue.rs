@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -7,7 +7,7 @@ use tracing::warn;
 
 use super::{ClaudeSupervisor, TurnErrorData, TurnOrigin, TurnStartError};
 use crate::providers::claude::queued_messages::{
-    Queue, QueueHold, QueueWriteUncertain, QueuedMessage,
+    Delivery, Queue, QueueHold, QueueWriteUncertain, QueuedMessage,
 };
 use crate::providers::claude::{ClaudeTurnRequest, ClaudeUserInput, session_uuid_from_thread_id};
 use crate::rpc::error::RpcCode;
@@ -37,6 +37,15 @@ impl DrainRequests {
             }
             ready.await;
         }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct QueuedWrites(std::sync::Mutex<HashMap<String, (String, i32)>>);
+
+impl QueuedWrites {
+    pub(super) fn guard(&self) -> std::sync::MutexGuard<'_, HashMap<String, (String, i32)>> {
+        self.0.lock().expect("queued writes poisoned")
     }
 }
 
@@ -156,7 +165,7 @@ impl ClaudeSupervisor {
         let message = QueuedMessage {
             id: id.to_owned(),
             input,
-            starting: false,
+            delivery: Delivery::Queued,
         };
         let added = self
             .update_queue(thread_id, move |queue| {
@@ -180,7 +189,7 @@ impl ClaudeSupervisor {
             let before = queue.entries.len();
             queue
                 .entries
-                .retain(|entry| entry.id != id || entry.starting);
+                .retain(|entry| entry.id != id || entry.delivery != Delivery::Queued);
             if queue.entries.is_empty() {
                 queue.hold = None;
             }
@@ -290,9 +299,19 @@ impl ClaudeSupervisor {
             };
         }
         let queue = self
-            .settle_stale_starts(thread_id)
+            .settle_starts(thread_id)
             .await
             .map_err(|error| queue_unreadable(&error))?;
+        if queue
+            .entries
+            .iter()
+            .any(|entry| entry.delivery != Delivery::Queued)
+        {
+            return match start {
+                QueuedStart::Next(_) => Ok(QueuedOutcome::Waiting),
+                QueuedStart::Now(_) => Err(TurnStartError::not_idle()),
+            };
+        }
         let entry = match &start {
             QueuedStart::Next(expected) => {
                 let Some(head) = queue.entries.first() else {
@@ -332,7 +351,7 @@ impl ClaudeSupervisor {
                 let Some(entry) = queue.entries.iter_mut().find(|entry| entry.id == id) else {
                     return Ok(false);
                 };
-                entry.starting = true;
+                entry.delivery = Delivery::Starting;
                 Ok(true)
             })
             .await
@@ -345,13 +364,20 @@ impl ClaudeSupervisor {
             .start_turn_with_policy(request, TurnOrigin::Queued, policy)
             .await;
         let transferred = started.is_ok() || self.runtime_holds_input(thread_id, &entry.id).await;
+        if transferred {
+            self.queued_writes.guard().remove(thread_id);
+        }
         let id = entry.id.clone();
         let settled = self
             .update_queue(thread_id, move |queue| {
                 if transferred {
                     queue.entries.retain(|entry| entry.id != id);
-                } else if let Some(entry) = queue.entries.iter_mut().find(|entry| entry.id == id) {
-                    entry.starting = false;
+                } else if let Some(entry) = queue
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.id == id && entry.delivery == Delivery::Starting)
+                {
+                    entry.delivery = Delivery::Queued;
                 }
                 if queue.entries.is_empty() {
                     queue.hold = None;
@@ -421,46 +447,66 @@ impl ClaudeSupervisor {
             .map(|selection| selection.cwd))
     }
 
-    async fn settle_stale_starts(&self, thread_id: &str) -> Result<Queue> {
-        let queue = self.queued_messages(thread_id).await?;
-        let stale = queue
-            .entries
-            .iter()
-            .filter(|entry| entry.starting)
-            .map(|entry| entry.id.clone())
-            .collect::<Vec<_>>();
-        if stale.is_empty() {
-            return Ok(queue);
-        }
-        let mut delivered = HashSet::new();
-        let history = match (
-            session_uuid_from_thread_id(thread_id),
-            self.recorded_cwd(thread_id).await?,
-        ) {
-            (Some(session), Some(cwd)) => self.session_history(&cwd, session),
-            _ => None,
-        };
-        if let Some(history) = history {
-            let ids = stale.clone();
-            let recorded = tokio::task::spawn_blocking(move || {
-                let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
-                crate::providers::claude::delivery_evidence::recorded_ids(&history, &ids).map(
-                    |recorded| {
-                        recorded
-                            .into_iter()
-                            .map(str::to_owned)
-                            .collect::<HashSet<_>>()
-                    },
-                )
+    pub(super) async fn mark_queued_written(
+        &self,
+        thread_id: &str,
+        id: &str,
+        group: i32,
+    ) -> Result<(), TurnStartError> {
+        let entry = id.to_owned();
+        let marked = self
+            .update_queue(thread_id, move |queue| {
+                let Some(entry) = queue.entries.iter_mut().find(|candidate| {
+                    candidate.id == entry && candidate.delivery == Delivery::Starting
+                }) else {
+                    return Ok(false);
+                };
+                entry.delivery = Delivery::Written;
+                Ok(true)
             })
             .await
-            .context("Claude queue evidence worker failed")??;
-            delivered.extend(recorded);
+            .map_err(|error| {
+                TurnStartError::internal(format!(
+                    "the queued message could not be marked as sent: {error:#}"
+                ))
+            })?;
+        if !marked {
+            return Err(TurnStartError::internal(
+                "the queued message changed while it was starting",
+            ));
+        }
+        self.queued_writes
+            .guard()
+            .insert(thread_id.to_owned(), (id.to_owned(), group));
+        Ok(())
+    }
+
+    async fn settle_starts(&self, thread_id: &str) -> Result<Queue> {
+        let queue = self.queued_messages(thread_id).await?;
+        if queue
+            .entries
+            .iter()
+            .all(|entry| entry.delivery == Delivery::Queued)
+        {
+            return Ok(queue);
+        }
+        let live = self.live_queued_write(thread_id).await;
+        let decided = queue
+            .entries
+            .iter()
+            .filter(|entry| entry.delivery == Delivery::Written && Some(&entry.id) != live.as_ref())
+            .map(|entry| entry.id.clone())
+            .collect::<HashSet<_>>();
+        let recorded = self.recorded_inputs(thread_id, &decided).await?;
+        if live.is_none() {
+            self.queued_writes.guard().remove(thread_id);
         }
         self.update_queue(thread_id, move |queue| {
-            queue.entries.retain(|entry| !delivered.contains(&entry.id));
+            queue.entries.retain(|entry| !recorded.contains(&entry.id));
             for entry in &mut queue.entries {
-                entry.starting = false;
+                if entry.delivery == Delivery::Starting || decided.contains(&entry.id) {
+                    entry.delivery = Delivery::Queued;
+                }
             }
             if queue.entries.is_empty() {
                 queue.hold = None;
@@ -468,6 +514,52 @@ impl ClaudeSupervisor {
             Ok(queue.clone())
         })
         .await
+    }
+
+    async fn live_queued_write(&self, thread_id: &str) -> Option<String> {
+        let (id, group) = self.queued_writes.guard().get(thread_id).cloned()?;
+        let current = self
+            .runtimes
+            .lock()
+            .await
+            .get(thread_id)
+            .map(|runtime| runtime.process_group_id);
+        (current != Some(group) && super::group_exists(nix::unistd::Pid::from_raw(group)))
+            .then_some(id)
+    }
+
+    async fn recorded_inputs(
+        &self,
+        thread_id: &str,
+        ids: &HashSet<String>,
+    ) -> Result<HashSet<String>> {
+        if ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let history = match (
+            session_uuid_from_thread_id(thread_id),
+            self.recorded_cwd(thread_id).await?,
+        ) {
+            (Some(session), Some(cwd)) => self.session_history(&cwd, session),
+            _ => None,
+        };
+        let Some(history) = history else {
+            return Ok(HashSet::new());
+        };
+        let ids = ids.iter().cloned().collect::<Vec<_>>();
+        tokio::task::spawn_blocking(move || {
+            let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
+            crate::providers::claude::delivery_evidence::recorded_ids(&history, &ids).map(
+                |recorded| {
+                    recorded
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect::<HashSet<_>>()
+                },
+            )
+        })
+        .await
+        .context("Claude queue evidence worker failed")?
     }
 }
 

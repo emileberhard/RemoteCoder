@@ -497,7 +497,11 @@ mod tests {
         .unwrap();
         let error = gateway.claude_queue_add(&add("m")).await.unwrap_err();
         assert_eq!(error.code, RpcCode::Internal, "{error:?}");
-        assert_eq!(error.kind(), None, "nothing was written, so nothing is uncertain");
+        assert_eq!(
+            error.kind(),
+            None,
+            "nothing was written, so nothing is uncertain"
+        );
         let error = gateway
             .claude_queue_delete(&json!({"threadId": THREAD, "queuedSubmissionId": "m"}))
             .await

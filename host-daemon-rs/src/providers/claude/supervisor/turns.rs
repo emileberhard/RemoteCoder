@@ -333,6 +333,22 @@ impl ClaudeSupervisor {
                 ));
             }
         }
+        if matches!(origin, TurnOrigin::Queued) {
+            let marked = match prepared.input_id() {
+                Some(id) => {
+                    self.mark_queued_written(&request.thread_id, id, process_group_id)
+                        .await
+                }
+                None => Err(TurnStartError::internal(
+                    "a queued message has no client id",
+                )),
+            };
+            if let Err(error) = marked {
+                self.fail_runtime(&request.thread_id, process_group_id, "interrupted", None)
+                    .await;
+                return Err(error);
+            }
+        }
         let pending = match self
             .submit_callback_input(
                 &request.thread_id,
