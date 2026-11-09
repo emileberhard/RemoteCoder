@@ -52,8 +52,8 @@ Contact, lift, crossing a new cell, and accepted selection use the existing
 The prepared player also warms these existing recipes. Four points of cell
 hysteresis on both axes suppress boundary jitter; a release never adds a
 redundant hover tick.
-Cancellation is silent. Copy retains clipboard-owned feedback. Standard/Strong,
-opt-out, foreground and microphone/call suppression remain centrally owned.
+Cancellation is silent. Copy retains clipboard-owned feedback. Foreground and
+microphone/call suppression remain centrally owned.
 
 ## Focused verification
 

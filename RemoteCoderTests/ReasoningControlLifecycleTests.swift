@@ -130,7 +130,10 @@ struct ReasoningControlLifecycleTests {
     ) async throws {
         let haptics = HapticFixture()
         defer { haptics.cleanUp() }
-        let preferences = ModelPickerPreferences(defaults: haptics.defaults)
+        let suite = "ReasoningControlLifecycleTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = ModelPickerPreferences(defaults: defaults)
         preferences.show(only: [.low, .medium, .high])
         let fixture = ReasoningControlFixture(haptics: haptics.service)
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -139,7 +142,7 @@ struct ReasoningControlLifecycleTests {
             .environment(AppThemeStore())
             .environment(preferences)
             .environment(\.scenePhase, .active)
-            .defaultAppStorage(haptics.defaults))
+            .defaultAppStorage(defaults))
         hosted.show(controller)
         defer { hosted.close() }
         fixture.picker.updateViewport(CGRect(x: 0, y: 0, width: 390, height: 844))

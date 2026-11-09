@@ -21,8 +21,8 @@ final class ViewHapticPlayer: HapticNativePlaying {
         }
     }
 
-    func play(_ event: HapticEvent, strength: HapticStrength) {
-        let recipe = event.recipe(for: strength)
+    func play(_ event: HapticEvent) {
+        let recipe = event.recipe
         switch recipe {
         case let .impact(style, intensity):
             guard let impact = impact(for: style) else { return }

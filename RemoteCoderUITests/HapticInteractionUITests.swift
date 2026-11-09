@@ -30,31 +30,4 @@ final class HapticInteractionUITests: XCTestCase {
         XCTAssertFalse(show.exists)
     }
 
-    @MainActor
-    func testAppHapticsPreferenceRemainsUsableWhenOff() throws {
-        let app = launchDraft()
-        app.buttons["open-conversations"].tap()
-        app.buttons["Settings"].tap()
-        let toggle = app.switches["app-haptics-enabled"]
-        if !toggle.isHittable { app.swipeUp() }
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
-        if toggle.value as? String == "1" {
-            // SwiftUI exposes the whole form row; target the trailing switch, not blank label space.
-            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        }
-        waitForToggle(toggle, value: "0")
-        XCTAssertFalse(app.buttons["app-haptics-preview"].isEnabled)
-        capture(app, name: "Haptic preference off")
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        waitForToggle(toggle, value: "1")
-        XCTAssertTrue(app.buttons["app-haptics-preview"].isEnabled)
-        app.buttons["app-haptics-preview"].tap()
-    }
-
-    @MainActor
-    private func waitForToggle(_ toggle: XCUIElement, value: String) {
-        let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: toggle)
-        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 3), .completed)
-    }
-
 }

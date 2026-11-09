@@ -11,9 +11,7 @@ struct HapticServiceTests {
         let view = UIView()
         let player = ViewHapticPlayer(view: view)
         for _ in 0..<3 {
-            for strength in HapticStrength.allCases {
-                for event in HapticEvent.allCases { player.prepare(event.recipe(for: strength)) }
-            }
+            for event in HapticEvent.allCases { player.prepare(event.recipe) }
             #expect(view.interactions.count == 6)
         }
         player.release()
@@ -119,15 +117,6 @@ struct HapticServiceTests {
         let accepted = fixture.native.events.count
         input.wrappedValue = 99
         #expect(value == 3)
-        #expect(fixture.native.events.count == accepted)
-        fixture.service.strength = .standard
-        input.wrappedValue = 4
-        #expect(value == 4)
-        #expect(fixture.native.events.count == accepted)
-        fixture.service.isEnabled = false
-        fixture.service.strength = .strong
-        input.wrappedValue = 5
-        #expect(value == 5)
         #expect(fixture.native.events.count == accepted)
     }
 }

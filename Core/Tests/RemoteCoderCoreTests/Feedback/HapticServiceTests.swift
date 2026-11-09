@@ -63,27 +63,9 @@ struct HapticServiceTests {
         fixture.service.cancelPlayback()
         fixture.callActive = false
         fixture.service.prepareStreaming()
-        let third = try #require(fixture.streamingPlayers.last)
-        fixture.service.isEnabled = false
-        #expect(third.cancelled)
-        fixture.service.isEnabled = true
         fixture.active = false
         fixture.service.prepareStreaming()
         #expect(fixture.streamingPlayers.count == 3)
-    }
-
-    @Test func preferencePersistsAndNeverReplaysSuppressedFeedback() {
-        let fixture = HapticFixture()
-        defer { fixture.cleanUp() }
-        #expect(fixture.service.isEnabled)
-        fixture.service.isEnabled = false
-        fixture.service.play(.commit)
-        #expect(fixture.native.events.isEmpty)
-        #expect(!fixture.makeService().isEnabled)
-        fixture.service.isEnabled = true
-        #expect(fixture.native.events.isEmpty)
-        fixture.service.play(.commit)
-        #expect(fixture.native.events.last == HapticEvent.commit.recipe(for: .strong))
     }
 
     @Test func audioOwnersAreIndependentAndCallsSuppressEveryAppSurface() {
@@ -97,10 +79,10 @@ struct HapticServiceTests {
         #expect(fixture.native.events.isEmpty)
         fixture.service.endCapture(owner: second)
         fixture.service.play(.iconPress)
-        #expect(fixture.native.events == [HapticEvent.iconPress.recipe(for: .strong)])
+        #expect(fixture.native.events == [HapticEvent.iconPress.recipe])
         fixture.callActive = true
         fixture.service.play(.toggleOn)
-        #expect(fixture.native.events == [HapticEvent.iconPress.recipe(for: .strong)])
+        #expect(fixture.native.events == [HapticEvent.iconPress.recipe])
         fixture.callActive = false
         #expect(fixture.service.canPlay)
     }
@@ -119,13 +101,13 @@ struct HapticServiceTests {
         #expect(fixture.native.events.isEmpty)
     }
 
-    @Test func occurrencesAreHostQualifiedAndConsumedEvenWhenDisabled() {
+    @Test func occurrencesAreHostQualifiedAndConsumedEvenWhenSuppressed() {
         let fixture = HapticFixture()
         defer { fixture.cleanUp() }
         let first = HapticOccurrence(hostID: UUID(), kind: .question, id: "same-thread|same-item")
-        fixture.service.isEnabled = false
+        fixture.active = false
         fixture.service.play(.warning, occurrence: first)
-        fixture.service.isEnabled = true
+        fixture.active = true
         fixture.service.play(.warning, occurrence: first)
         #expect(fixture.native.events.isEmpty)
         let second = HapticOccurrence(hostID: UUID(), kind: .question, id: first.id)
@@ -139,11 +121,11 @@ struct HapticServiceTests {
         let fixture = HapticFixture()
         defer { fixture.cleanUp() }
         fixture.service.play(.copied)
-        #expect(fixture.native.events == [HapticEvent.copied.recipe(for: .strong)])
+        #expect(fixture.native.events == [HapticEvent.copied.recipe])
         fixture.service.play(.copied)
         fixture.service.play(.error)
         fixture.service.play(.error)
-        #expect(fixture.native.events == [HapticEvent.copied, .copied, .error, .error].map { $0.recipe(for: .strong) })
+        #expect(fixture.native.events == [HapticEvent.copied, .copied, .error, .error].map { $0.recipe })
     }
 
     @Test func replacingAttachmentReleasesOldResourcesAndLateDetachCannotRemoveTheReplacement() {
@@ -157,7 +139,7 @@ struct HapticServiceTests {
         service.detach(fixture.native)
         service.play(.commit)
         service.play(.copied)
-        #expect(replacement.events == [HapticEvent.commit.recipe(for: .strong), HapticEvent.copied.recipe(for: .strong)])
+        #expect(replacement.events == [HapticEvent.commit.recipe, HapticEvent.copied.recipe])
         #expect(replacement.releases == 0)
         service.detach(replacement)
         #expect(replacement.releases == 1)
@@ -179,34 +161,7 @@ struct HapticServiceTests {
         fixture.service.endCapture(owner: owner)
         #expect(fixture.native.events == [.error])
         fixture.service.play(.commit)
-        #expect(fixture.native.events.last == HapticEvent.commit.recipe(for: .strong))
-    }
-
-    @Test func strengthDefaultsToStrongPersistsAndNeverReenablesAnOptOut() {
-        let fixture = HapticFixture()
-        defer { fixture.cleanUp() }
-        fixture.defaults.set(false, forKey: HapticService.preferenceKey)
-        #expect(fixture.service.strength == .strong)
-        #expect(!fixture.service.isEnabled)
-        fixture.service.strength = .standard
-        #expect(fixture.makeService().strength == .standard)
-        #expect(!fixture.makeService().isEnabled)
-    }
-
-    @Test func changingStrengthCancelsPreparedGestureAndAppliesTheNewRecipe() throws {
-        let fixture = HapticFixture()
-        defer { fixture.cleanUp() }
-        let owner = UUID()
-        fixture.service.play(.commit)
-        fixture.service.beginInteraction(owner: owner)
-        let player = try #require(fixture.players.last)
-        fixture.service.strength = .standard
-        #expect(player.cancelled)
-        #expect(fixture.native.events == [HapticEvent.commit.recipe(for: .strong)])
-        fixture.service.play(.commit)
-        #expect(fixture.native.events.last == HapticEvent.commit.recipe(for: .standard))
-        fixture.service.playInteraction(.sliderStep, owner: owner)
-        #expect(player.events.isEmpty)
+        #expect(fixture.native.events.last == HapticEvent.commit.recipe)
     }
 
     @Test func preparedGesturesHaveOneOwnerAndDoNotCoalesceSynchronousTicks() throws {
@@ -232,7 +187,7 @@ struct HapticServiceTests {
         #expect(secondPlayer.events == [.lift])
     }
 
-    @Test func captureAndOptOutAlsoCancelAFinishingAccent() throws {
+    @Test func captureAlsoCancelsAFinishingAccent() throws {
         let fixture = HapticFixture()
         defer { fixture.cleanUp() }
         let owner = UUID(), capture = UUID()
@@ -247,10 +202,6 @@ struct HapticServiceTests {
         fixture.service.endCapture(owner: capture)
         fixture.service.playInteraction(.sliderStep, owner: owner)
         #expect(player.events == [.sliderSettle])
-        fixture.service.beginInteraction(owner: owner)
-        let replacement = try #require(fixture.players.last)
-        fixture.service.isEnabled = false
-        #expect(replacement.cancelled)
     }
 
     @Test func callsAndInactiveScenesRejectPreparedPlaybackWithoutReplaying() throws {
@@ -272,36 +223,17 @@ struct HapticServiceTests {
         #expect(player.events.isEmpty)
     }
 
-    @Test func strongerRecipesRetainSemanticHierarchyAndNotificationPatterns() {
+    @Test func impactIntensitiesStayWithinTheGeneratorRange() {
         for event in HapticEvent.allCases {
-            if case let .impact(_, intensity) = event.recipe(for: .strong) {
+            if case let .impact(_, intensity) = event.recipe {
                 #expect((0...1).contains(intensity))
             }
-            #expect(event.accent(for: .standard) == nil)
         }
-        #expect(impactWeight(HapticEvent.commit.recipe(for: .strong)) == .medium)
-        #expect(HapticEvent.sliderStep.recipe(for: .standard) == HapticRecipe.selection)
-        #expect(impactWeight(HapticEvent.sliderStep.recipe(for: .strong)) == .rigid)
-        #expect(HapticEvent.selection.recipe(for: .strong) == HapticRecipe.selection)
-        for event in [HapticEvent.success, .warning, .error] {
-            #expect(event.recipe(for: .strong) == event.recipe(for: .standard))
-            #expect(event.accent(for: .strong) == nil)
-        }
-        #expect(HapticEvent.lift.accent(for: .strong) == .lift)
-        #expect(HapticEvent.sliderSettle.accent(for: .strong) == .seat)
-        #expect(HapticEvent.commit.accent(for: .strong) == nil)
-    }
-
-    private func impactWeight(_ recipe: HapticRecipe) -> HapticRecipe.Impact? {
-        guard case let .impact(weight, _) = recipe else { return nil }
-        return weight
     }
 }
 
 @MainActor
 private final class HapticFixture {
-    let suite = "RemoteCoderTests.Haptics.\(UUID())"
-    let defaults: UserDefaults
     var active = true
     var callActive = false
     let native = RecordingNativeHapticPlayer()
@@ -309,13 +241,8 @@ private final class HapticFixture {
     var streamingPlayers: [RecordingStreamingHapticPlayer] = []
     lazy var service = makeService()
 
-    init() {
-        guard let defaults = UserDefaults(suiteName: suite) else { preconditionFailure("Test defaults unavailable") }
-        self.defaults = defaults
-    }
-
     func makeService(supportsHaptics: Bool = true) -> HapticService {
-        let service = HapticService(defaults: defaults, supportsHaptics: supportsHaptics,
+        let service = HapticService(supportsHaptics: supportsHaptics,
                                     isActive: { [weak self] in self?.active == true },
                                     makeInteractionPlayer: { [weak self] _ in
                                         let player = RecordingHapticPlayer()
@@ -333,7 +260,6 @@ private final class HapticFixture {
 
     func cleanUp() {
         service.cancelPlayback()
-        defaults.removePersistentDomain(forName: suite)
     }
 }
 
@@ -345,7 +271,7 @@ private final class RecordingHapticPlayer: HapticInteractionPlaying {
     var cancelled = false
     var isEligible: @MainActor () -> Bool = { false }
 
-    func prepare(strength: HapticStrength, canPlay: @escaping @MainActor () -> Bool) { isEligible = canPlay }
+    func prepare(canPlay: @escaping @MainActor () -> Bool) { isEligible = canPlay }
     func play(_ event: HapticEvent) { events.append(event) }
     func finish() { finished = true }
     func cancel() { cancelled = true; hasActiveAccent = false }
@@ -368,6 +294,6 @@ private final class RecordingNativeHapticPlayer: HapticNativePlaying {
     var releases = 0
 
     func prepare(_ recipe: HapticRecipe) {}
-    func play(_ event: HapticEvent, strength: HapticStrength) { events.append(event.recipe(for: strength)) }
+    func play(_ event: HapticEvent) { events.append(event.recipe) }
     func release() { releases += 1 }
 }

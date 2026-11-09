@@ -26,7 +26,7 @@ struct RecordingHapticTests {
             fixture.service.play(.commit)
         }
         #expect(called)
-        #expect(fixture.native.events.last == HapticEvent.commit.recipe(for: .strong))
+        #expect(fixture.native.events.last == HapticEvent.commit.recipe)
         #expect(!controller.isTranscribing)
     }
 

@@ -1,50 +1,42 @@
 import Foundation
 
-enum HapticStrength: String, CaseIterable, Identifiable, Sendable {
-    case standard, strong
-    var id: Self { self }
-    var title: String { self == .strong ? "Strong" : "Standard" }
-}
-
 /// Meaning, not a screen-specific vibration. This catalog owns every recipe.
 enum HapticEvent: String, CaseIterable, Sendable {
     case buttonPress, iconPress, selection, toggleOn, toggleOff
     case lift, sliderGrab, sliderStep, sliderMinimum, sliderMaximum, sliderRelease, sliderSettle
     case commit, copied, disclosure, success, warning, error, refused, photoCapture
 
-    func recipe(for strength: HapticStrength) -> HapticRecipe {
-        let strong = strength == .strong
+    var recipe: HapticRecipe {
         switch self {
-        case .buttonPress: return .impact(.light, intensity: strong ? 1 : 0.8)
-        case .iconPress: return .impact(.light, intensity: strong ? 0.95 : 0.65)
-        case .selection: return .selection
-        case .sliderStep: return strong ? .impact(.rigid, intensity: 0.5) : .selection
-        case .toggleOn: return .impact(.rigid, intensity: strong ? 0.85 : 0.65)
-        case .toggleOff: return .impact(.soft, intensity: strong ? 1 : 0.75)
-        case .lift: return .impact(.rigid, intensity: strong ? 1 : 0.8)
-        case .sliderGrab: return .impact(.soft, intensity: strong ? 0.75 : 0.55)
-        case .sliderMinimum: return .impact(.rigid, intensity: strong ? 0.7 : 0.5)
-        case .sliderMaximum: return .impact(.rigid, intensity: strong ? 0.95 : 0.7)
-        case .sliderRelease: return .impact(.soft, intensity: strong ? 0.8 : 0.6)
-        case .sliderSettle: return .impact(.soft, intensity: strong ? 0.9 : 0.65)
-        case .commit: return strong ? .impact(.medium, intensity: 0.8) : .impact(.light, intensity: 0.75)
-        case .copied: return .impact(.soft, intensity: strong ? 1 : 0.8)
-        case .disclosure: return .impact(.soft, intensity: strong ? 0.85 : 0.6)
-        case .success: return .success
-        case .warning: return .warning
-        case .error, .refused: return .error
-        case .photoCapture: return .impact(.rigid, intensity: strong ? 0.9 : 0.7)
+        case .buttonPress: .impact(.light, intensity: 1)
+        case .iconPress: .impact(.light, intensity: 0.95)
+        case .selection: .selection
+        case .sliderStep: .impact(.rigid, intensity: 0.5)
+        case .toggleOn: .impact(.rigid, intensity: 0.85)
+        case .toggleOff: .impact(.soft, intensity: 1)
+        case .lift: .impact(.rigid, intensity: 1)
+        case .sliderGrab: .impact(.soft, intensity: 0.75)
+        case .sliderMinimum: .impact(.rigid, intensity: 0.7)
+        case .sliderMaximum: .impact(.rigid, intensity: 0.95)
+        case .sliderRelease: .impact(.soft, intensity: 0.8)
+        case .sliderSettle: .impact(.soft, intensity: 0.9)
+        case .commit: .impact(.medium, intensity: 0.8)
+        case .copied: .impact(.soft, intensity: 1)
+        case .disclosure: .impact(.soft, intensity: 0.85)
+        case .success: .success
+        case .warning: .warning
+        case .error, .refused: .error
+        case .photoCapture: .impact(.rigid, intensity: 0.9)
         }
     }
 
     var playsDuringCapture: Bool { self == .refused }
 
-    func accent(for strength: HapticStrength) -> HapticAccent? {
-        guard strength == .strong else { return nil }
+    var accent: HapticAccent? {
         switch self {
-        case .lift: return .lift
-        case .sliderSettle: return .seat
-        default: return nil
+        case .lift: .lift
+        case .sliderSettle: .seat
+        default: nil
         }
     }
 }

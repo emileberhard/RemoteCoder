@@ -10,7 +10,7 @@ struct HapticOwnershipTests {
         fixture.model.setPresentation(TargetPresentation(presented: true))
         let first = fixture.model.target.feedbackForCurrentConversation()
         first(.commit)
-        #expect(fixture.haptics.native.events.last == HapticEvent.commit.recipe(for: .strong))
+        #expect(fixture.haptics.native.events.last == HapticEvent.commit.recipe)
         let before = fixture.haptics.native.events
         fixture.model.setPresentation(TargetPresentation(presented: false))
         fixture.model.setPresentation(TargetPresentation(presented: true))
@@ -36,7 +36,7 @@ struct HapticOwnershipTests {
         fixture.model.setActiveSessionID("claude_test")
         let event = try completion(thread: "claude_test", status: status)
         await fixture.model.target.apply(gatewayEvent: event)
-        #expect(fixture.haptics.native.events.last == expected?.recipe(for: .strong))
+        #expect(fixture.haptics.native.events.last == expected?.recipe)
         let before = fixture.haptics.native.events
         await fixture.model.target.apply(gatewayEvent: event)
         #expect(fixture.haptics.native.events == before)
@@ -81,7 +81,7 @@ struct HapticOwnershipTests {
             await fixture.model.target.apply(gatewayEvent: event)
         }
         let first = fixture.haptics.native.events
-        #expect(first == [HapticEvent.success.recipe(for: .strong)])
+        #expect(first == [HapticEvent.success.recipe])
         if directFirst {
             await fixture.model.target.apply(gatewayEvent: event)
         } else {
@@ -102,7 +102,7 @@ struct HapticOwnershipTests {
         #expect(fixture.haptics.native.events.isEmpty)
         fixture.model.target.reportTurnFeedback(threadID: "claude_test", turnID: "1",
                                          outcome: .failed, replay: false, feedback: feedback)
-        #expect(fixture.haptics.native.events.last == HapticEvent.error.recipe(for: .strong))
+        #expect(fixture.haptics.native.events.last == HapticEvent.error.recipe)
     }
 
     private func completion(thread: String, status: String, turn: String = "1") throws -> RoutedGatewayEvent {
@@ -116,18 +116,20 @@ struct HapticOwnershipTests {
 @MainActor
 private struct HapticModelFixture {
     let haptics = HapticFixture()
+    let suite = "HapticModelFixture.\(UUID().uuidString)"
     let temporaryStorage: TemporaryHostStorage
     let hostID = UUID()
     let target: ChatTargetModel
     let model: ChatScreenModel
 
     init() {
+        guard let defaults = UserDefaults(suiteName: suite) else { preconditionFailure("Test defaults unavailable") }
         let temporaryStorage = TemporaryHostStorage()
         self.temporaryStorage = temporaryStorage
         target = ChatTargetModel(host: GatewayHostConfiguration(id: hostID, name: "Haptic test",
             hostname: "127.0.0.1", port: 1, authToken: "test", transport: .trustedNetwork),
-            chatDefaults: haptics.defaults, modelPickerPreferences: ModelPickerPreferences(defaults: haptics.defaults),
-            syncedPreferences: SyncedPreferenceStore(defaults: haptics.defaults, keys: []),
+            chatDefaults: defaults, modelPickerPreferences: ModelPickerPreferences(defaults: defaults),
+            syncedPreferences: SyncedPreferenceStore(defaults: defaults, keys: []),
             haptics: haptics.service,
             voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: temporaryStorage.storage, htmlVisuals: HTMLVisualServices(directory: temporaryStorage.storage.root.appending(path: "html-visuals")))
         model = target.makeScreen(newChat: UUID())
@@ -137,5 +139,6 @@ private struct HapticModelFixture {
         await target.retire()
         temporaryStorage.cleanUp()
         haptics.cleanUp()
+        UserDefaults().removePersistentDomain(forName: suite)
     }
 }

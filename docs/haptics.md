@@ -1,12 +1,10 @@
 # Haptics and press previews
 
-RemoteCoder has one semantic vocabulary with **Standard** and **Strong** recipes.
-Strong is the default, including for existing installs without a saved strength;
-an existing App haptics opt-out is preserved. It increases everyday contact,
-uses firmer slider detents and adds two short, gesture-owned lift/seating accents.
-Standard keeps the earlier impact strengths and system selection ticks. Neither
-profile changes the meaning of success, warning or error. There is no audio click
-track, haptic library dependency, background rumble or perpetual keep-warm timer.
+RemoteCoder has one semantic vocabulary with one recipe per event: firm everyday
+contact, firm slider detents and two short, gesture-owned lift/seating accents.
+The recipes never change the meaning of success, warning or error. There is no
+in-app haptics setting, audio click track, haptic library dependency, background
+rumble or perpetual keep-warm timer.
 
 ## Native SwiftUI control rule
 
@@ -28,8 +26,8 @@ its accepted result, Scroll to latest reports disclosure, and neither also emits
 an extra activation pulse. This is an ownership choice, not a second glass look.
 
 Native picker and settings-tab **input bindings** use
-`.nativeSelectionFeedback()`. Strong adds one selection acknowledgement only
-when a new user value is accepted; Standard leaves the native feedback alone.
+`.nativeSelectionFeedback()`, which adds one selection acknowledgement only
+when a new user value is accepted.
 Programmatic restores, normalized/rejected writes, repeated values and remote
 updates stay silent. This supplements, rather than disables or scales, any
 system feedback. Native switches keep their native treatment; the custom Fast
@@ -51,10 +49,9 @@ The ordinary dispatch path never starts a custom engine.
 
 The iPhone catalog maps button/icon compression to light impacts, toggle states
 to rigid/soft impacts, and slider boundaries to distinct rigid impacts. Ordinary
-selection uses `.selection`; Standard slider steps do too, while Strong uses a
-modest rigid impact. Local acceptance becomes a medium impact under Strong.
-Actual outcomes retain `.success`, `.warning`, or `.error`. Tunable strengths live
-in the catalog, not views. Intensity parameters are not calibrated percentages
+selection uses `.selection`; slider steps use a modest rigid impact. Local
+acceptance is a medium impact. Actual outcomes retain `.success`, `.warning`,
+or `.error`. Tunable strengths live in the catalog, not views. Intensity parameters are not calibrated percentages
 of perceived force; test the actual device/case/grip.
 
 References:
@@ -82,14 +79,13 @@ Selecting an answer produces one selection tick; automatic question advancement
 is silent. Manual page changes and folder disclosures have their own quiet
 acknowledgement. The conversation drawer plays one system selection tick on a
 horizontal drag release only when the chosen destination differs from its initial
-side and the drawer is strictly between its endpoints. Standard and Strong use
-the same tick. Cancelled drags, returns to the initial side, endpoint releases,
+side and the drawer is strictly between its endpoints. Cancelled drags, returns to the initial side, endpoint releases,
 touch-down, movement, settle, drawer-button and scrim taps, and programmatic
 open/close are silent. Accepted conversation or draft selection retains its
 selection feedback without another closing tick.
 The drag prepares one view-attached selection generator at its start. Release
 submits the tick synchronously through the prepared interaction owner; it never
-publishes a SwiftUI pulse or starts the Strong profile's custom-accent engine.
+publishes a SwiftUI pulse or starts the custom-accent engine.
 Dynamic composer recovery buttons reserve their actual bounds from empty-space
 focus, just like the always-visible controls. Keyboard focus, typing, scrolling,
 tool events, upload percentages and usage updates stay silent.
@@ -113,8 +109,8 @@ an old anchor cannot detach a replacement. Missing output drops events.
 
 The service owns the native pool and lends it to gesture players. At most four
 impact styles, one selection generator and one notification generator are retained.
-All use `init(view:)` or `init(style:view:)`. Scene exit, capture, calls, opt-out,
-strength changes, attachment replacement and dismantle cancel playback and remove
+All use `init(view:)` or `init(style:view:)`. Scene exit, capture, calls,
+attachment replacement and dismantle cancel playback and remove
 the generators from their view. The attached pool remains reusable after suppression.
 Gesture finish/cancel releases its accents without removing shared native generators.
 The drawer retains its small, gesture-owned selection player on its recognizer view.
@@ -152,8 +148,7 @@ than labeling every terminal state successful.
 
 Assistant word reveals can play a brief opening sequence on supported iPhones.
 `StreamingHapticRecipe` uses one transient: intensity is `0.9 * punch`, and
-sharpness is a random value in `0.2..<0.4` plus `0.1 * punch`. Standard and Strong
-use the same decorative recipe. Up to six distinct word starts per message are
+sharpness is a random value in `0.2..<0.4` plus `0.1 * punch`. Up to six distinct word starts per message are
 marked as they arrive across publications, with punches
 `1, 0.84, 0.68, 0.52, 0.36, 0.2`. Continuation fragments share one word's start;
 a played or discarded start never re-arms. Code, tables and other atomic blocks
@@ -188,7 +183,7 @@ immediately. A cold or failed engine drops that pulse, without a native fallback
 or delayed replay. The engine is reused across messages and uses Core Haptics
 auto-shutdown while idle. An idle stop records it as unready; later preparation
 restarts it asynchronously, never from a display tick. Cancellation, capture,
-call, scene exit, opt-out and strength changes release it. Reset/start/stop
+call and scene exit release it. Reset/start/stop
 callbacks are generation-fenced. The layer does not activate audio or change
 its session, route or recording allowance.
 
@@ -237,8 +232,8 @@ first tick accompanies the start of motion; subsequent ticks slow down slightly.
 Small changes retain a 300 ms spring. Larger jumps extend the shared motion/tick
 timeline rather than compressing clicks together (six ticks: 430 ms animation;
 twelve ticks: 850 ms). There is no added delay after the picker returns and no
-extra seating pulse at animation completion. Strong and Standard use their
-existing central slider-step recipes through the prepared player.
+extra seating pulse at animation completion. The central slider-step recipe
+plays through the prepared player.
 The view's task is keyed to the accepted change; new contact, replacement,
 disappearance and lifecycle changes cancel old feedback. Deadlines are absolute
 from animation start; a tick more than 40 ms late drops the rest of the sequence
@@ -276,7 +271,7 @@ pool prepares anticipated impact/selection recipes at contact and re-prepares
 after ticks. Requests go directly to its prepared generators. No tick backlog
 is accumulated and the final detent/release pair is not blindly layered.
 
-Strong also prepares a haptics-only Core Haptics engine and two cached players.
+The prepared player also prepares a haptics-only Core Haptics engine and two cached players.
 Startup is asynchronous. If an accent is not ready at its event, a native recipe
 plays immediately instead; startup never replays it later. The lift has a 35 ms
 rounded onset followed by a crisp transient; seating is a contact plus a fading
@@ -286,8 +281,8 @@ patterns replace, not accompany, the corresponding native impact.
 The engine belongs to this interaction, not each tick. Stop/reset/start callbacks
 are generation-checked. Reset reconstructs players only for an eligible owner;
 a stopped/failed engine leaves native feedback available. Normal completion lets
-the finite accent finish before releasing its engine. Cancellation, app opt-out,
-strength changes, capture start, call activation and leaving the active scene
+the finite accent finish before releasing its engine. Cancellation, capture
+start, call activation and leaving the active scene
 stop prepared/finishing playback. No audio-session category, recording allowance
 or route is changed by this layer. There is no global prepared-state timer.
 Preparation and API-request instrumentation do not prove actuator latency.
@@ -316,13 +311,9 @@ travel plays one `sliderMaximum`, and a confirmed release or upward flick plays
 
 ## Audio and settings
 
-Settings → Chat → Touch feedback controls **App haptics** and **Feedback strength**.
-**Try feedback** opens a comparison page with the production button, native-menu,
-reasoning-slider and glass-acceptance components. Its selections and acceptance
-counter are local samples: it sends no requests, imports nothing and does not
-write the clipboard or conversation settings. Choosing Standard/Strong on this
-page does change the app's saved strength. Disabling haptics stops app-owned
-feedback; system controls and notifications retain their own settings.
+Settings has no haptic controls. App feedback plays when the device supports
+haptics, the scene is active and no capture or call suppresses it; system
+controls and notifications keep their own settings.
 
 Dictation suppression begins before audio activation suspends. Recording stop
 acknowledgement follows actual capture stop and successful audio-session release,
@@ -355,7 +346,7 @@ just ios-simulator-test RemoteCoderTests/HapticServiceTests \
   RemoteCoderTests/ReasoningPickerTests RemoteCoderTests/ReasoningControlLifecycleTests
 ```
 
-Core `HapticServiceTests` cover profile persistence/opt-out, recipes, synchronous
+Core `HapticServiceTests` cover recipes, synchronous
 ordered dispatch, suppression, attachment identity and prepared-owner replacement.
 Hosted tests cover view attachment/release, native binding
 transactions and user-only writes, detent hysteresis and final-position/release
@@ -367,12 +358,12 @@ raw-menu and haptic bypasses. Static checks are `scripts/lint-haptics`,
 Use `just install-dev` for the normal leased build and iPhone
 install/readback/launch. The full app unit suite and opt-in UI suites remain
 available through their existing repo commands, but are not necessary for every
-strength adjustment. Do not substitute a UI test for physical haptic acceptance.
+recipe adjustment. Do not substitute a UI test for physical haptic acceptance.
 
 The original refinement used focused unit checks only, no UI or integration
-runs. The device pass should compare Standard/Strong from Try feedback, including
-short tap, hold/slide/release, cancelled gestures, rapid re-entry, all detents,
-keyboard focus, native menus and settings tabs. Also check app/system haptics off,
+runs. The device pass should cover short tap, hold/slide/release, cancelled
+gestures, rapid re-entry, all detents, keyboard focus and native menus. Also
+check system haptics off,
 Reduce Motion, VoiceOver, cold-after-idle feedback, different grips/case and
 recording/call routes. The custom accents are tuning candidates, not remotely
 validated improvements. Simulator success cannot establish physical feel,
@@ -389,7 +380,7 @@ submit before gesture accent setup.
 ### Ownership and constraints
 
 One window-attached `ViewHapticPlayer` owns the bounded native generator pool.
-The gesture player borrows it and owns only its Strong accents. The drawer
+The gesture player borrows it and owns only its custom accents. The drawer
 selection player and streaming engine retain their distinct lifetimes. Object
 identity fences replacement and dismantle. UIKit stays outside Core.
 Preparation occurs at gesture begin and after impact/selection playback.

@@ -4,22 +4,6 @@ import OSLog
 
 @Observable @MainActor
 final class HapticService {
-    static let preferenceKey = "remoteCoder.appHapticsEnabled"
-    static let strengthKey = "remoteCoder.hapticStrength"
-
-    var isEnabled: Bool {
-        didSet {
-            defaults.set(isEnabled, forKey: Self.preferenceKey)
-            if !isEnabled { cancelPlayback() }
-        }
-    }
-    var strength: HapticStrength {
-        didSet {
-            guard strength != oldValue else { return }
-            defaults.set(strength.rawValue, forKey: Self.strengthKey)
-            cancelPlayback()
-        }
-    }
     @ObservationIgnored private var native: (any HapticNativePlaying)?
     @ObservationIgnored private let makeInteractionPlayer: (any HapticNativePlaying) -> any HapticInteractionPlaying
     @ObservationIgnored private let makeStreamingPlayer: () -> any HapticStreamingPlaying
@@ -28,7 +12,6 @@ final class HapticService {
     @ObservationIgnored private var lastFeedback: ContinuousClock.Instant?
     @ObservationIgnored private var interaction: (owner: UUID, player: any HapticInteractionPlaying)?
     @ObservationIgnored private var finishingPlayer: (owner: UUID, player: any HapticInteractionPlaying)?
-    @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let supportsHaptics: Bool
     @ObservationIgnored private let isActive: () -> Bool
     @ObservationIgnored private var isCallActive: () -> Bool = { false }
@@ -37,17 +20,14 @@ final class HapticService {
     @ObservationIgnored private var occurrenceOrder: [HapticOccurrence] = []
     @ObservationIgnored let signposter = OSSignposter(subsystem: "RemoteCoder", category: "Haptics")
 
-    init(defaults: UserDefaults, supportsHaptics: Bool,
+    init(supportsHaptics: Bool,
          isActive: @escaping () -> Bool,
          makeInteractionPlayer: @escaping (any HapticNativePlaying) -> any HapticInteractionPlaying,
          makeStreamingPlayer: @escaping () -> any HapticStreamingPlaying) {
-        self.defaults = defaults
         self.makeInteractionPlayer = makeInteractionPlayer
         self.makeStreamingPlayer = makeStreamingPlayer
         self.supportsHaptics = supportsHaptics
         self.isActive = isActive
-        self.isEnabled = defaults.object(forKey: Self.preferenceKey) as? Bool ?? true
-        self.strength = defaults.string(forKey: Self.strengthKey).flatMap(HapticStrength.init(rawValue:)) ?? .strong
     }
 
     func bindCallState(_ isCallActive: @escaping () -> Bool) {
@@ -79,7 +59,7 @@ final class HapticService {
         streamingPlayer.play(punch: punch)
     }
 
-    private var isAvailable: Bool { isEnabled && supportsHaptics && isActive() && !isCallActive() }
+    private var isAvailable: Bool { supportsHaptics && isActive() && !isCallActive() }
 
     func canPlay(_ event: HapticEvent) -> Bool {
         isAvailable && (captureOwners.isEmpty || event.playsDuringCapture)
@@ -96,7 +76,7 @@ final class HapticService {
     func play(_ event: HapticEvent, occurrence: HapticOccurrence? = nil) {
         if let occurrence, !consume(occurrence) { return }
         guard accept(event) else { return }
-        native?.play(event, strength: strength)
+        native?.play(event)
     }
 
     func consume(_ occurrence: HapticOccurrence) -> Bool {
@@ -129,7 +109,7 @@ final class HapticService {
         cancelInteractions()
         let player = makePlayer()
         interaction = (owner, player)
-        player.prepare(strength: strength) { [weak self] in self?.canPlay == true }
+        player.prepare { [weak self] in self?.canPlay == true }
     }
 
     /// Gesture ticks bypass SwiftUI state coalescing, but retain the central policy.
@@ -171,10 +151,10 @@ final class HapticService {
         streamingPlayer = nil
     }
 
-    /// Standard leaves native selection alone. Strong supplements only a user write,
-    /// never a restore, catalog refresh, provider normalization or remote update.
+    /// Supplements only a user write, never a restore, catalog refresh,
+    /// provider normalization or remote update.
     func nativeSelectionChanged() {
-        if strength == .strong { play(.selection) }
+        play(.selection)
     }
 
     private func accept(_ event: HapticEvent) -> Bool {

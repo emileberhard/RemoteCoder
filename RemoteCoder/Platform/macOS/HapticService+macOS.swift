@@ -3,7 +3,6 @@ import AppKit
 
 extension HapticService {
     static let shared = HapticService(
-        defaults: AppStorageScope.current.defaults,
         supportsHaptics: false,
         isActive: { NSApplication.shared.isActive },
         makeInteractionPlayer: { _ in NoHapticPlayer() },
@@ -19,7 +18,6 @@ extension HapticService {
 @MainActor
 final class NoHapticPlayer: HapticInteractionPlaying, HapticStreamingPlaying {
     var hasActiveAccent: Bool { false }
-    func prepare(strength: HapticStrength, canPlay: @escaping @MainActor () -> Bool) {}
     func play(_ event: HapticEvent) {}
     func finish() {}
     func cancel() {}

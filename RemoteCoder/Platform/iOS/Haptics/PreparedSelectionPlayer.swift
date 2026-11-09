@@ -13,7 +13,7 @@ final class PreparedSelectionPlayer: HapticInteractionPlaying {
         self.view = view
     }
 
-    func prepare(strength: HapticStrength, canPlay: @escaping @MainActor () -> Bool) {
+    func prepare(canPlay: @escaping @MainActor () -> Bool) {
         self.canPlay = canPlay
         guard canPlay(), let view else { return }
         generator = UISelectionFeedbackGenerator(view: view)

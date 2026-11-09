@@ -59,19 +59,17 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
     private var engineGeneration = UUID()
     private var ready = false
     private var ending = false
-    private var strength: HapticStrength = .standard
     private var canPlay: @MainActor () -> Bool = { false }
     private let signposter = OSSignposter(subsystem: "RemoteCoder", category: "Haptics")
     private let debugLogger = Logger(subsystem: AppLogger.subsystem, category: "Haptics")
 
     init(native: any HapticNativePlaying) { self.native = native }
 
-    func prepare(strength: HapticStrength, canPlay: @escaping @MainActor () -> Bool) {
-        self.strength = strength
+    func prepare(canPlay: @escaping @MainActor () -> Bool) {
         self.canPlay = canPlay
         guard !ending, canPlay() else { return }
         for event in [HapticEvent.buttonPress, .selection, .commit, .sliderStep, .sliderGrab, .lift, .sliderMinimum, .sliderMaximum, .sliderRelease, .sliderSettle] {
-            native.prepare(event.recipe(for: strength))
+            native.prepare(event.recipe)
         }
         prepareCustomEngine()
     }
@@ -84,7 +82,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
             catch { debugLogger.debug("Could not stop haptic accent: \(error.localizedDescription, privacy: .public)") }
             self.activePlayer = nil
         }
-        if let accent = event.accent(for: strength), ready, let player = players[accent] {
+        if let accent = event.accent, ready, let player = players[accent] {
             do {
                 signposter.emitEvent("feedback-api-request", "\(event.rawValue, privacy: .public) custom-accent")
                 try player.start(atTime: CHHapticTimeImmediate)
@@ -94,7 +92,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
                 debugLogger.debug("Haptic accent unavailable; using native impact: \(error.localizedDescription, privacy: .public)")
             }
         }
-        native.play(event, strength: strength)
+        native.play(event)
     }
 
     /// Let the finite seating accent finish before releasing its engine.
@@ -115,7 +113,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
     }
 
     private func prepareCustomEngine() {
-        guard strength == .strong, !ending, canPlay(), engine == nil else { return }
+        guard !ending, canPlay(), engine == nil else { return }
         do {
             let engine = try CHHapticEngine()
             let generation = UUID()

@@ -4,7 +4,6 @@ import UIKit
 
 extension HapticService {
     static let shared = HapticService(
-        defaults: .standard,
         supportsHaptics: CHHapticEngine.capabilitiesForHardware().supportsHaptics,
         isActive: { UIApplication.shared.applicationState == .active },
         makeInteractionPlayer: { PreparedHapticPlayer(native: $0) },
