@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
-use tokio::sync::{Notify, Semaphore, oneshot};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, oneshot};
 
 const MAX_RENAME_THREADS: usize = 1_024;
 const MAX_RENAME_NAME_BYTES: usize = 4_096;
@@ -158,9 +158,8 @@ impl Gateway {
                         )
                         .await
                         .map_err(RpcError::from)?;
-                    drop(admission);
                     gateway
-                        .commit_rename(&thread, &name, state, Rename::Manual)
+                        .commit_rename(&thread, &name, state, Rename::Manual, admission)
                         .await?
                         .ok_or_else(|| {
                             RpcError::new(RpcCode::Internal, "Manual rename was skipped")
@@ -232,13 +231,6 @@ impl Gateway {
                         state.generation.load(Ordering::Acquire) == generation,
                         "a newer rename superseded regeneration"
                     );
-                    if let Some(delta) = gateway
-                        .marks
-                        .clear_manual_name(thread, crate::time::unix_seconds() as i64)
-                        .await?
-                    {
-                        gateway.publish_marks(&delta).await;
-                    }
                     Ok((Candidate { state, generation }, previous))
                 }
                 .await;
@@ -268,7 +260,10 @@ impl Gateway {
             previous: previous.to_owned(),
             requested,
         };
-        self.commit_rename(thread, name, candidate.state, rename)
+        let permit = Arc::clone(&candidate.state.capacity)
+            .try_acquire_owned()
+            .map_err(|_| anyhow::anyhow!("rename admission capacity reached"))?;
+        self.commit_rename(thread, name, candidate.state, rename, permit)
             .await
             .map_err(|error| anyhow::anyhow!("title rename failed: {error:?}"))
     }
@@ -317,11 +312,12 @@ impl Gateway {
     pub(super) fn start_pending_rename_drain(self: &Arc<Self>) {
         let gateway = Arc::clone(self);
         self.renames.tasks.spawn("pending conversation renames", async move {
+            let mut failures = HashMap::new();
             loop {
                 gateway.renames.drain_wake.notified().await;
                 let mut backoff = Duration::from_secs(5);
                 loop {
-                    if !gateway.drain_pending_renames().await { break; }
+                    if !gateway.drain_pending_renames(&mut failures).await { break; }
                     tokio::select! {
                         _ = gateway.renames.drain_wake.notified() => backoff = Duration::from_secs(5),
                         _ = tokio::time::sleep(backoff) => backoff = (backoff * 2).min(Duration::from_secs(300)),
@@ -331,18 +327,30 @@ impl Gateway {
         });
     }
 
-    async fn drain_pending_renames(self: &Arc<Self>) -> bool {
+    async fn drain_pending_renames(
+        self: &Arc<Self>,
+        failures: &mut HashMap<String, (u64, String)>,
+    ) -> bool {
         let pending = match self
             .marks
             .pending_renames(crate::time::unix_seconds() as i64)
             .await
         {
-            Ok(pending) => pending,
+            Ok(pending) => {
+                failures.remove("");
+                pending
+            }
             Err(error) => {
-                tracing::warn!(%error, "pending renames unavailable");
+                record_drain_failure(
+                    failures,
+                    "",
+                    0,
+                    format!("pending renames unavailable: {error:#}"),
+                );
                 return true;
             }
         };
+        failures.retain(|thread, _| pending.contains_key(thread));
         for (thread, pending) in pending {
             let Ok(state) = self.renames.state(&thread) else {
                 continue;
@@ -379,16 +387,16 @@ impl Gateway {
             {
                 return false;
             }
-            match tokio::time::timeout(CALLER_WAIT, receiver).await {
-                Ok(Ok(Ok(()))) => {}
-                Ok(Ok(Err(error))) => {
-                    tracing::warn!(thread_id = thread, %error, "pending rename retained")
-                }
-                Ok(Err(_)) => tracing::warn!(thread_id = thread, "pending rename owner stopped"),
-                Err(_) => tracing::warn!(
-                    thread_id = thread,
-                    "pending rename is still awaiting its provider"
-                ),
+            let failure = match tokio::time::timeout(CALLER_WAIT, receiver).await {
+                Ok(Ok(Ok(()))) => None,
+                Ok(Ok(Err(error))) => Some(format!("pending rename retained: {error:#}")),
+                Ok(Err(_)) => Some("pending rename owner stopped".to_owned()),
+                Err(_) => Some("pending rename is still awaiting its provider".to_owned()),
+            };
+            if let Some(failure) = failure {
+                record_drain_failure(failures, &thread, pending.revision, failure);
+            } else {
+                failures.remove(&thread);
             }
         }
         match self
@@ -398,7 +406,12 @@ impl Gateway {
         {
             Ok(remaining) => !remaining.is_empty(),
             Err(error) => {
-                tracing::warn!(%error, "pending renames unavailable");
+                record_drain_failure(
+                    failures,
+                    "",
+                    0,
+                    format!("pending renames unavailable: {error:#}"),
+                );
                 true
             }
         }
@@ -512,6 +525,7 @@ impl Gateway {
         name: &str,
         state: Arc<RenameState>,
         rename: Rename,
+        permit: OwnedSemaphorePermit,
     ) -> std::result::Result<Option<Value>, RpcError> {
         if name.len() > MAX_RENAME_NAME_BYTES {
             return Err(RpcError::new(
@@ -519,9 +533,6 @@ impl Gateway {
                 "thread name exceeds 4096 bytes",
             ));
         }
-        let permit = Arc::clone(&state.capacity)
-            .try_acquire_owned()
-            .map_err(|_| RpcError::capacity())?;
         let deadline = tokio::time::Instant::now() + CALLER_WAIT;
         let serial = tokio::time::timeout_at(deadline, Arc::clone(&state.serial).lock_owned())
             .await
@@ -635,6 +646,20 @@ impl Gateway {
                 return Err(failure.into_error());
             }
         };
+        if matches!(
+            rename,
+            Rename::Automatic {
+                requested: true,
+                ..
+            }
+        ) && let Some(delta) = self
+            .marks
+            .clear_manual_name(thread.to_owned(), crate::time::unix_seconds() as i64)
+            .await
+            .map_err(RpcError::from)?
+        {
+            self.publish_marks(&delta).await;
+        }
         Ok(Some(response))
     }
 
@@ -646,6 +671,21 @@ impl Gateway {
                 .await
         }
     }
+}
+
+fn record_drain_failure(
+    failures: &mut HashMap<String, (u64, String)>,
+    thread: &str,
+    revision: u64,
+    failure: String,
+) -> bool {
+    let state = (revision, failure);
+    if failures.get(thread) == Some(&state) {
+        return false;
+    }
+    tracing::warn!(thread_id = thread, failure = %state.1, "pending rename failed");
+    failures.insert(thread.to_owned(), state);
+    true
 }
 
 fn matches_displayed_title(header: &Value, name: &str) -> bool {
@@ -672,6 +712,35 @@ mod tests {
     use super::*;
     use crate::notifications::history::NotificationOrigin;
     use crate::test_support::{FakeControl, TestGateway};
+
+    #[test]
+    fn repeated_failures_are_logged_only_when_the_state_changes() {
+        let mut failures = HashMap::new();
+        assert!(record_drain_failure(
+            &mut failures,
+            "thread",
+            1,
+            "failed".into()
+        ));
+        assert!(!record_drain_failure(
+            &mut failures,
+            "thread",
+            1,
+            "failed".into()
+        ));
+        assert!(record_drain_failure(
+            &mut failures,
+            "thread",
+            1,
+            "different".into()
+        ));
+        assert!(record_drain_failure(
+            &mut failures,
+            "thread",
+            2,
+            "different".into()
+        ));
+    }
 
     #[tokio::test(start_paused = true)]
     async fn failed_pending_name_retries_after_backoff_without_an_external_wake() {
@@ -705,11 +774,9 @@ mod tests {
                 NotificationOrigin::Control { opened_after: 0 },
             )
             .await;
-        assert!(
-            tokio::time::timeout(Duration::from_secs(4), control.requests.recv())
-                .await
-                .is_err()
-        );
+        tokio::time::advance(Duration::from_secs(4)).await;
+        assert!(control.requests.try_recv().is_err());
+        tokio::time::advance(Duration::from_secs(1)).await;
         let retry: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
         assert_eq!(retry["method"], "thread/read");
         gateway
@@ -877,7 +944,7 @@ mod tests {
         let mut control = FakeControl::attach(&gateway, 8).await;
         let drain = tokio::spawn({
             let gateway = gateway.clone();
-            async move { gateway.drain_pending_renames().await }
+            async move { gateway.drain_pending_renames(&mut HashMap::new()).await }
         });
         let read_a: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
         assert_eq!(read_a["params"]["threadId"], "a");
@@ -1080,13 +1147,74 @@ mod tests {
         let read: Value = serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
         gateway.handle_control_text(json!({"id":read["id"],"result":{"thread":{"id":"thread","name":"Old","ephemeral":false}}}).to_string(), NotificationOrigin::Control { opened_after: 0 }).await;
         let _candidate = admission.await.unwrap().unwrap();
-        assert!(!gateway.marks.read(2).await.unwrap().threads["thread"].manual_name);
+        assert!(gateway.marks.read(2).await.unwrap().threads["thread"].manual_name);
         assert!(gateway.marks.pending_renames(2).await.unwrap().is_empty());
         gateway.marks.update(vec![pin("New")], 3).await.unwrap();
         assert_eq!(
             gateway.marks.pending_renames(4).await.unwrap()["thread"].name,
             "New"
         );
+    }
+
+    #[tokio::test]
+    async fn regeneration_preserves_protection_on_failure_and_clears_it_after_success() {
+        for outcome in ["rejected", "unknown", "success"] {
+            let successful = outcome == "success";
+            let gateway = TestGateway::new();
+            gateway
+                .marks
+                .record_manual_name("thread".into(), 1)
+                .await
+                .unwrap();
+            let candidate = gateway.renames.candidate("thread").unwrap();
+            let mut control = FakeControl::attach(&gateway, 8).await;
+            let rename = tokio::spawn({
+                let gateway = gateway.clone();
+                async move {
+                    gateway
+                        .rename_automatically("thread", "New", "Old", candidate, true)
+                        .await
+                }
+            });
+            let read: Value =
+                serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
+            gateway
+                .handle_control_text(
+                    json!({"id":read["id"],"result":{"thread":{"name":"Old"}}}).to_string(),
+                    NotificationOrigin::Control { opened_after: 0 },
+                )
+                .await;
+            let write: Value =
+                serde_json::from_str(&control.requests.recv().await.unwrap()).unwrap();
+            assert!(gateway.marks.read(2).await.unwrap().threads["thread"].manual_name);
+            if outcome == "unknown" {
+                gateway.control_requests.lock().unwrap().clear();
+            } else {
+                let response = if successful {
+                    json!({"id":write["id"],"result":{}})
+                } else {
+                    json!({"id":write["id"],"error":{"code":-32603,"message":"rejected"}})
+                };
+                gateway
+                    .handle_control_text(
+                        response.to_string(),
+                        NotificationOrigin::Control { opened_after: 0 },
+                    )
+                    .await;
+            }
+            assert_eq!(rename.await.unwrap().is_ok(), successful);
+            assert_eq!(
+                gateway
+                    .marks
+                    .read(2)
+                    .await
+                    .unwrap()
+                    .threads
+                    .get("thread")
+                    .is_some_and(|mark| mark.manual_name),
+                !successful
+            );
+        }
     }
 
     #[tokio::test]

@@ -637,7 +637,7 @@ blocks startup or provider journal retirement.
   unavailable evidence fails the whole update without writing or acknowledging
   other changes. Never reconstruct an old scope from current history, and keep
   scope evidence after deleting cold profiles while clients can hold old edits.
-  Thread ids are nonempty, trimmed and at most 512 bytes; legacy pin names are at most 256 bytes. A pin is a Boolean independent of the provider name. A legacy named pin atomically records a pending rename, without waiting for the provider. The gateway owns `manualName` and protects user-chosen names from early and automatic titles without suppressing done review. Regeneration clears that protection. Manual rename, regeneration and deletion cancel older pending names.
+  Thread ids are nonempty, trimmed and at most 512 bytes; legacy pin names are at most 256 bytes. A pin is a Boolean independent of the provider name. A legacy named pin atomically records a pending rename, without waiting for the provider. The gateway owns `manualName` and protects user-chosen names from early and automatic titles without suppressing done review. A provider-acknowledged regeneration clears that protection; failure or an unknown outcome retains it. Manual rename, regeneration and deletion cancel older pending names.
   Clients apply a delta entry only when its revision is not older than theirs;
   an empty entry is a tombstone that clears the thread and keeps its revision,
   so a late older delta cannot restore it. A `thread/deleted` notification
@@ -674,8 +674,7 @@ blocks startup or provider journal retirement.
   order on the first load without a v5 file, preserving marks and pending native
   unarchives. Frozen prior types map each pin name to a pin flag and a durable
   `pendingRenames` entry. The control-owned drain runs on readiness and new
-  entries, and on a Claude turn start or completion only when that thread has a
-  pending entry, through the per-thread rename serial owner. It skips the current
+  entries through the per-thread rename serial owner. It skips the current
   name, or an untitled pin whose name without a trailing ellipsis appears in the
   raw or summarized preview. That may discard a
   typed name that happens to occur in the preview; compatibility owns the trade-off.

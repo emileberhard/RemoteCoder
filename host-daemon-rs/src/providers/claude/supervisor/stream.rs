@@ -20,6 +20,19 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+enum ControlFailure {
+    Definite(TurnStartError),
+    Unknown(TurnStartError),
+}
+
+impl ControlFailure {
+    fn into_error(self) -> TurnStartError {
+        match self {
+            Self::Definite(error) | Self::Unknown(error) => error,
+        }
+    }
+}
+
 impl ClaudeSupervisor {
     pub(super) fn prepare_runtime_control(
         request: &Value,
@@ -53,7 +66,11 @@ impl ClaudeSupervisor {
             .map_err(TurnStartError::from)?;
         let result = tokio::time::timeout(
             Duration::from_secs(30),
-            self.runtime_control_reply(thread_id, pid, input, prepared, receiver),
+            async {
+                self.runtime_control_reply(thread_id, pid, input, prepared, receiver)
+                    .await
+                    .map_err(ControlFailure::into_error)
+            },
         )
         .await
         .unwrap_or_else(|_| {
@@ -82,25 +99,13 @@ impl ClaudeSupervisor {
             .await
             .map_err(SessionRenameError::Definite)?;
         drop(lifecycle);
-        let result = if let Err(error) = input.send_prepared_control(prepared).await {
-            if super::InputWriter::is_stalled(&error) {
-                let error = self.input_stalled(thread_id, pid, "control", error);
-                Err(SessionRenameError::Unknown(error.message))
-            } else {
-                let message = format!("failed writing a Claude control request: {error}");
-                self.retire_after_write_failure(thread_id, pid, &message)
-                    .await;
-                Err(SessionRenameError::Unknown(message))
-            }
-        } else {
-            match receiver.await {
-                Ok(Ok(value)) => Ok(value),
-                Ok(Err(error)) => Err(SessionRenameError::Definite(error)),
-                Err(_) => Err(SessionRenameError::Unknown(
-                    "Claude runtime ended during a control request".into(),
-                )),
-            }
-        };
+        let result = self
+            .runtime_control_reply(thread_id, pid, input, prepared, receiver)
+            .await
+            .map_err(|failure| match failure {
+                ControlFailure::Definite(error) => SessionRenameError::Definite(error.message),
+                ControlFailure::Unknown(error) => SessionRenameError::Unknown(error.message),
+            });
         self.remove_control_reply(thread_id, pid, &request_id).await;
         result
     }
@@ -171,20 +176,26 @@ impl ClaudeSupervisor {
         input: super::InputWriter,
         prepared: super::input_writer::PreparedControl,
         receiver: oneshot::Receiver<Result<Value, String>>,
-    ) -> Result<Value, TurnStartError> {
+    ) -> Result<Value, ControlFailure> {
         if let Err(error) = input.send_prepared_control(prepared).await {
             if super::InputWriter::is_stalled(&error) {
-                return Err(self.input_stalled(thread_id, pid, "control", error));
+                return Err(ControlFailure::Unknown(
+                    self.input_stalled(thread_id, pid, "control", error),
+                ));
             }
             let message = format!("failed writing a Claude control request: {error}");
             self.retire_after_write_failure(thread_id, pid, &message)
                 .await;
-            return Err(TurnStartError::internal(message));
+            return Err(ControlFailure::Unknown(TurnStartError::internal(message)));
         }
         receiver
             .await
-            .map_err(|_| TurnStartError::internal("Claude runtime ended during a control request"))?
-            .map_err(TurnStartError::from)
+            .map_err(|_| {
+                ControlFailure::Unknown(TurnStartError::internal(
+                    "Claude runtime ended during a control request",
+                ))
+            })?
+            .map_err(|error| ControlFailure::Definite(TurnStartError::from(error)))
     }
 
     pub(super) async fn read_stderr(
