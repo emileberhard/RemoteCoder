@@ -510,6 +510,10 @@ gateway-e2e-compact-live *args:
 gateway-e2e-queue-live *args:
     ./dev-tools/rc-gateway e2e-queue-live {{ args }}
 
+# Queue Claude messages on an isolated gateway (host router) and prove FIFO turns, Remove, the hold after Stop, Send Now and restart survival.
+gateway-e2e-claude-queue-isolated candidate *model:
+    bun dev-tools/probes/claude-queue.mjs "{{ candidate }}" {{ model }}
+
 # Make a live agent actually call a RemoteCoder tool (both providers by default).
 gateway-e2e-agent-tools-live:
     ./dev-tools/rc-gateway e2e-agent-tools-live

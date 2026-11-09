@@ -118,6 +118,21 @@ including the persisted token across the coordinator restart, and local-only
 legacy payloads. Production and the real broker are untouched; success removes
 every root, failure retains them as evidence.
 
+## Claude queue probe
+
+`just gateway-e2e-claude-queue-isolated /absolute/gateway/binary [model]` runs
+`probes/claude-queue.mjs` against its own gateway and isolated Claude home. The
+stub router forwards Claude inference to the host router with the host key held
+in memory; no credential is copied into the lab. One conversation subscribes
+through `conversation/subscriptions/set` and runs three journeys behind a shell
+sleep: two messages plus a removed one, a Stop with one message held for 20 s
+before Send Now, and a planned SIGTERM restart with two messages queued. Proof
+comes from canonical history: each queued `clientId` is the only user item of
+its own completed successor turn, in queue order, none joins the running turn,
+the removed one never runs, the thread ends idle, and after the restart a
+resumed turn runs before the queue drains. The receipt holds identities and
+timings only. Success removes the lab root; failure retains it as evidence.
+
 ## rc-gateway
 
 - **Config discovery:** CLI flags, then `RC_CODEX_GATEWAY_*` env vars, then the
