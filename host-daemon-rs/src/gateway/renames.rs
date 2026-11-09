@@ -660,6 +660,35 @@ mod tests {
     use crate::test_support::{FakeControl, TestGateway};
 
     #[tokio::test]
+    async fn an_unavailable_claude_header_keeps_the_pending_name() {
+        use crate::conversation_marks::Change;
+        let gateway = TestGateway::new();
+        let thread = "claude_11111111-2222-4333-8444-555555555555";
+        gateway
+            .marks
+            .update(
+                vec![Change::Pin {
+                    thread_id: thread.into(),
+                    name: Some("Keep".into()),
+                }],
+                1,
+            )
+            .await
+            .unwrap();
+        let pending = gateway.marks.pending_renames(2).await.unwrap()[thread].clone();
+        assert!(
+            gateway
+                .drain_pending_rename(thread, &pending)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            gateway.marks.pending_renames(3).await.unwrap().get(thread),
+            Some(&pending)
+        );
+    }
+
+    #[tokio::test]
     async fn oversized_manual_name_does_not_cancel_the_pending_name() {
         use crate::conversation_marks::Change;
         let gateway = TestGateway::new();
