@@ -62,3 +62,17 @@ class GatewayEvidenceTests(unittest.TestCase):
             ):
                 self.assertEqual(module.main(), 1)
                 self.assertFalse(cache.exists())
+
+    def test_cargo_runs_the_rust_gates_alone_and_never_reuses_evidence(self):
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.dict(os.environ, {"CARGO_TARGET_DIR": temporary}, clear=True),
+            patch.object(module, "input_key", return_value="same") as key,
+            patch.object(module, "run_lanes", return_value=3) as lanes,
+        ):
+            (Path(temporary) / "gateway-check.json").write_text(
+                json.dumps({"inputKey": "same", "passedAt": 1})
+            )
+            self.assertEqual(module.main("cargo"), 3)
+        self.assertEqual(lanes.call_args.args[0], {"cargo": module.CARGO})
+        key.assert_not_called()

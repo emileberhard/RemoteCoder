@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run deterministic gateway gates, reusing a verified identical worker input."""
+"""Run deterministic gateway gates, reusing a verified identical worker input. `cargo` runs the Rust gates alone on any host."""
 
 import hashlib
 import json
@@ -108,8 +108,12 @@ def input_key(provenance, environment):
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-def main():
+def main(lane=None):
+    if lane not in (None, "cargo"):
+        raise SystemExit("usage: gateway-check.py [cargo]")
     os.environ.setdefault("RUST_TEST_THREADS", os.environ.get("EMIL_BUILD_JOBS", "4"))
+    if lane:
+        return run_lanes({"cargo": CARGO}, ROOT)
     key = input_key(os.environ.get("RC_BUILD_PROVENANCE"), os.environ)
     cache = (
         Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "host-daemon-rs/target"))
@@ -165,4 +169,4 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(*sys.argv[1:]))

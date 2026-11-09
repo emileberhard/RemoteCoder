@@ -145,9 +145,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes lsof tmux zsh
       - run: rustup show
-      - run: cargo fmt --manifest-path host-daemon-rs/Cargo.toml --check
-      - run: cargo clippy --manifest-path host-daemon-rs/Cargo.toml --locked --all-targets --all-features -- -D warnings
-      - run: cargo test --manifest-path host-daemon-rs/Cargo.toml --locked
+      - run: python3 scripts/gateway-check.py cargo
 
   swift:
     needs: reuse
