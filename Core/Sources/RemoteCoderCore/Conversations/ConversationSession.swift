@@ -376,12 +376,13 @@ actor ConversationSession {
         return state.beginQueueRead()
     }
 
-    func applyQueue(_ entries: [CodexAppServerV2.QueuedSubmission], read: ConversationState.QueueRead,
+    func applyQueue(_ listing: CodexAppServerV2.QueueListing, read: ConversationState.QueueRead,
                     threadIsIdle: Bool) async {
-        if let successor { await successor.applyQueue(entries, read: read, threadIsIdle: threadIsIdle); return }
-        let previous = state.persistenceRevision
-        state.applyQueue(entries, read: read, threadIsIdle: threadIsIdle)
-        if state.persistenceRevision != previous { await persistLocalChanges() }
+        if let successor { await successor.applyQueue(listing, read: read, threadIsIdle: threadIsIdle); return }
+        let previous = (state.persistenceRevision, state.revision)
+        state.applyQueue(listing, read: read, threadIsIdle: threadIsIdle)
+        if state.persistenceRevision != previous.0 { await persistLocalChanges() }
+        else if state.revision != previous.1 { scheduleProjection() }
     }
 
     func accepted(_ messageID: UUID, turnID: String) async {

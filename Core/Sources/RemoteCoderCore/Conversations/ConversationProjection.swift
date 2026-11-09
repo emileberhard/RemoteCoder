@@ -125,7 +125,7 @@ enum ConversationProjection {
         let deliveries = state.submissions.compactMapValues { submission in
             submission.message.wasSteered || submission.queue != nil || sendDelivery(submission.status) != nil
                 ? Memo.DeliveryInput(status: submission.status, isQueued: submission.queue != nil,
-                                     error: submission.deliveryError) : nil
+                                     error: submission.deliveryError ?? queueHoldNote(state, submission)) : nil
         }
         let inputs = Memo.Inputs(conversationID: state.conversationID, threadID: state.threadID,
             expandedTimelineAnchors: state.expandedTimelineAnchors,
@@ -393,6 +393,11 @@ enum ConversationProjection {
         case .failed: .notSent
         case .accepted, .queued, .confirmed: nil
         }
+    }
+
+    private static func queueHoldNote(_ state: ConversationState, _ submission: ConversationState.Submission) -> String? {
+        guard submission.queue != nil, submission.status == .queued, let hold = state.queueHold else { return nil }
+        return "Paused: \(hold)"
     }
 
     private static func queueDelivery(_ status: ConversationState.Submission.Status) -> ChatMessage.Delivery? {

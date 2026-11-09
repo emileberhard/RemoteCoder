@@ -69,6 +69,16 @@ extension CodexAppServerV2 {
     struct ThreadQueueListResponse: Decodable, Sendable {
         let data: [QueuedSubmission]
         let nextCursor: String?
+        let hold: QueueHold?
+    }
+
+    struct QueueHold: Decodable, Sendable, Equatable {
+        let message: String
+    }
+
+    struct QueueListing: Sendable {
+        let entries: [QueuedSubmission]
+        let hold: QueueHold?
     }
 
     struct ThreadQueueItemParams: Encodable, Sendable {

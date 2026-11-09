@@ -298,13 +298,13 @@ final class TurnDispatcher {
             guard await session.hasQueueReceipts() else { return }
             let read = await session.beginQueueRead()
             do {
-                let entries = try await gateway.queuedMessages(threadID: threadID)
+                let listing = try await gateway.queuedMessages(threadID: threadID)
                 let activity = try await gateway.readActiveTurns()
                 try Task.checkCancellation()
                 guard !isClosed else { return }
                 let idle = activity.canConfirmInactivity(for: threadID)
                     && ConversationActivity(snapshot: activity).state(for: threadID) == .idle
-                await session.applyQueue(entries, read: read, threadIsIdle: idle)
+                await session.applyQueue(listing, read: read, threadIsIdle: idle)
             } catch is CancellationError {
             } catch {
                 logger.notice("queue read failed thread=\(threadID) error=\(error.localizedDescription)")
@@ -333,7 +333,7 @@ final class TurnDispatcher {
                     guard let id = await session.queuedSubmissionID(for: messageID) else { return }
                     queued = CodexAppServerV2.QueuedSubmission(id: id, clientUserMessageId: messageID.uuidString)
                 case .first:
-                    guard let first = try await gateway.queuedMessages(threadID: threadID).first else { return }
+                    guard let first = try await gateway.queuedMessages(threadID: threadID).entries.first else { return }
                     queued = first
                 }
                 selected = UUID(uuidString: queued.clientUserMessageId)

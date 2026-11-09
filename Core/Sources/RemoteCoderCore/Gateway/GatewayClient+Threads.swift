@@ -276,8 +276,9 @@ extension GatewayClient {
         return response.queuedSubmission
     }
 
-    func queuedMessages(threadID: String) async throws -> [CodexAppServerV2.QueuedSubmission] {
+    func queuedMessages(threadID: String) async throws -> CodexAppServerV2.QueueListing {
         var submissions: [CodexAppServerV2.QueuedSubmission] = []
+        var hold: CodexAppServerV2.QueueHold?
         var cursor: String?
         for _ in 0..<Self.queuePageLimit {
             let response: CodexAppServerV2.ThreadQueueListResponse = try await callDecodable(
@@ -285,7 +286,8 @@ extension GatewayClient {
                 params: encodeToJSONValue(CodexAppServerV2.ThreadQueueListParams(threadId: threadID, cursor: cursor)),
                 timeout: timeouts.request)
             submissions += response.data
-            guard let next = response.nextCursor else { return submissions }
+            hold = response.hold
+            guard let next = response.nextCursor else { return CodexAppServerV2.QueueListing(entries: submissions, hold: hold) }
             cursor = next
         }
         throw ClientError.invalidMessage

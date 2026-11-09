@@ -7,6 +7,10 @@ struct ConversationQueueTests: ConversationHistoryFixtures {
         CodexAppServerV2.QueuedSubmission(id: id, clientUserMessageId: message.id.uuidString)
     }
 
+    private func listing(_ entries: [CodexAppServerV2.QueuedSubmission], hold: String? = nil) -> CodexAppServerV2.QueueListing {
+        CodexAppServerV2.QueueListing(entries: entries, hold: hold.map(CodexAppServerV2.QueueHold.init(message:)))
+    }
+
     private func user(_ message: ChatMessage, turnID: String, ordinal: Int) throws -> TurnScopedGatewayEvent {
         let id = message.id.uuidString
         return try GatewayEventFixture.item("item/completed",
@@ -92,7 +96,7 @@ struct ConversationQueueTests: ConversationHistoryFixtures {
         #expect(restored.hasQueueReceipts)
 
         let read = restored.beginQueueRead()
-        restored.applyQueue([queued(message, as: "q1")], read: read, threadIsIdle: false)
+        restored.applyQueue(listing([queued(message, as: "q1")]), read: read, threadIsIdle: false)
         #expect(ConversationProjection.project(restored).messages.last?.delivery == .queued)
         #expect(restored.queuedSubmissionID(for: message.id) == "q1")
     }
@@ -104,20 +108,45 @@ struct ConversationQueueTests: ConversationHistoryFixtures {
         let stale = state.beginQueueRead()
         state.queued(message.id, submission: queued(message, as: "q1"))
 
-        state.applyQueue([], read: stale, threadIsIdle: true)
+        state.applyQueue(listing([]), read: stale, threadIsIdle: true)
         #expect(ConversationProjection.project(state).messages.last?.delivery == .queued)
 
         let older = state.beginQueueRead()
         let busy = state.beginQueueRead()
-        state.applyQueue([], read: busy, threadIsIdle: false)
+        state.applyQueue(listing([]), read: busy, threadIsIdle: false)
         #expect(ConversationProjection.project(state).messages.last?.delivery == .queued)
 
         let idle = state.beginQueueRead()
-        state.applyQueue([], read: idle, threadIsIdle: true)
+        state.applyQueue(listing([]), read: idle, threadIsIdle: true)
         #expect(ConversationProjection.project(state).messages.last?.delivery == .unconfirmed)
 
-        state.applyQueue([queued(message, as: "q1")], read: older, threadIsIdle: true)
+        state.applyQueue(listing([queued(message, as: "q1")]), read: older, threadIsIdle: true)
         #expect(ConversationProjection.project(state).messages.last?.delivery == .unconfirmed)
+    }
+
+    @Test func aHeldQueueExplainsItsQueuedRowsWithoutReplacingTheirOwnErrors() throws {
+        var state = try runningState()
+        let first = ChatMessage(role: .user, text: "First")
+        let second = ChatMessage(role: .user, text: "Second")
+        state.submitToQueue(first, input: first.text)
+        state.submitToQueue(second, input: second.text)
+        state.queued(first.id, submission: queued(first, as: "q1"))
+        state.queued(second.id, submission: queued(second, as: "q2"))
+        _ = state.queueActionFailed(second.id, reason: "Open in another client")
+        var memo = ConversationProjection.Memo()
+        _ = ConversationProjection.project(state, memo: &memo)
+
+        let held = state.beginQueueRead()
+        state.applyQueue(listing([queued(first, as: "q1"), queued(second, as: "q2")], hold: "Start refused"),
+                         read: held, threadIsIdle: true)
+        let paused = ConversationProjection.project(state, memo: &memo).messages
+        #expect(paused.map(\.delivery) == [nil, .queued, .queued])
+        #expect(paused.map(\.deliveryError) == [nil, "Paused: Start refused", "Open in another client"])
+
+        let released = state.beginQueueRead()
+        state.applyQueue(listing([queued(first, as: "q1"), queued(second, as: "q2")]), read: released, threadIsIdle: false)
+        #expect(ConversationProjection.project(state, memo: &memo).messages.map(\.deliveryError)
+            == [nil, nil, "Open in another client"])
     }
 
     @Test func anUncertainAddIsConfirmedByItsClientMessageID() throws {
@@ -128,7 +157,7 @@ struct ConversationQueueTests: ConversationHistoryFixtures {
         #expect(ConversationProjection.project(state).messages.last?.delivery == .unconfirmed)
 
         let read = state.beginQueueRead()
-        state.applyQueue([queued(message, as: "q7")], read: read, threadIsIdle: false)
+        state.applyQueue(listing([queued(message, as: "q7")]), read: read, threadIsIdle: false)
         #expect(ConversationProjection.project(state).messages.last?.delivery == .queued)
         #expect(state.queuedSubmissionID(for: message.id) == "q7")
 

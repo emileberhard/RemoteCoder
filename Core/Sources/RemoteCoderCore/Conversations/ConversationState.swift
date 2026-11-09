@@ -299,6 +299,7 @@ struct ConversationState: Sendable {
     private var appliedTailRead: UInt64 = 0
     private var startedQueueReads: UInt64 = 0
     private var appliedQueueRead: UInt64 = 0
+    private(set) var queueHold: String?
     var questions: QuestionInventory?
     var questionDismissals: [String: QuestionDismissal]?
     private(set) var lastTurnCompletedAt: Int64?
@@ -502,10 +503,14 @@ struct ConversationState: Sendable {
         return QueueRead(owner: ownerID, order: startedQueueReads)
     }
 
-    mutating func applyQueue(_ entries: [CodexAppServerV2.QueuedSubmission], read: QueueRead, threadIsIdle: Bool) {
+    mutating func applyQueue(_ listing: CodexAppServerV2.QueueListing, read: QueueRead, threadIsIdle: Bool) {
         guard read.owner == ownerID, read.order > appliedQueueRead else { return }
         appliedQueueRead = read.order
-        let listed = Dictionary(entries.map { ($0.clientUserMessageId, $0.id) }, uniquingKeysWith: { first, _ in first })
+        if queueHold != listing.hold?.message {
+            queueHold = listing.hold?.message
+            revision += 1
+        }
+        let listed = Dictionary(listing.entries.map { ($0.clientUserMessageId, $0.id) }, uniquingKeysWith: { first, _ in first })
         var changed = false
         for (id, pending) in submissions where pending.queue != nil {
             if let submissionID = listed[id.uuidString] {
