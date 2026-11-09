@@ -140,6 +140,12 @@ impl Gateway {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let agent = self.queue_agent()?;
+        if !matches!(self.claude_restart.has_pending_for(thread).await, Ok(false)) {
+            return Err(RpcError::new(
+                RpcCode::InvalidRequest,
+                "thread already has an active or pending turn",
+            ));
+        }
         let queue = agent
             .queued_messages(thread)
             .await

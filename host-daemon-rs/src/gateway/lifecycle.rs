@@ -780,6 +780,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_now_waits_for_the_conversations_pending_recovery() {
+        let stub = StubClaude::new();
+        crate::providers::claude::restart::Store::beside(&stub.turn_state_path())
+            .write(
+                &crate::providers::claude::restart::Journal::capture(
+                    None,
+                    vec![stub.item(SESSION, ItemStatus::Captured)],
+                    None,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let (gateway, agent, _ingress) = claude_gateway(&stub);
+        agent
+            .queue_add(THREAD, "m", json!([{"type": "text", "text": "queued"}]))
+            .await
+            .unwrap();
+        let error = gateway
+            .claude_queue_start(1, &json!({"threadId": THREAD, "queuedSubmissionId": "m"}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, RpcCode::InvalidRequest, "{error:?}");
+        assert_eq!(
+            error.message,
+            "thread already has an active or pending turn"
+        );
+        assert_eq!(
+            agent.queued_messages(THREAD).await.unwrap().entries.len(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn recovery_after_a_crash_redelivers_only_what_history_lacks() {
         let stub = StubClaude::new();
         let delivered_session = "22222222-2222-4333-8444-555555555555";
