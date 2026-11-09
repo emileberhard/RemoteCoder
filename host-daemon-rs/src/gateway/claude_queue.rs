@@ -8,7 +8,7 @@ use tracing::warn;
 
 use super::Gateway;
 use super::admission::ConversationBusy;
-use crate::providers::claude::queued_messages::{HoldReason, QueuedMessage};
+use crate::providers::claude::queued_messages::QueuedMessage;
 use crate::providers::claude::{
     ClaudeSupervisor, QueueAddError, QueuedOutcome, QueuedStart, TurnStartError,
 };
@@ -275,9 +275,6 @@ impl Gateway {
 
     pub(super) async fn claude_queue_loop(self: Arc<Self>, agent: Arc<ClaudeSupervisor>) {
         for thread in agent.queued_threads() {
-            if let Err(error) = agent.hold_if_newer_turns(&thread).await {
-                warn!(%thread, error = %format!("{error:#}"), "queued Claude messages could not be checked against newer turns");
-            }
             agent.request_queue_drain(&thread);
         }
         let drains = Arc::new(Drains::default());
@@ -408,7 +405,7 @@ impl Gateway {
     }
 
     async fn hold_claude_queue(&self, agent: &ClaudeSupervisor, thread: &str, message: &str) {
-        match agent.hold_queue(thread, HoldReason::Refused, message).await {
+        match agent.hold_queue(thread, message).await {
             Ok(true) => {
                 self.journal.runtime(
                     "queued_held",

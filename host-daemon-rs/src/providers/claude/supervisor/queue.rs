@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tracing::warn;
 
 use super::{ClaudeSupervisor, TurnErrorData, TurnOrigin, TurnStartError};
-use crate::providers::claude::queued_messages::{HoldReason, Queue, QueueHold, QueuedMessage};
+use crate::providers::claude::queued_messages::{Queue, QueueHold, QueuedMessage};
 use crate::providers::claude::{ClaudeTurnRequest, ClaudeUserInput, session_uuid_from_thread_id};
 use crate::rpc::error::RpcCode;
 
@@ -154,7 +154,6 @@ impl ClaudeSupervisor {
         let message = QueuedMessage {
             id: id.to_owned(),
             input,
-            enqueued_at_ms: crate::time::unix_millis(),
             starting: false,
         };
         let added = self
@@ -188,13 +187,8 @@ impl ClaudeSupervisor {
         .await
     }
 
-    pub(crate) async fn hold_queue(
-        &self,
-        thread_id: &str,
-        reason: HoldReason,
-        message: &str,
-    ) -> Result<bool> {
-        let hold = QueueHold::new(reason, message);
+    pub(crate) async fn hold_queue(&self, thread_id: &str, message: &str) -> Result<bool> {
+        let hold = QueueHold::new(message);
         self.update_queue(thread_id, move |queue| {
             if queue.entries.is_empty() || queue.hold.is_some() {
                 return Ok(false);
@@ -240,34 +234,6 @@ impl ClaudeSupervisor {
             return Ok(None);
         }
         Ok(queue.entries.into_iter().next())
-    }
-
-    pub(crate) async fn hold_if_newer_turns(&self, thread_id: &str) -> Result<bool> {
-        let queue = self.queued_messages(thread_id).await?;
-        let Some(head) = queue.entries.first() else {
-            return Ok(false);
-        };
-        if queue.hold.is_some() {
-            return Ok(false);
-        }
-        let queued = queue
-            .entries
-            .iter()
-            .map(|entry| entry.id.clone())
-            .collect::<HashSet<_>>();
-        if !self
-            .conversation_index
-            .user_turn_since(thread_id, head.enqueued_at_ms, queued)
-            .await?
-        {
-            return Ok(false);
-        }
-        self.hold_queue(
-            thread_id,
-            HoldReason::NewerTurns,
-            "The conversation continued after these messages were queued, so they wait for Send Now.",
-        )
-        .await
     }
 
     async fn input_started(&self, thread_id: &str, id: &str) -> Result<bool> {

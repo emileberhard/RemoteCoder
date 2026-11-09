@@ -612,33 +612,6 @@ impl Store {
         .await
     }
 
-    pub(crate) async fn user_turn_since(
-        &self,
-        thread_id: &str,
-        since_ms: i64,
-        excluded: HashSet<String>,
-    ) -> Result<bool> {
-        self.read_index(thread_id, move |index| {
-            let continuations = index
-                .turns
-                .values()
-                .filter_map(|turn| match &turn.recovery {
-                    Some(TurnRecovery::Continued { turn_id }) => Some(turn_id.as_str()),
-                    _ => None,
-                })
-                .collect::<HashSet<_>>();
-            index.items.values().any(|item| {
-                item.client_id
-                    .as_ref()
-                    .is_some_and(|client_id| !excluded.contains(client_id))
-                    && index.turns.get(&item.turn_id).is_some_and(|turn| {
-                        turn.started_at_ms > since_ms && !continuations.contains(turn.id.as_str())
-                    })
-            })
-        })
-        .await
-    }
-
     async fn read_index<T: Send + 'static>(
         &self,
         thread_id: &str,

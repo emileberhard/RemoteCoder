@@ -25,30 +25,20 @@ const MAX_HOLD_MESSAGE_BYTES: usize = 1_024;
 pub(crate) struct QueuedMessage {
     pub id: String,
     pub input: Value,
-    pub enqueued_at_ms: i64,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub starting: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum HoldReason {
-    Refused,
-    NewerTurns,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct QueueHold {
-    pub reason: HoldReason,
     pub message: String,
 }
 
 impl QueueHold {
-    pub(crate) fn new(reason: HoldReason, message: &str) -> Self {
+    pub(crate) fn new(message: &str) -> Self {
         let end = message.floor_char_boundary(MAX_HOLD_MESSAGE_BYTES);
         Self {
-            reason,
             message: message[..end].to_owned(),
         }
     }
@@ -293,7 +283,6 @@ mod tests {
         QueuedMessage {
             id: id.to_owned(),
             input: json!([{"type":"text","text":text}]),
-            enqueued_at_ms: 1,
             starting: false,
         }
     }
@@ -345,7 +334,7 @@ mod tests {
         let (_home, store) = store();
         store
             .update("claude_a", |queue| {
-                queue.hold = Some(QueueHold::new(HoldReason::Refused, &"x".repeat(4_096)));
+                queue.hold = Some(QueueHold::new(&"x".repeat(4_096)));
                 Ok(())
             })
             .unwrap();

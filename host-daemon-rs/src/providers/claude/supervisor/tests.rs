@@ -3723,7 +3723,6 @@ async fn queued_messages_start_in_order_as_their_own_turns_after_the_running_one
 #[tokio::test]
 async fn stop_and_refusal_holds_pause_the_queue_until_send_now_or_a_user_turn() {
     use super::queue::{QueuedOutcome, QueuedStart};
-    use crate::providers::claude::queued_messages::HoldReason;
     let (_home, agent, _events, _, mut stopped) = queue_agent().await;
     queue(&agent, "first").await;
     queue(&agent, "second").await;
@@ -3773,13 +3772,13 @@ async fn stop_and_refusal_holds_pause_the_queue_until_send_now_or_a_user_turn() 
 
     assert!(
         agent
-            .hold_queue(QUEUE_THREAD, HoldReason::Refused, "cwd is gone")
+            .hold_queue(QUEUE_THREAD, "cwd is gone")
             .await
             .unwrap()
     );
     assert!(
         !agent
-            .hold_queue(QUEUE_THREAD, HoldReason::Refused, "again")
+            .hold_queue(QUEUE_THREAD, "again")
             .await
             .unwrap(),
         "an existing hold is not reported twice"
@@ -3934,52 +3933,13 @@ async fn a_persistent_refusal_leaves_the_message_queued_and_holds_the_queue() {
 }
 
 #[tokio::test]
-async fn newer_user_turns_hold_messages_queued_before_them() {
-    let (_home, agent, _events, _group, mut child) = queue_agent().await;
-    queue(&agent, "queued").await;
-    let enqueued = agent.queued_messages(QUEUE_THREAD).await.unwrap().entries[0].enqueued_at_ms;
-    assert!(!agent.hold_if_newer_turns(QUEUE_THREAD).await.unwrap());
-    for mut notification in [
-        json!({"method":"turn/started","params":{"threadId":QUEUE_THREAD,
-            "turn":{"id":"resumed","startedAtMs":enqueued + 5,"status":"inProgress"}}}),
-        json!({"method":"turn/completed","params":{"threadId":QUEUE_THREAD,
-            "turn":{"id":"older","startedAtMs":enqueued - 5,"status":"completed"}}}),
-        json!({"method":"item/completed","params":{"threadId":QUEUE_THREAD,"turnId":"older",
-            "completedAtMs":enqueued + 6,
-            "item":{"type":"userMessage","id":"steer","clientId":"steer","content":[]}}}),
-    ] {
-        agent
-            .conversation_index
-            .record(&mut notification)
-            .await
-            .unwrap();
-    }
-    assert!(
-        !agent.hold_if_newer_turns(QUEUE_THREAD).await.unwrap(),
-        "a steer into the turn that was running does not hold the queue"
-    );
-    let mut newer = json!({"method":"item/completed","params":{"threadId":QUEUE_THREAD,
-        "turnId":"resumed","completedAtMs":enqueued + 7,
-        "item":{"type":"userMessage","id":"typed","clientId":"typed","content":[]}}});
-    agent.conversation_index.record(&mut newer).await.unwrap();
-    assert!(agent.hold_if_newer_turns(QUEUE_THREAD).await.unwrap());
-    assert!(agent.queue_ready(QUEUE_THREAD).await.unwrap().is_none());
-    agent.runtimes.lock().await.clear();
-    let _ = child.kill().await;
-}
-
-#[tokio::test]
 async fn a_job_thread_with_an_unheld_queue_still_has_pending_work() {
     let (_home, agent, _events, _group, mut child) = queue_agent().await;
     assert!(!agent.queue_has_pending_work(QUEUE_THREAD).await.unwrap());
     queue(&agent, "next").await;
     assert!(agent.queue_has_pending_work(QUEUE_THREAD).await.unwrap());
     agent
-        .hold_queue(
-            QUEUE_THREAD,
-            crate::providers::claude::queued_messages::HoldReason::Refused,
-            "held",
-        )
+        .hold_queue(QUEUE_THREAD, "held")
         .await
         .unwrap();
     assert!(!agent.queue_has_pending_work(QUEUE_THREAD).await.unwrap());

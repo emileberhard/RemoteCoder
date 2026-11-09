@@ -1707,7 +1707,7 @@ Claude. The `RC_CLAUDE_*` settings are in
     input under a queued id, or an id the thread already ran, is running or
     carries in restart recovery, is refused with `-32009` and no new entry.
     `thread/queue/list` pages entries (1–100, an opaque string cursor) and adds
-    `hold {reason: refused | newerTurns, message}` while held.
+    `hold {message}` while held.
     `thread/queue/start` is Send Now: it starts the named entry, or the first,
     only while the thread is idle, and answers like Codex
     (`-32600` "thread already has an active or pending turn" otherwise). It
@@ -1731,10 +1731,8 @@ Claude. The `RC_CLAUDE_*` settings are in
     transcript: a recorded id is dropped, any other is requeued.
   - Stop (`Parent.stopped`) pauses the queue. A refusal that will persist
     (invalid params, capacity or an unavailable provider), or three
-    consecutive start failures, holds it as `refused` and sends one push. At
-    startup, a user turn newer than the oldest entry, other than a restart
-    continuation, holds it as `newerTurns`. A user turn, typed or
-    queue-started, clears the Stop and the hold.
+    consecutive start failures, holds it and sends one push. A user turn,
+    typed or queue-started, clears the Stop and the hold.
   - An unheld, non-empty queue counts as pending work, so a job thread is not
     closed as quiescent while it would still run. A queued add records its
     installation as the `take_photo` driver, which the queue-started turn keeps.
