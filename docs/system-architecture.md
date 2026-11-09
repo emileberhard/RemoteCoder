@@ -2246,7 +2246,8 @@ survives background pin recovery until a later discovery admits a new page.
 when it loads a file and during migration, which adopts only root conversations.
 A discarded-coverage marker survives relaunch and clears only after a
 successful complete recent read that fits.
-Missing pins retain their known name and exact-address open action; the footer
+Missing pins retain their exact-address open action and show an unknown title
+until their header loads (older gateways retain their stored pin name); the footer
 mounts at most sixteen unloaded pin controls per target and states any remaining
 count. Recovery reads at most thirty-two protected addresses per pass. Failed
 reads or admissions back off from thirty seconds to ten minutes, bounded to

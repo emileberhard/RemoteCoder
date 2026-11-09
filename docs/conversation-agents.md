@@ -122,7 +122,8 @@ unresolved header retries immediately. Metadata failures retain known
 relationships and leave unclassified rows visible. An in-flight
 refresh cannot overwrite a local create/remove/completion.
 
-Titles prefer a local pin, then the explicit provider name, then preview text.
+Titles use the provider name, then preview text; gateways below marks schema 5
+retain the legacy pin-name override.
 Native v2 `subAgentActivity` records and single-receiver collaboration calls
 preserve the child identity in the parent's timeline, and tapping one opens the
 child's conversation. The roster lists the conversation's direct agents, newest
