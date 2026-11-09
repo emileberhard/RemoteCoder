@@ -339,6 +339,7 @@ fileprivate struct ChatWindowActionContext {
         if conversation == nil {
             enabled.subtract([.fork, .togglePin, .copyReference, .markUnread])
         }
+        if !isPinned && screen.openConversationTitle == nil { enabled.remove(.togglePin) }
         if !isPinned { enabled.remove(.rename) }
         if !find.hasMatches { enabled.subtract([.findNext, .findPrevious]) }
         if !screen.composerSendState.canSend { enabled.remove(.send) }
