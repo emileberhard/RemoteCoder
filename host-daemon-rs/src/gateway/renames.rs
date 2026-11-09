@@ -392,14 +392,7 @@ impl Gateway {
             state.generation.load(Ordering::Acquire) == generation
                 && !self.draining.load(Ordering::Acquire)
         };
-        if !is_current()
-            || self
-                .marks
-                .pending_renames(crate::time::unix_seconds() as i64)
-                .await?
-                .get(thread)
-                != Some(pending)
-        {
+        if !is_current() {
             return Ok(());
         }
         let header = match self.review_header(thread).await {
@@ -427,14 +420,7 @@ impl Gateway {
                 .await?;
             return Ok(());
         }
-        if !is_current()
-            || self
-                .marks
-                .pending_renames(crate::time::unix_seconds() as i64)
-                .await?
-                .get(thread)
-                != Some(pending)
-        {
+        if !is_current() {
             return Ok(());
         }
         let (current, delta) = self
@@ -574,15 +560,9 @@ impl Gateway {
             }
         }
         let manual = matches!(rename, Rename::Manual);
-        let previously_manual = manual
-            && self
-                .marks
-                .read(crate::time::unix_seconds() as i64)
-                .await
-                .map_err(RpcError::from)?
-                .threads
-                .get(thread)
-                .is_some_and(|marks| marks.manual_name);
+        let response = self
+            .write_thread_name(&json!({"threadId":thread, "name":name}))
+            .await?;
         if manual
             && let Some(delta) = self
                 .marks
@@ -592,28 +572,6 @@ impl Gateway {
         {
             self.publish_marks(&delta).await;
         }
-        let response = match self
-            .write_thread_name(&json!({"threadId":thread, "name":name}))
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                if manual
-                    && !previously_manual
-                    && (error.code == RpcCode::InvalidParams
-                        || (is_claude_thread_id(thread)
-                            && matches!(&error.data, RpcData::Raw(data) if data["kind"] == "renameNotStarted")))
-                    && let Some(delta) = self
-                        .marks
-                        .clear_manual_name(thread.to_owned(), crate::time::unix_seconds() as i64)
-                        .await
-                        .map_err(RpcError::from)?
-                {
-                    self.publish_marks(&delta).await;
-                }
-                return Err(error);
-            }
-        };
         Ok(Some(response))
     }
 

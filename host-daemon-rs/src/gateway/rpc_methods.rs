@@ -791,10 +791,10 @@ impl Gateway {
             ));
         };
         let Some(agent) = self.claude_agent() else {
-            return Err(
-                RpcError::new(RpcCode::Internal, "Claude agent is not running")
-                    .with_data(RpcData::Raw(json!({"kind":"renameNotStarted"}))),
-            );
+            return Err(RpcError::new(
+                RpcCode::Internal,
+                "Claude agent is not running",
+            ));
         };
         match agent.rename_session(thread_id, session_uuid, name).await {
             Ok(crate::providers::claude::SessionRename::Renamed) => Ok(serde_json::json!({})),
