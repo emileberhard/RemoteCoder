@@ -41,6 +41,19 @@ pub(super) fn parse_and_elide(raw: &str) -> Payload {
 pub(super) fn redact_call_details(value: &mut Value) {
     match value {
         Value::Object(map) => {
+            if matches!(
+                map.get("method").and_then(Value::as_str),
+                Some("sessions/conversations/search" | "sessions/conversations/searchByMeaning")
+            ) {
+                for field in ["params", "request"] {
+                    if let Some(Value::Object(params)) = map.get_mut(field)
+                        && let Some(query) = params.get_mut("query")
+                    {
+                        *query = Value::String("[redacted]".into());
+                    }
+                }
+            }
+
             if map.get("type").and_then(Value::as_str) == Some("image")
                 && let Some(data) = map.get_mut("data")
                 && let Some(encoded) = data.as_str()
@@ -322,5 +335,28 @@ mod tests {
             value["params"]["items"][0]["nested"]["_elided"],
             json!(true)
         );
+    }
+}
+
+#[cfg(test)]
+mod search_privacy_tests {
+    use super::*;
+
+    #[test]
+    fn conversation_query_text_never_enters_the_rpc_journal() {
+        for method in [
+            "sessions/conversations/search",
+            "sessions/conversations/searchByMeaning",
+        ] {
+            for raw in [
+                json!({"method":method,"params":{"query":"private search words","limit":30}}),
+                json!({"method":"agent/cluster/dispatch","params":{"method":method,"request":{"query":"private search words","limit":30}}}),
+            ] {
+                let payload = parse_and_elide(&raw.to_string());
+                let stored = payload.value().to_string();
+                assert!(!stored.contains("private search words"));
+                assert!(stored.contains("[redacted]") && stored.contains("limit"));
+            }
+        }
     }
 }
