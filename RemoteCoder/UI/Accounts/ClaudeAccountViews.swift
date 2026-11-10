@@ -220,7 +220,7 @@ struct CopilotAccountSummaryRow: View {
             .accessibilityLabel("GitHub Copilot, \(account.label)")
             .accessibilityValue(isSelected ? "Selected" : "Not selected")
             .accessibilityIdentifier("select-claude-copilot")
-            Text([account.label, account.planTitle, account.availabilityText].joined(separator: " · "))
+            Text([account.label, account.plan.capitalized, account.availabilityText].joined(separator: " · "))
                 .scaledFont(.caption).foregroundStyle(.secondary).padding(.leading, 32)
             UsageDetailsContent(rows: account.usageRows(now: .now), notice: account.notice, isLoading: directory.isRefreshing)
                 .padding(.leading, 32)
