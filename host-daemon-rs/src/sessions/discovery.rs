@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 const CAPACITY: usize = 100_000;
+const HEADER_EXISTS: &str = "SELECT EXISTS(SELECT 1 FROM source JOIN session USING(source_id) WHERE source.origin_host=?1 AND source.path=?2)";
 
 #[derive(Default)]
 pub(super) struct Discovery {
@@ -122,6 +123,39 @@ impl Discovery {
             .for_each(drop);
     }
 
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    pub fn headers_present(
+        &mut self,
+        db: &Connection,
+        origins: &[Origin],
+        deadline: Instant,
+    ) -> Result<bool> {
+        let mut header = db.prepare_cached(HEADER_EXISTS)?;
+        for path in &self.pending {
+            ensure!(
+                Instant::now() < deadline,
+                "unavailable: inventory catch-up exceeded five seconds"
+            );
+            let Some(origin) = origins
+                .iter()
+                .find(|origin| path.starts_with(origin.path()))
+            else {
+                return Ok(false);
+            };
+            let original = origin.original(path)?;
+            if !header.query_row(params![origin.host, original.to_string_lossy()], |r| {
+                r.get::<_, bool>(0)
+            })? {
+                return Ok(false);
+            }
+        }
+        self.pending.clear();
+        Ok(true)
+    }
+
     pub fn headers(
         &mut self,
         db: &mut Connection,
@@ -162,7 +196,8 @@ impl Discovery {
                 continue;
             };
             let original = origin.original(&path)?.to_string_lossy().into_owned();
-            let present: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM source JOIN session USING(source_id) WHERE source.origin_host=?1 AND source.path=?2)",params![origin.host,original],|r|r.get(0))?;
+            let present: bool =
+                db.query_row(HEADER_EXISTS, params![origin.host, original], |r| r.get(0))?;
             let outcome = if present {
                 Ok(())
             } else {

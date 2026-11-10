@@ -33,6 +33,7 @@ struct MirrorRequest {
 pub(super) struct Mailbox {
     stop: Arc<AtomicBool>,
     wake: Arc<(Mutex<Pending>, Condvar)>,
+    discovery: Mutex<Option<(Vec<Origin>, Discovery)>>,
 }
 
 impl Mailbox {
@@ -59,8 +60,22 @@ impl Mailbox {
             .context("unavailable: session projection worker stopped")?
     }
 
-    pub fn inventory(&self) -> Result<()> {
+    pub fn inventory(&self, store: &Store) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(5);
+        anyhow::ensure!(
+            !self.stop.load(Ordering::Acquire),
+            "unavailable: session worker stopped"
+        );
+        if let Ok(mut current) = self.discovery.try_lock()
+            && let Some((origins, discovery)) = current.as_mut()
+        {
+            discovery.refresh(origins, Some(deadline))?;
+            if !discovery.has_pending()
+                || discovery.headers_present(&*store.reader()?, origins, deadline)?
+            {
+                return Ok(());
+            }
+        }
         let (reply, result) = std::sync::mpsc::sync_channel(1);
         let pending = self.wake.0.lock().expect("Session worker wake poisoned");
         let (mut pending, _) = self
@@ -104,7 +119,21 @@ impl Mailbox {
         !pending.1.is_empty() || pending.2.is_some()
     }
 
-    fn serve(&self, db: &mut rusqlite::Connection, origins: &[Origin], discovery: &mut Discovery) {
+    fn reconcile(&self, db: &mut rusqlite::Connection, origins: &[Origin]) -> Result<()> {
+        let mut current = self.discovery.lock().expect("Session discovery poisoned");
+        let (stored_origins, discovery) =
+            current.get_or_insert_with(|| (Vec::new(), Discovery::default()));
+        stored_origins.clear();
+        stored_origins.extend_from_slice(origins);
+        discovery.reconcile();
+        discovery.refresh(origins, None)?;
+        if let Err(error) = discovery.headers(db, origins, &self.stop, None) {
+            tracing::warn!(%error,"Session inventory has incomplete identities");
+        }
+        Ok(())
+    }
+
+    fn serve(&self, db: &mut rusqlite::Connection, origins: &[Origin]) {
         let requests = {
             let mut pending = self.wake.0.lock().expect("Session worker wake poisoned");
             let requests = std::mem::take(&mut pending.1);
@@ -123,10 +152,14 @@ impl Mailbox {
         let Some(deadline) = requests.iter().map(|request| request.deadline).max() else {
             return;
         };
-        let result = discovery
-            .refresh(origins, Some(deadline))
-            .and_then(|()| discovery.headers(db, origins, &self.stop, Some(deadline)))
-            .map_err(|error| format!("{error:#}"));
+        let result = (|| -> Result<()> {
+            let mut current = self.discovery.lock().expect("Session discovery poisoned");
+            let (_, discovery) =
+                current.get_or_insert_with(|| (origins.to_vec(), Discovery::default()));
+            discovery.refresh(origins, Some(deadline))?;
+            discovery.headers(db, origins, &self.stop, Some(deadline))
+        })()
+        .map_err(|error| format!("{error:#}"));
         for request in requests {
             let _ = request.reply.try_send(result.clone());
         }
@@ -285,6 +318,7 @@ impl Worker {
         let mailbox = Arc::new(Mailbox {
             stop: stop.clone(),
             wake: wake.clone(),
+            discovery: Mutex::new(None),
         });
         let endpoint = mailbox.clone();
         let registration = store.worker.clone();
@@ -297,7 +331,6 @@ impl Worker {
             .name("sessions-ingest".into())
             .spawn(move || {
                 let mut _watcher = None;
-                let mut discovery = Discovery::default();
                 let mut hot = Hot::default();
                 let mut next_hot = Instant::now();
                 #[cfg(target_os = "macos")]
@@ -315,7 +348,11 @@ impl Worker {
                 let mut retry_delay = Duration::from_secs(2);
                 while !flag.load(Ordering::Acquire) {
                     let mut pending = signal.0.lock().expect("Session worker wake poisoned");
-                    let deadline = if hot.is_empty() {next_reconcile} else {next_reconcile.min(next_hot)};
+                    let deadline = if hot.is_empty() {
+                        next_reconcile
+                    } else {
+                        next_reconcile.min(next_hot)
+                    };
                     pending = signal
                         .1
                         .wait_timeout_while(
@@ -344,49 +381,77 @@ impl Worker {
                             let tx = db.transaction()?;
                             super::metadata::parents(&tx, &origins, parents)?;
                             tx.commit()?;
-                            while !flag.load(Ordering::Acquire) && super::index::rebuild_one(&mut db)? { endpoint.serve(&mut db, &origins, &mut discovery); }
+                            while !flag.load(Ordering::Acquire)
+                                && super::index::rebuild_one(&mut db)?
+                            {
+                                endpoint.serve(&mut db, &origins);
+                            }
                         }
                         if !full && paths.is_empty() && !endpoint.requested() {
                             return Ok(serde_json::json!({"ingested":0,"parseFailures":0}));
                         }
-                        let scope = if full {ingest::Scope::Full} else {ingest::Scope::Changed(&paths)};
+                        let scope = if full {
+                            ingest::Scope::Full
+                        } else {
+                            ingest::Scope::Changed(&paths)
+                        };
                         if full {
                             _watcher = Some(watch(&mut origins, signal.clone())?);
-                            discovery.reconcile();
-                            discovery.refresh(&origins, None)?;
                             let mut db = store.writer()?;
-                            if let Err(error) = discovery.headers(&mut db, &origins, &flag, None) {
-                                tracing::warn!(%error,"Session inventory has incomplete identities");
-                            }
+                            endpoint.reconcile(&mut db, &origins)?;
                             super::metadata::titles(&db, &origins)?;
-                            endpoint.serve(&mut db, &origins, &mut discovery);
+                            endpoint.serve(&mut db, &origins);
                             hot.observe(&db, &origins)?;
                         } else if endpoint.requested() {
                             let mut db = store.writer()?;
-                            endpoint.serve(&mut db, &origins, &mut discovery);
+                            endpoint.serve(&mut db, &origins);
                             hot.observe(&db, &origins)?;
                         }
-                        let outcome = ingest::scan_serving(&store, &origins, scope, &flag, &|| endpoint.inventory_waiting(), &mut |db| {
-                            if endpoint.requested() {
-                                endpoint.serve(db, &origins, &mut discovery);
-                                hot.observe(db, &origins)?;
+                        let outcome = ingest::scan_serving(
+                            &store,
+                            &origins,
+                            scope,
+                            &flag,
+                            &|| endpoint.inventory_waiting(),
+                            &mut |db| {
+                                if endpoint.requested() {
+                                    endpoint.serve(db, &origins);
+                                    hot.observe(db, &origins)?;
+                                }
+                                Ok(())
+                            },
+                        )?;
+                        {
+                            let db = store.writer()?;
+                            super::metadata::titles(&db, &origins)?;
+                        }
+                        {
+                            let mut db = store.writer()?;
+                            while !flag.load(Ordering::Acquire)
+                                && super::index::rebuild_one(&mut db)?
+                            {
+                                endpoint.serve(&mut db, &origins);
                             }
-                            Ok(())
-                        })?;
-                        { let db = store.writer()?; super::metadata::titles(&db, &origins)?; }
-                        { let mut db = store.writer()?; while !flag.load(Ordering::Acquire) && super::index::rebuild_one(&mut db)? { endpoint.serve(&mut db, &origins, &mut discovery); } }
+                        }
                         hot.observe(&*store.reader()?, &origins)?;
                         if full && outcome["cancelled"] != true {
-                            ingest::mark_ready(&store.writer()?)?;
+                            ingest::mark_ready(&*store.writer()?)?;
                         }
                         Ok(outcome)
                     })();
-                    if let Some(MirrorRequest{projection,reply})=mirror {
-                        let result=projection.apply(&store,&flag,&||endpoint.inventory_waiting(),&mut |db| {
-                            if endpoint.requested() {endpoint.serve(db,&origins,&mut discovery);}
-                            Ok(())
-                        });
-                        let _=reply.send(result);
+                    if let Some(MirrorRequest { projection, reply }) = mirror {
+                        let result = projection.apply(
+                            &store,
+                            &flag,
+                            &|| endpoint.inventory_waiting(),
+                            &mut |db| {
+                                if endpoint.requested() {
+                                    endpoint.serve(db, &origins);
+                                }
+                                Ok(())
+                            },
+                        );
+                        let _ = reply.send(result);
                     }
                     if full && let Err(error) = store.storage.publish_cap(&cap_status) {
                         tracing::warn!(%error,"Session disk cap status unavailable");
@@ -716,19 +781,13 @@ mod tests {
         let mailbox = Arc::new(Mailbox {
             stop,
             wake: wake.clone(),
+            discovery: Mutex::new(None),
         });
         store
             .worker
             .set(mailbox.clone())
             .map_err(|_| anyhow::anyhow!("Fixture already registered"))?;
-        let mut discovery = Discovery::default();
-        discovery.refresh(std::slice::from_ref(&origin), None)?;
-        discovery.headers(
-            &mut *store.writer()?,
-            std::slice::from_ref(&origin),
-            &mailbox.stop,
-            None,
-        )?;
+        mailbox.reconcile(&mut *store.writer()?, std::slice::from_ref(&origin))?;
         let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
         let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
         let (read_tx, read_rx) = std::sync::mpsc::channel();
@@ -749,11 +808,7 @@ mod tests {
                             first = false;
                             entered_tx.send(())?;
                             release_rx.recv_timeout(Duration::from_secs(5))?;
-                            writer_mailbox.serve(
-                                db,
-                                std::slice::from_ref(writer_origin),
-                                &mut discovery,
-                            );
+                            writer_mailbox.serve(db, std::slice::from_ref(writer_origin));
                             for _ in 0..CALLERS {
                                 read_rx.recv_timeout(Duration::from_secs(5))?;
                             }
@@ -764,6 +819,7 @@ mod tests {
                 Ok(())
             });
             entered_rx.recv_timeout(Duration::from_secs(5))?;
+            ingest::refresh_inventory(&store)?;
             let new = origin.path().join("2026/10/28/just-created.jsonl");
             std::fs::create_dir_all(new.parent().unwrap())?;
             std::fs::write(

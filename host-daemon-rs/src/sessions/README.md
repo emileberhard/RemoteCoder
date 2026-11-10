@@ -7,9 +7,9 @@ It does not own semantic memory or agent execution.
 
 `Gateway::session_inventory` exposes paged canonical provider headers to lifecycle
 reads without introducing another transcript reader. The matching `sessions/list`
-RPC returns at most 1,000 headers and 8 MiB per page. First-page callers share a
-bounded worker mailbox (64 requests); one discovery pass serves the waiting
-callers. The worker alone writes local projection and identity changes, serving
+RPC returns at most 1,000 headers and 8 MiB per page. First-page callers check
+directory revisions and already-indexed headers without the writer. Requests
+that need new headers share a bounded worker mailbox (64 requests). The worker alone writes local projection and identity changes, serving
 catch-up at record checkpoints and between source saves. Directory revisions find new files before
 FSEvents delivery by statting known directories and enumerating only changed or
 new directories, including nested Codex date folders. Removed directories leave

@@ -42,6 +42,8 @@ pub(crate) fn mark_initial_rebuild(store: &Store) -> Result<()> {
             "INSERT OR IGNORE INTO meta SELECT 'mirror_rebuilding','1' WHERE NOT EXISTS(SELECT 1 FROM mirror_state)",
             [],
         )?;
+    } else {
+        finish_initial_rebuild(store)?;
     }
     Ok(())
 }

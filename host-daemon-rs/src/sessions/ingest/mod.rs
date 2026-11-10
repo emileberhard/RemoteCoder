@@ -156,7 +156,7 @@ fn companions(origin: &Origin, path: &Path) -> Result<Vec<PathBuf>> {
 pub(crate) fn scan(store: &Store, origins: &[Origin], stop: &AtomicBool) -> Result<Value> {
     let outcome = scan_scope(store, origins, Scope::Full, stop)?;
     if outcome["cancelled"] != true {
-        mark_ready(&store.writer()?)?;
+        mark_ready(&*store.writer()?)?;
     }
     Ok(outcome)
 }
@@ -392,7 +392,7 @@ pub(crate) fn refresh_inventory(store: &Store) -> Result<()> {
         .worker
         .get()
         .context("unavailable: session worker is not running")?
-        .inventory()
+        .inventory(store)
 }
 
 pub(super) fn record_failure(
