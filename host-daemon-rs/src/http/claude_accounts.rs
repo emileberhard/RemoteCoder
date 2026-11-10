@@ -74,6 +74,7 @@ struct ClaudeAccount {
     id: String,
     label: String,
     plan: String,
+    tier: Option<String>,
     shared: bool,
     credential: Credential,
     availability: Availability,
@@ -101,11 +102,19 @@ struct RouterUsage {
     observed_at: String,
     five_hour: Option<RouterWindow>,
     weekly: Option<RouterWindow>,
+    model_limits: Option<Vec<RouterModelWindow>>,
 }
 #[derive(Deserialize)]
 struct RouterWindow {
     utilization: f64,
     resets_at: String,
+}
+#[derive(Deserialize)]
+struct RouterModelWindow {
+    model: String,
+    group: String,
+    #[serde(flatten)]
+    window: RouterWindow,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +150,7 @@ struct Account {
     id: String,
     label: String,
     plan: String,
+    tier: Option<String>,
     shared: bool,
     credential: Credential,
     availability: Availability,
@@ -177,25 +187,38 @@ fn map_directory(value: Value) -> Result<Directory> {
                 ("weekly", "Weekly", 10080, usage.weekly),
             ] {
                 if let Some(window) = window {
-                    ensure!(
-                        window.utilization.is_finite() && window.utilization >= 0.0,
-                        "Invalid Claude utilization"
-                    );
-                    windows.push(UsageWindow {
-                        id: id.to_owned(),
-                        label: label.to_owned(),
-                        duration_minutes: Some(duration),
-                        used_percent: (window.utilization * 100.0).min(100.0),
-                        resets_at: Some(timestamp(&window.resets_at)?),
-                        model: None,
-                    });
+                    windows.push(usage_window(
+                        id.to_owned(),
+                        label.to_owned(),
+                        Some(duration),
+                        None,
+                        &window,
+                    )?);
                 }
+            }
+            for limit in usage.model_limits.into_iter().flatten() {
+                ensure!(valid_id(&limit.model), "Invalid Claude model limit");
+                let mut label = limit.model.clone();
+                label[..1].make_ascii_uppercase();
+                let duration = match limit.group.as_str() {
+                    "session" => Some(300),
+                    "weekly" => Some(10080),
+                    _ => None,
+                };
+                windows.push(usage_window(
+                    format!("{}-{}", limit.model, limit.group),
+                    format!("{label} {}", limit.group),
+                    duration,
+                    Some(limit.model),
+                    &limit.window,
+                )?);
             }
         }
         accounts.push(Account {
             id: account.id,
             label: account.label,
             plan: account.plan,
+            tier: account.tier,
             shared: account.shared,
             credential: account.credential,
             availability: account.availability,
@@ -228,6 +251,26 @@ fn map_directory(value: Value) -> Result<Directory> {
             .map(|route| route.kind),
         copilot,
         accounts,
+    })
+}
+fn usage_window(
+    id: String,
+    label: String,
+    duration_minutes: Option<i64>,
+    model: Option<String>,
+    window: &RouterWindow,
+) -> Result<UsageWindow> {
+    ensure!(
+        window.utilization.is_finite() && window.utilization >= 0.0,
+        "Invalid Claude utilization"
+    );
+    Ok(UsageWindow {
+        id,
+        label,
+        duration_minutes,
+        used_percent: (window.utilization * 100.0).min(100.0),
+        resets_at: Some(timestamp(&window.resets_at)?),
+        model,
     })
 }
 fn map_copilot(account: CopilotAccount) -> Result<Copilot> {

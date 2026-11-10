@@ -4,11 +4,13 @@ use std::os::unix::fs::PermissionsExt;
 
 fn payload() -> Value {
     json!({"accounts":[
-        {"id":"first","provider":"claude","label":"First","plan":"max","shared":false,"credential":"rejected",
+        {"id":"first","provider":"claude","label":"First","plan":"max","tier":"max_20x","shared":false,"credential":"rejected",
          "availability":"rejected","available_at":"2026-10-06T10:00:00Z",
          "usage":{"observed_at":"2026-10-06T07:00:00Z",
                   "five_hour":{"utilization":1.2,"resets_at":"2026-10-06T10:00:00Z"},
-                  "weekly":{"utilization":0.55,"resets_at":"2026-10-09T16:00:00Z"}}},
+                  "weekly":{"utilization":0.55,"resets_at":"2026-10-09T16:00:00Z"},
+                  "model_limits":[{"model":"fable","group":"weekly","utilization":1,"resets_at":"2026-10-09T16:00:00Z",
+                                   "observed_at":"2026-10-06T07:00:00Z"}]}},
         {"id":"ca4d1cbc-865c-4136-a13c-bd004f229c93","provider":"codex","label":"codex@example.test","plan":"pro",
          "shared":false,"credential":"invalid","availability":"unavailable","available_at":null,"usage":null},
         {"id":"second","provider":"claude","label":"Second","plan":"pro","shared":true,"credential":"ready",
@@ -24,9 +26,11 @@ fn maps_claude_accounts_without_inventing_missing_observations() {
     assert_eq!(directory.accounts.len(), 2);
     let account = &directory.accounts[0];
     assert_eq!(account.plan, "max");
+    assert_eq!(account.tier.as_deref(), Some("max_20x"));
+    assert!(directory.accounts[1].tier.is_none());
     assert_eq!(account.available_at, Some(1791280800.0));
     assert_eq!(account.observed_at, Some(observed));
-    assert_eq!(account.windows.len(), 2);
+    assert_eq!(account.windows.len(), 3);
     assert_eq!(account.windows[0].used_percent, 100.0);
     assert_eq!(account.windows[0].duration_minutes, Some(300));
     assert_eq!(account.windows[0].resets_at, Some(1791280800.0));
@@ -34,11 +38,26 @@ fn maps_claude_accounts_without_inventing_missing_observations() {
     assert_eq!(account.windows[1].id, "weekly");
     assert_eq!(account.windows[1].duration_minutes, Some(10080));
     assert_eq!(account.windows[1].resets_at, Some(1791561600.0));
+    let fable = &account.windows[2];
+    assert_eq!(
+        (
+            fable.id.as_str(),
+            fable.label.as_str(),
+            fable.model.as_deref()
+        ),
+        ("fable-weekly", "Fable weekly", Some("fable"))
+    );
+    assert_eq!(fable.duration_minutes, Some(10080));
+    assert_eq!(fable.used_percent, 100.0);
+    assert_eq!(fable.resets_at, Some(1791561600.0));
     assert!(directory.accounts[1].shared);
     assert!(directory.accounts[1].windows.is_empty());
     assert!(directory.accounts[1].observed_at.is_none());
     let mut invalid = payload();
     invalid["accounts"][0]["usage"]["five_hour"]["utilization"] = json!(-0.1);
+    assert!(map_directory(invalid).is_err());
+    let mut invalid = payload();
+    invalid["accounts"][0]["usage"]["model_limits"][0]["model"] = json!("");
     assert!(map_directory(invalid).is_err());
     for (field, value) in [
         ("automatic", json!("absent")),
