@@ -173,6 +173,16 @@ struct ConversationSearchSessionTests {
         #expect(emphasized == ["drawer", "FLICKER"])
     }
 
+    @Test func excerptsFocusAndEmphasizeDiacriticInsensitiveMatches() throws {
+        let query = try #require(ConversationSearchQuery("malmo"))
+        let text = "We spent most of the afternoon discussing the new deployment plan for Malmö."
+        let excerpt = query.emphasizedExcerpt(text)
+        #expect(query.bestTerm(in: text) == "malmo")
+        #expect(String(excerpt.characters) == "…new deployment plan for Malmö.")
+        #expect(excerpt.runs.filter { $0.inlinePresentationIntent == .stronglyEmphasized }
+            .map { String(excerpt[$0.range].characters) } == ["Malmö"])
+    }
+
     @Test func queriesFollowTheContractTermRule() throws {
         let query = try #require(ConversationSearchQuery("  Drawer drawer DRAWER flicker  "))
         #expect(query.terms == ["Drawer", "flicker"])

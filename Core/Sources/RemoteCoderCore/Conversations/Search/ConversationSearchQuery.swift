@@ -6,6 +6,8 @@ struct ConversationSearchQuery: Equatable, Sendable {
     static let minimumMessageTermLength = 3
     static let excerptLeadingContext = 24
 
+    private static let messageMatchOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+
     let terms: [String]
     let meaningText: String
 
@@ -49,7 +51,7 @@ struct ConversationSearchQuery: Equatable, Sendable {
     }
 
     func bestTerm(in excerpt: String) -> String? {
-        terms.filter { excerpt.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+        terms.filter { excerpt.range(of: $0, options: Self.messageMatchOptions) != nil }
             .max { $0.count < $1.count }
     }
 
@@ -60,7 +62,7 @@ struct ConversationSearchQuery: Equatable, Sendable {
         var attributed = AttributedString(focused)
         for term in messageTerms {
             var searchStart = focused.startIndex
-            while let match = focused.range(of: term, options: .caseInsensitive, range: searchStart..<focused.endIndex) {
+            while let match = focused.range(of: term, options: Self.messageMatchOptions, range: searchStart..<focused.endIndex) {
                 if let lower = AttributedString.Index(match.lowerBound, within: attributed),
                    let upper = AttributedString.Index(match.upperBound, within: attributed) {
                     attributed[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
@@ -72,7 +74,7 @@ struct ConversationSearchQuery: Equatable, Sendable {
     }
 
     private static func focus(_ text: String, on terms: [String]) -> String {
-        let firstMatch = terms.compactMap { text.range(of: $0, options: .caseInsensitive)?.lowerBound }.min()
+        let firstMatch = terms.compactMap { text.range(of: $0, options: messageMatchOptions)?.lowerBound }.min()
         guard let firstMatch,
               text.distance(from: text.startIndex, to: firstMatch) > excerptLeadingContext else { return text }
         var start = text.index(firstMatch, offsetBy: -excerptLeadingContext)
