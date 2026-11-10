@@ -152,8 +152,21 @@ fn companions(origin: &Origin, path: &Path) -> Result<Vec<PathBuf>> {
     Ok(result)
 }
 
+#[cfg(test)]
 pub(crate) fn scan(store: &Store, origins: &[Origin], stop: &AtomicBool) -> Result<Value> {
-    scan_scope(store, origins, Scope::Full, stop)
+    let outcome = scan_scope(store, origins, Scope::Full, stop)?;
+    if outcome["cancelled"] != true {
+        mark_ready(&store.writer()?)?;
+    }
+    Ok(outcome)
+}
+
+pub(super) fn mark_ready(db: &Connection) -> Result<()> {
+    db.execute(
+        "UPDATE meta SET value='1' WHERE key='catalog_ready' AND value='0'",
+        [],
+    )?;
+    Ok(())
 }
 
 pub(crate) enum Scope<'a> {
@@ -205,6 +218,7 @@ fn selected(store: &Store, origin: &Origin, paths: &[PathBuf]) -> Result<BTreeSe
     Ok(selected)
 }
 
+#[cfg(test)]
 pub(crate) fn scan_scope(
     store: &Store,
     origins: &[Origin],
@@ -339,9 +353,6 @@ pub(super) fn scan_serving(
         return Ok(serde_json::json!({"ingested":0,"parseFailures":0}));
     }
     let db = store.writer()?;
-    if matches!(scope, Scope::Full) {
-        db.execute("UPDATE meta SET value='1' WHERE key='catalog_ready'", [])?;
-    }
     for host in changed_hosts {
         let local = origins
             .iter()

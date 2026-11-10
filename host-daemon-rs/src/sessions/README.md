@@ -10,19 +10,19 @@ reads without introducing another transcript reader. The matching `sessions/list
 RPC returns at most 1,000 headers and 8 MiB per page. First-page callers share a
 bounded worker mailbox (64 requests); one discovery pass serves the waiting
 callers. The worker alone writes local projection and identity changes, serving
-catch-up between atomic source saves. Directory revisions find new files before
+catch-up at record checkpoints and between source saves. Directory revisions find new files before
 FSEvents delivery by statting known directories and enumerating only changed or
 new directories, including nested Codex date folders. Removed directories leave
 the map. Directory revisions and unresolved header paths are each capped at
 100,000; overflow reports capacity without an unbounded walk. Full background
 reconciles rebuild that discovery map and ingest missing headers before content.
 Identity reads use the same parser with an 8 MiB/128-record budget. Partial
-identities remain unavailable. A file created during an unusually long atomic
-source record or evidence check can hit the explicit five-second inventory deadline.
+identities remain unavailable. An unusually long record or evidence check can
+still reach the explicit five-second inventory deadline.
 New sources and verified appends checkpoint at a complete record when inventory
 waits, serve its headers, and resume from the persisted prefix. A changed-prefix
-replacement rolls back before serving inventory and retries atomically. Rows never
-become a false empty result. Source-save durations are reported as aggregate
+replacement rolls back before serving inventory and retries atomically. The same worker projects mirrored evidence and serves
+inventory at the same checkpoints. Source-save durations are reported as aggregate
 longestSourceSeconds and sourcesOverFiveSeconds by ingestion.
 
 `schema.sql` is the versioned schema; `views.sql` provides analytics conveniences.

@@ -80,6 +80,7 @@ impl Gateway {
                             free_bytes: 1 << 40,
                         },
                     )?;
+                    mirror::mark_initial_rebuild(&store)?;
                     let worker = Arc::new(Worker::start(
                         store.clone(),
                         origins.clone(),
@@ -218,6 +219,8 @@ impl Gateway {
                 }
             }
         }
+        let store = runtime.store.clone();
+        tokio::task::spawn_blocking(move || mirror::finish_initial_rebuild(&store)).await??;
         Ok(json!({"enabled":true,"members":outcomes}))
     }
 

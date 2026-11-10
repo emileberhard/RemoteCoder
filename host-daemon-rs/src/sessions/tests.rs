@@ -2923,6 +2923,7 @@ async fn sessions_conversations_mirror_origin_metadata_without_entry_changes() -
     let child = super::session_key(&f.origins[0], "codex-child");
     let directory = tempfile::tempdir()?;
     let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
+    let worker = start_worker(&target, &[]);
     let call = mirror_peer(&f, Default::default(), Default::default());
     sync_mirror(&target, call.clone()).await?;
     f.store.writer()?.execute("UPDATE session SET title='Native Codex title',delegated_parent_known=1,delegated_parent_session_key=?2 WHERE session_key=?1",rusqlite::params![child,root])?;
@@ -2931,6 +2932,7 @@ async fn sessions_conversations_mirror_origin_metadata_without_entry_changes() -
     sync_mirror(&target, call).await?;
     let metadata:(String,bool,String)=target.reader()?.query_row("SELECT title,delegated_parent_known,delegated_parent_session_key FROM session WHERE session_key=?1",[child],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
     assert_eq!(metadata, ("Native Codex title".into(), true, root));
+    worker.stop()?;
     Ok(())
 }
 

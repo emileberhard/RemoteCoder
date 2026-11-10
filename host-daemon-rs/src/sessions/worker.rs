@@ -17,11 +17,17 @@ struct Pending(
     Vec<BTreeSet<PathBuf>>,
     Vec<InventoryRequest>,
     Option<super::metadata::Parents>,
+    Option<MirrorRequest>,
 );
 
 struct InventoryRequest {
     deadline: Instant,
     reply: std::sync::mpsc::SyncSender<std::result::Result<(), String>>,
+}
+
+struct MirrorRequest {
+    projection: super::mirror::Projection,
+    reply: tokio::sync::oneshot::Sender<Result<bool>>,
 }
 
 pub(super) struct Mailbox {
@@ -30,6 +36,29 @@ pub(super) struct Mailbox {
 }
 
 impl Mailbox {
+    pub(super) async fn project_mirror(
+        &self,
+        projection: super::mirror::Projection,
+    ) -> Result<bool> {
+        let (reply, result) = tokio::sync::oneshot::channel();
+        {
+            let mut pending = self.wake.0.lock().expect("Session worker wake poisoned");
+            anyhow::ensure!(
+                !self.stop.load(Ordering::Acquire),
+                "unavailable: session worker stopped"
+            );
+            anyhow::ensure!(
+                pending.3.is_none(),
+                "capacity: a mirror projection is already pending"
+            );
+            pending.3 = Some(MirrorRequest { projection, reply });
+            self.wake.1.notify_one();
+        }
+        result
+            .await
+            .context("unavailable: session projection worker stopped")?
+    }
+
     pub fn inventory(&self) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(5);
         let (reply, result) = std::sync::mpsc::sync_channel(1);
@@ -181,7 +210,10 @@ impl Pending {
     }
 
     fn is_empty(&self) -> bool {
-        self.0.iter().all(BTreeSet::is_empty) && self.1.is_empty() && self.2.is_none()
+        self.0.iter().all(BTreeSet::is_empty)
+            && self.1.is_empty()
+            && self.2.is_none()
+            && self.3.is_none()
     }
     fn take(&mut self) -> Vec<BTreeSet<PathBuf>> {
         std::mem::take(&mut self.0)
@@ -298,6 +330,7 @@ impl Worker {
                     }
                     let full = Instant::now() >= next_reconcile;
                     let parents = pending.2.take();
+                    let mirror = pending.3.take();
                     let batches = pending.take();
                     drop(pending);
                     let mut paths: Vec<_> = batches.into_iter().flatten().collect();
@@ -343,8 +376,18 @@ impl Worker {
                         { let db = store.writer()?; super::metadata::titles(&db, &origins)?; }
                         { let mut db = store.writer()?; while !flag.load(Ordering::Acquire) && super::index::rebuild_one(&mut db)? { endpoint.serve(&mut db, &origins, &mut discovery); } }
                         hot.observe(&*store.reader()?, &origins)?;
+                        if full && outcome["cancelled"] != true {
+                            ingest::mark_ready(&store.writer()?)?;
+                        }
                         Ok(outcome)
                     })();
+                    if let Some(MirrorRequest{projection,reply})=mirror {
+                        let result=projection.apply(&store,&flag,&||endpoint.inventory_waiting(),&mut |db| {
+                            if endpoint.requested() {endpoint.serve(db,&origins,&mut discovery);}
+                            Ok(())
+                        });
+                        let _=reply.send(result);
+                    }
                     if full && let Err(error) = store.storage.publish_cap(&cap_status) {
                         tracing::warn!(%error,"Session disk cap status unavailable");
                     }
@@ -399,6 +442,7 @@ impl Worker {
         let mut pending = self.wake.0.lock().expect("Session worker wake poisoned");
         self.stop.store(true, Ordering::Release);
         let requests = std::mem::take(&mut pending.1);
+        pending.3.take();
         self.wake.1.notify_all();
         drop(pending);
         for request in requests {

@@ -36,6 +36,30 @@ pub(crate) fn role(database: &Path) -> Result<bool> {
         .map(|role| role.unwrap_or(false))
 }
 
+pub(crate) fn mark_initial_rebuild(store: &Store) -> Result<()> {
+    if role(&store.path).unwrap_or(true) {
+        store.writer()?.execute(
+            "INSERT OR IGNORE INTO meta SELECT 'mirror_rebuilding','1' WHERE NOT EXISTS(SELECT 1 FROM mirror_state)",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn finish_initial_rebuild(store: &Store) -> Result<()> {
+    let rebuilding: bool = store.reader()?.query_row(
+        "SELECT EXISTS(SELECT 1 FROM meta WHERE key='mirror_rebuilding')",
+        [],
+        |r| r.get(0),
+    )?;
+    if rebuilding {
+        store
+            .writer()?
+            .execute("DELETE FROM meta WHERE key='mirror_rebuilding'", [])?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Entry {
@@ -329,6 +353,51 @@ impl Failures {
                 }
             }
         }
+    }
+}
+
+pub(super) struct Projection {
+    host: String,
+    origins: Vec<Origin>,
+    changes: Option<Vec<PathBuf>>,
+    metadata: Vec<super::metadata::SessionMetadata>,
+}
+
+impl Projection {
+    pub(super) fn apply(
+        self,
+        store: &Store,
+        stop: &std::sync::atomic::AtomicBool,
+        inventory_waiting: &dyn Fn() -> bool,
+        between: &mut impl FnMut(&mut rusqlite::Connection) -> Result<()>,
+    ) -> Result<bool> {
+        let scope = self
+            .changes
+            .as_deref()
+            .map_or(ingest::Scope::Full, ingest::Scope::Changed);
+        let outcome = ingest::scan_serving(
+            store,
+            &self.origins,
+            scope,
+            stop,
+            inventory_waiting,
+            between,
+        )?;
+        ensure!(
+            !stop.load(std::sync::atomic::Ordering::Acquire),
+            "Session mirror projection stopped"
+        );
+        let mut db = store.writer()?;
+        let partial:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM coverage WHERE origin_host=?1 AND stale_reason IS NOT NULL)",[&self.host],|r|r.get(0))?;
+        let tx = db.transaction()?;
+        super::metadata::apply(&tx, &self.host, &self.metadata)?;
+        tx.commit()?;
+        while !stop.load(std::sync::atomic::Ordering::Acquire)
+            && super::index::rebuild_one(&mut db)?
+        {
+            between(&mut db)?;
+        }
+        Ok(outcome["parseFailures"] == 0 && !partial)
     }
 }
 
@@ -638,27 +707,29 @@ async fn sync_owned(
             }
         }
     }
-    let origins: Vec<_> = origins.into_values().collect();
-    let projected = if full || !changed.is_empty() {
-        let paths: Vec<_> = changed.into_iter().collect();
-        let stop = std::sync::atomic::AtomicBool::new(false);
-        let outcome = if full {
-            ingest::scan(store, &origins, &stop)?
-        } else {
-            ingest::scan_scope(store, &origins, ingest::Scope::Changed(&paths), &stop)?
+    let projected = if full || !changed.is_empty() || !metadata.is_empty() {
+        let projection = Projection {
+            host: host.to_owned(),
+            origins: origins.into_values().collect(),
+            changes: (!full).then(|| changed.into_iter().collect()),
+            metadata: metadata.into_values().collect(),
         };
-        let partial: bool = store.reader()?.query_row("SELECT EXISTS(SELECT 1 FROM coverage WHERE origin_host=?1 AND stale_reason IS NOT NULL)",[host],|row|row.get(0))?;
-        outcome["parseFailures"] == 0 && !partial
+        if let Some(worker) = store.worker.get() {
+            worker.project_mirror(projection).await?
+        } else {
+            #[cfg(not(test))]
+            anyhow::bail!("unavailable: session projection worker is not running");
+            #[cfg(test)]
+            projection.apply(
+                store,
+                &std::sync::atomic::AtomicBool::new(false),
+                &|| false,
+                &mut |_| Ok(()),
+            )?
+        }
     } else {
         saved.as_ref().is_some_and(|(_, _, projected)| *projected)
     };
-    {
-        let mut db = store.writer()?;
-        let tx = db.transaction()?;
-        super::metadata::apply(&tx, host, &metadata.into_values().collect::<Vec<_>>())?;
-        tx.commit()?;
-        while !stop.is_cancelled() && super::index::rebuild_one(&mut db)? {}
-    }
     let projected =
         projected && complete && (full || saved.as_ref().is_some_and(|(_, _, prior)| *prior));
     let cursor =
