@@ -10,7 +10,7 @@ use crate::providers::claude::{
 };
 use crate::rpc::error::RpcCode;
 use nix::unistd::Pid;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -856,10 +856,10 @@ impl ClaudeSupervisor {
         &self,
         source_id: &str,
         target_id: &str,
-        turns: HashSet<String>,
+        history: crate::providers::claude::conversation_index::ForkHistory,
     ) -> anyhow::Result<()> {
         self.conversation_index
-            .fork_thread(source_id, target_id, turns)
+            .fork_thread(source_id, target_id, history)
             .await
     }
 

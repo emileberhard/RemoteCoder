@@ -1,6 +1,6 @@
 use super::Gateway;
 use crate::providers::claude::ClaudeSupervisor;
-use crate::providers::claude::projection::{ForkPoint, HistoryError};
+use crate::providers::claude::projection::{ForkBoundary, ForkPoint, HistoryError};
 use crate::rpc::error::RpcCode;
 use crate::rpc::{RpcError, RpcResult};
 use anyhow::{Context, Result};
@@ -14,20 +14,33 @@ struct ForkRequest {
     #[serde(default)]
     thread_id: String,
     last_turn_id: Option<String>,
+    last_item_id: Option<String>,
+}
+
+impl ForkRequest {
+    fn boundary(&self) -> Result<ForkBoundary, RpcError> {
+        match (self.last_turn_id.clone(), self.last_item_id.clone()) {
+            (None, None) => Ok(ForkBoundary::LastFinishedTurn),
+            (Some(turn), None) => Ok(ForkBoundary::Turn(turn)),
+            (Some(turn), Some(item)) => Ok(ForkBoundary::Item { turn, item }),
+            (None, Some(_)) => Err(RpcError::new(
+                RpcCode::InvalidParams,
+                "thread/fork lastItemId requires lastTurnId",
+            )),
+        }
+    }
 }
 
 impl Gateway {
     pub(super) async fn claude_thread_fork(&self, params: &Value) -> RpcResult {
-        let ForkRequest {
-            thread_id: source_thread,
-            last_turn_id: through_turn,
-        } = ForkRequest::deserialize(params).map_err(|error| {
+        let request = ForkRequest::deserialize(params).map_err(|error| {
             RpcError::new(
                 RpcCode::InvalidParams,
                 format!("invalid thread/fork params: {error}"),
             )
         })?;
-        let source_thread = source_thread.as_str();
+        let boundary = request.boundary()?;
+        let source_thread = request.thread_id.as_str();
         if !crate::providers::claude::session_uuid_from_thread_id(source_thread)
             .is_some_and(crate::ids::is_session_uuid)
         {
@@ -43,7 +56,7 @@ impl Gateway {
             ));
         };
         let (point, source, source_path) = self
-            .claude_fork_source(&agent, source_thread, through_turn.clone())
+            .claude_fork_source(&agent, source_thread, boundary)
             .await?;
         let failed = |error: anyhow::Error| {
             RpcError::new(
@@ -54,17 +67,21 @@ impl Gateway {
         let source_header = self
             .claude_thread_response(&json!({"threadId": source_thread}))
             .await?;
-        let note = super::fork_note::fork_note(&source_header["thread"]).map_err(failed)?;
+        let ForkPoint { length, history } = point;
+        let end = match history.cut {
+            Some(_) => super::fork_note::ForkEnd::InsideTurn,
+            None => super::fork_note::ForkEnd::AfterTurn,
+        };
+        let note = super::fork_note::fork_note(&source_header["thread"], end).map_err(failed)?;
         let session_uuid = agent.mint_session().await.map_err(failed)?;
         let thread_id = crate::providers::claude::claude_thread_id(&session_uuid);
         agent
             .copy_parent_selection(source_thread, &thread_id)
             .await
             .map_err(failed)?;
-        let ForkPoint { length, turns } = point;
-        let kept_turns = turns.len();
+        let kept_turns = history.turns.len() + usize::from(history.cut.is_some());
         agent
-            .fork_thread_records(source_thread, &thread_id, turns)
+            .fork_thread_records(source_thread, &thread_id, history)
             .await
             .map_err(failed)?;
         if self.metadata.is_configured() {
@@ -95,7 +112,8 @@ impl Gateway {
             json!({
                 "threadId": thread_id,
                 "sourceThreadId": source_thread,
-                "throughTurnId": through_turn,
+                "throughTurnId": request.last_turn_id,
+                "throughItemId": request.last_item_id,
                 "turns": kept_turns,
             }),
         );
@@ -107,7 +125,7 @@ impl Gateway {
         &self,
         agent: &ClaudeSupervisor,
         source_thread: &str,
-        through_turn: Option<String>,
+        boundary: ForkBoundary,
     ) -> Result<(ForkPoint, std::fs::File, PathBuf), RpcError> {
         let turn_starts = agent.lock_lifecycle(source_thread).await;
         let active_turn = agent.active_turn_id(source_thread).await;
@@ -117,7 +135,7 @@ impl Gateway {
                 source_thread,
                 active_turn.clone(),
                 move |projection, file, path| {
-                    let point = projection.fork_point(through_turn.as_deref())?;
+                    let point = projection.fork_point(&boundary)?;
                     let file = file
                         .try_clone()
                         .context("Could not reopen the Claude session")?;
@@ -322,6 +340,87 @@ mod tests {
             .await
         }
 
+        fn mid_turn_records(&self) -> Vec<Value> {
+            let mut records = self.source_records();
+            let title = records.pop().unwrap();
+            records.extend([
+                json!({"type":"assistant","uuid":"b2","sessionId":SOURCE,"timestamp":"2026-09-28T10:01:03Z",
+                    "message":{"id":"msg_2","role":"assistant","model":"claude-opus-5-5",
+                    "content":[{"type":"tool_use","id":"toolu_b","name":"Bash","input":{"command":"true"}}]}}),
+                json!({"type":"user","uuid":"b3","sessionId":SOURCE,"timestamp":"2026-09-28T10:01:04Z",
+                    "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_b","content":"ok"}]}}),
+                json!({"type":"assistant","uuid":"b4","sessionId":SOURCE,"timestamp":"2026-09-28T10:01:05Z",
+                    "message":{"id":"msg_3","role":"assistant","model":"claude-opus-5-5",
+                    "content":[{"type":"text","text":"DONE BRAVO"}],"stop_reason":"end_turn"}}),
+                title,
+            ]);
+            records
+        }
+
+        async fn index_items(&self, turn: &str, items: &[Value], at: i64) {
+            let store = crate::providers::claude::conversation_index::Store::new(
+                self.stub.claude_home.clone(),
+            );
+            for (offset, item) in items.iter().enumerate() {
+                let at = at + offset as i64;
+                store
+                    .record(
+                        &mut json!({"method":"item/completed","params":{"threadId":SOURCE_THREAD,
+                        "turnId":turn,"item":item,"startedAtMs":at,"completedAtMs":at}}),
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+
+        async fn write_mid_turn_source(&self) -> Vec<Value> {
+            let records = self.mid_turn_records();
+            self.write_transcript(&records);
+            self.index_items(
+                "claude-turn-b",
+                &[
+                    json!({"type":"commandExecution","id":"toolu_b"}),
+                    json!({"type":"agentMessage","id":"msg_3#0","text":""}),
+                ],
+                2_010,
+            )
+            .await;
+            records
+        }
+
+        async fn fork_through(&self, turn: &str, item: &str) -> Value {
+            self.call(
+                "thread/fork",
+                json!({"threadId": SOURCE_THREAD, "lastTurnId": turn, "lastItemId": item,
+                    "persistExtendedHistory": false, "excludeTurns": true, "threadSource": "user"}),
+            )
+            .await
+        }
+
+        async fn turns(&self, thread: &str) -> Vec<Value> {
+            let page = self
+                .call(
+                    "thread/turns/list",
+                    json!({"threadId": thread, "limit": 10, "sortDirection": "asc", "itemsView": "notLoaded"}),
+                )
+                .await;
+            page["result"]["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|turn| json!([turn["id"], turn["status"], turn["completedAt"].is_null()]))
+                .collect()
+        }
+
+        fn pending_note(&self, thread: &str) -> String {
+            std::fs::read_to_string(crate::providers::claude::conversation_index::side_path(
+                &self.stub.claude_home,
+                thread,
+                "fork-note",
+            ))
+            .unwrap()
+        }
+
         async fn turn_ids(&self, thread: &str) -> Vec<String> {
             let page = self
                 .call(
@@ -369,6 +468,17 @@ mod tests {
             .map(|directory| std::fs::read_dir(directory).map_or(0, Iterator::count))
             .sum()
         }
+    }
+
+    fn forked_session(response: &Value) -> (String, String) {
+        let fork = response["result"]["thread"]["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{response}"))
+            .to_owned();
+        let session = crate::providers::claude::session_uuid_from_thread_id(&fork)
+            .unwrap()
+            .to_owned();
+        (fork, session)
     }
 
     fn with_session(records: &[Value], session: &str) -> Vec<Value> {
@@ -773,5 +883,171 @@ for line in sys.stdin:
             "{failed}"
         );
         assert_eq!(std::fs::read_dir(&project).unwrap().count(), sessions);
+    }
+
+    #[tokio::test]
+    async fn a_fork_through_an_item_keeps_its_turn_up_to_that_item_as_interrupted() {
+        let fixture = Fixture::new().await;
+        let records = fixture.write_mid_turn_source().await;
+        let source_before = std::fs::read(fixture.stub.history(SOURCE)).unwrap();
+
+        let response = fixture.fork_through("claude-turn-b", "msg_2#0").await;
+        let (fork, session) = forked_session(&response);
+
+        assert_eq!(
+            fixture.transcript(&session),
+            with_session(&[&records[..4], &records[7..]].concat(), &session)
+        );
+        assert_eq!(
+            fixture.item_ids(&fork).await,
+            ["p1", "r1", "msg_1#0", "p2", "r2", "msg_2#0"]
+        );
+        assert_eq!(
+            fixture.turns(&fork).await,
+            [
+                json!(["claude-turn-a", "completed", false]),
+                json!(["claude-turn-b", "interrupted", true]),
+            ]
+        );
+        assert_eq!(response["result"]["thread"]["forkedFromId"], SOURCE_THREAD);
+        let note = fixture.pending_note(&fork);
+        assert!(
+            note.contains("continues in the original conversation"),
+            "{note}"
+        );
+        assert_eq!(
+            std::fs::read(fixture.stub.history(SOURCE)).unwrap(),
+            source_before
+        );
+        assert_eq!(
+            fixture.turns(SOURCE_THREAD).await,
+            [
+                json!(["claude-turn-a", "completed", false]),
+                json!(["claude-turn-b", "completed", false]),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fork_through_the_final_item_of_a_finished_turn_is_that_turn_fork() {
+        let fixture = Fixture::new().await;
+        fixture.write_mid_turn_source().await;
+
+        let (turn_fork, turn_session) = forked_session(&fixture.fork(Some("claude-turn-a")).await);
+        let (item_fork, item_session) =
+            forked_session(&fixture.fork_through("claude-turn-a", "msg_1#0").await);
+
+        assert_eq!(
+            with_session(&fixture.transcript(&item_session), SOURCE),
+            with_session(&fixture.transcript(&turn_session), SOURCE)
+        );
+        assert_eq!(
+            fixture.item_ids(&item_fork).await,
+            fixture.item_ids(&turn_fork).await
+        );
+        assert_eq!(
+            fixture.turns(&item_fork).await,
+            [json!(["claude-turn-a", "completed", false])]
+        );
+        assert_eq!(
+            fixture.pending_note(&item_fork),
+            fixture.pending_note(&turn_fork)
+        );
+        assert!(!fixture.pending_note(&item_fork).contains("partway"));
+    }
+
+    #[tokio::test]
+    async fn a_fork_through_an_item_of_the_running_turn_leaves_that_turn_running() {
+        let fixture = Fixture::new().await;
+        let started = fixture
+            .call(
+                "turn/start",
+                json!({"threadId": SOURCE_THREAD, "input": [{"type": "text", "text": "Still running"}],
+                    "cwd": fixture.stub.cwd, "model": "opus"}),
+            )
+            .await;
+        let running = started["result"]["turn"]["id"].as_str().unwrap().to_owned();
+        fixture.stub.wait_for_log("received.jsonl", 1).await;
+        let mut records = fixture.source_records();
+        records.extend([
+            json!({"type":"user","uuid":"p3","cwd":fixture.stub.cwd,"sessionId":SOURCE,
+                "timestamp":"2026-09-28T10:02:00Z","message":{"role":"user","content":"Still running"}}),
+            json!({"type":"assistant","uuid":"c1","sessionId":SOURCE,"timestamp":"2026-09-28T10:02:02Z",
+                "message":{"id":"msg_4","role":"assistant","model":"claude-opus-5-5",
+                "content":[{"type":"text","text":"Starting the long build"}]}}),
+            json!({"type":"assistant","uuid":"c2","sessionId":SOURCE,"timestamp":"2026-09-28T10:02:03Z",
+                "message":{"id":"msg_4","role":"assistant","model":"claude-opus-5-5",
+                "content":[{"type":"tool_use","id":"toolu_live","name":"Bash","input":{"command":"sleep 600"}}]}}),
+        ]);
+        fixture.write_transcript(&records);
+        fixture
+            .index_items(
+                &running,
+                &[
+                    json!({"type":"userMessage","id":"p3","content":[]}),
+                    json!({"type":"agentMessage","id":"msg_4#0","text":""}),
+                ],
+                3_000,
+            )
+            .await;
+        let source_before = std::fs::read(fixture.stub.history(SOURCE)).unwrap();
+
+        let response = fixture.fork_through(&running, "msg_4#0").await;
+        let still_running = fixture.gateway.claude_active_turn_id(SOURCE_THREAD).await;
+        let source_turns = fixture.turns(SOURCE_THREAD).await;
+        fixture.agent.stop_all().await;
+
+        let (fork, session) = forked_session(&response);
+        assert_eq!(
+            fixture.transcript(&session),
+            with_session(&records[..7], &session)
+        );
+        assert_eq!(
+            fixture.item_ids(&fork).await,
+            [
+                "p1", "r1", "msg_1#0", "p2", "r2", "msg_2#0", "p3", "msg_4#0"
+            ]
+        );
+        assert_eq!(
+            fixture.turns(&fork).await,
+            [
+                json!(["claude-turn-a", "completed", false]),
+                json!(["claude-turn-b", "completed", false]),
+                json!([running, "interrupted", true]),
+            ]
+        );
+        assert!(fixture.pending_note(&fork).contains("partway"));
+        assert_eq!(still_running.as_deref(), Some(running.as_str()));
+        assert_eq!(source_turns[2], json!([running, "inProgress", true]));
+        assert_eq!(
+            std::fs::read(fixture.stub.history(SOURCE)).unwrap(),
+            source_before
+        );
+    }
+
+    #[tokio::test]
+    async fn an_item_fork_that_cannot_be_cut_creates_nothing() {
+        let fixture = Fixture::new().await;
+        fixture.write_mid_turn_source().await;
+        let files = fixture.state_files();
+
+        let without_turn = fixture
+            .call(
+                "thread/fork",
+                json!({"threadId": SOURCE_THREAD, "lastItemId": "msg_2#0"}),
+            )
+            .await;
+        let unknown = fixture.fork_through("claude-turn-b", "msg_9#0").await;
+        let other_turn = fixture.fork_through("claude-turn-a", "msg_2#0").await;
+        let synthetic = fixture.fork_through("claude-turn-b", "r2").await;
+
+        for refused in [without_turn, unknown, other_turn, synthetic] {
+            assert_eq!(
+                refused["error"]["code"],
+                RpcCode::InvalidParams.value(),
+                "{refused}"
+            );
+        }
+        assert_eq!(fixture.state_files(), files);
     }
 }

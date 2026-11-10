@@ -62,6 +62,18 @@ pub(crate) enum TurnRecovery {
     Unresolved,
 }
 
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct ForkHistory {
+    pub turns: HashSet<String>,
+    pub cut: Option<CutTurn>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct CutTurn {
+    pub id: String,
+    pub items: HashSet<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 enum Record {
@@ -433,24 +445,45 @@ fn check_minted(data: &[u8], thread_id: &str, file: &Path) -> Result<SessionOrig
     Ok(record.origin)
 }
 
-fn fork(home: &Path, source_id: &str, target_id: &str, turns: &HashSet<String>) -> Result<()> {
-    let Some(source) = read_no_follow(&path(home, source_id))? else {
-        return Ok(());
-    };
+fn fork(home: &Path, source_id: &str, target_id: &str, history: &ForkHistory) -> Result<()> {
+    let source = read_no_follow(&path(home, source_id))?.unwrap_or_default();
     let mut kept = Vec::new();
+    let mut cut_started_at_ms = None;
     for line in source.split_inclusive(|byte| *byte == b'\n') {
         if line.last() != Some(&b'\n') {
             break;
         }
         let record: Record =
             serde_json::from_slice(line).context("invalid Claude identity record")?;
-        let turn = match &record {
-            Record::Item(item) => &item.turn_id,
-            Record::Turn(turn) => &turn.id,
+        let keeps = match &record {
+            Record::Item(item) => {
+                history.turns.contains(&item.turn_id)
+                    || history
+                        .cut
+                        .as_ref()
+                        .is_some_and(|cut| cut.id == item.turn_id && cut.items.contains(&item.id))
+            }
+            Record::Turn(turn) => {
+                if history.cut.as_ref().is_some_and(|cut| cut.id == turn.id) {
+                    cut_started_at_ms = Some(turn.started_at_ms);
+                }
+                history.turns.contains(&turn.id)
+            }
         };
-        if turns.contains(turn) {
+        if keeps {
             kept.extend_from_slice(line);
         }
+    }
+    if let Some(cut) = &history.cut {
+        kept.extend(serde_json::to_vec(&Record::Turn(TurnIdentity {
+            id: cut.id.clone(),
+            started_at_ms: cut_started_at_ms.unwrap_or_default(),
+            completed_at_ms: None,
+            status: "interrupted".to_string(),
+            error: None,
+            recovery: None,
+        }))?);
+        kept.push(b'\n');
     }
     if kept.is_empty() {
         return Ok(());
@@ -764,7 +797,7 @@ impl Store {
         &self,
         source_id: &str,
         target_id: &str,
-        turns: HashSet<String>,
+        history: ForkHistory,
     ) -> Result<()> {
         ensure!(
             source_id != target_id,
@@ -778,7 +811,7 @@ impl Store {
             target_id.to_owned(),
         );
         under_guards((source, target), move |(_, cached)| {
-            let forked = fork(&home, &source_id, &target_id, &turns);
+            let forked = fork(&home, &source_id, &target_id, &history);
             **cached = None;
             forked
         })

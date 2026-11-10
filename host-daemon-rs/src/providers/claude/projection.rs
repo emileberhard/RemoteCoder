@@ -2,7 +2,7 @@ mod cache;
 pub(crate) use cache::{CacheOutcome, ProjectionCache};
 
 use crate::providers::claude::capacity::{CapacityExceeded, MAX_PROVIDER_ID_BYTES, validate_id};
-use crate::providers::claude::conversation_index::Index;
+use crate::providers::claude::conversation_index::{CutTurn, ForkHistory, Index};
 use crate::providers::claude::records::{
     LineKind, MAX_SESSION_RECORD_BYTES, SYNTHETIC_MODEL, read_bounded_line,
 };
@@ -120,6 +120,7 @@ enum Source {
     Text {
         record: Span,
         block: usize,
+        result: Option<Span>,
     },
     Tool {
         record: Span,
@@ -137,7 +138,7 @@ impl Source {
     fn spans(&self) -> impl Iterator<Item = Span> {
         let (record, result) = match self {
             Source::Prompt(span) | Source::Queued(span) => (Some(*span), None),
-            Source::Text { record, .. } => (Some(*record), None),
+            Source::Text { record, result, .. } => (Some(*record), *result),
             Source::Tool { record, result, .. } => {
                 (Some(*record), result.as_ref().map(|result| result.record))
             }
@@ -193,9 +194,16 @@ pub(crate) struct Projection {
 }
 
 #[derive(Debug)]
+pub(crate) enum ForkBoundary {
+    LastFinishedTurn,
+    Turn(String),
+    Item { turn: String, item: String },
+}
+
+#[derive(Debug, PartialEq)]
 pub(crate) struct ForkPoint {
     pub length: u64,
-    pub turns: HashSet<String>,
+    pub history: ForkHistory,
 }
 
 struct Row {
@@ -369,6 +377,7 @@ impl Scan {
                                 Source::Text {
                                     record: span,
                                     block,
+                                    result: None,
                                 },
                                 timestamp_ms,
                             );
@@ -384,6 +393,7 @@ impl Scan {
                                 Source::Text {
                                     record: span,
                                     block,
+                                    result: None,
                                 },
                                 timestamp_ms,
                             );
@@ -464,7 +474,7 @@ impl Projection {
             .saturating_add(usage)
     }
 
-    pub(crate) fn fork_point(&self, through_turn: Option<&str>) -> Result<ForkPoint, HistoryError> {
+    pub(crate) fn fork_point(&self, boundary: &ForkBoundary) -> Result<ForkPoint, HistoryError> {
         let running = self
             .turns
             .iter()
@@ -475,63 +485,140 @@ impl Projection {
                 self.turns[position].id
             ))
         };
-        let last = match through_turn {
-            Some(turn_id) => {
-                let position = *self.turn_positions.get(turn_id).ok_or_else(|| {
-                    HistoryError::InvalidRequest(format!(
-                        "turn {turn_id} is not in this Claude conversation"
-                    ))
-                })?;
+        match boundary {
+            ForkBoundary::LastFinishedTurn => {
+                let last = running
+                    .unwrap_or(self.turns.len())
+                    .checked_sub(1)
+                    .ok_or_else(|| {
+                        HistoryError::InvalidRequest(
+                            "This Claude conversation has no finished turn to fork".to_string(),
+                        )
+                    })?;
+                self.through_turn(last)
+            }
+            ForkBoundary::Turn(turn_id) => {
+                let position = self.turn_position(turn_id)?;
                 if let Some(running) = running.filter(|running| *running <= position) {
                     return Err(unfinished(running));
                 }
-                position
+                self.through_turn(position)
             }
-            None => running
-                .unwrap_or(self.turns.len())
-                .checked_sub(1)
-                .ok_or_else(|| {
-                    HistoryError::InvalidRequest(
-                        "This Claude conversation has no finished turn to fork".to_string(),
-                    )
-                })?,
-        };
-        let (kept, later) = self.items.split_at(self.turns[last].items.end);
+            ForkBoundary::Item { turn, item } => {
+                let position = self.turn_position(turn)?;
+                if let Some(running) = running.filter(|running| *running < position) {
+                    return Err(unfinished(running));
+                }
+                let item_position = self
+                    .item_positions
+                    .get(item.as_str())
+                    .copied()
+                    .filter(|item_position| self.items[*item_position].turn == position)
+                    .ok_or_else(|| {
+                        HistoryError::InvalidRequest(format!(
+                            "item {item} is not in the transcript of Claude turn {turn}"
+                        ))
+                    })?;
+                if running != Some(position) && item_position + 1 == self.turns[position].items.end
+                {
+                    return self.through_turn(position);
+                }
+                self.through_item(position, item_position)
+            }
+        }
+    }
+
+    fn turn_position(&self, turn_id: &str) -> Result<usize, HistoryError> {
+        self.turn_positions.get(turn_id).copied().ok_or_else(|| {
+            HistoryError::InvalidRequest(format!(
+                "turn {turn_id} is not in this Claude conversation"
+            ))
+        })
+    }
+
+    fn through_turn(&self, last: usize) -> Result<ForkPoint, HistoryError> {
+        let turn = &self.turns[last];
         let length = if last + 1 == self.turns.len() {
             self.length
         } else {
-            let kept_end = kept
-                .iter()
-                .flat_map(|item| item.source.spans())
-                .map(|span| span.offset + span.len as u64)
-                .max()
-                .unwrap_or(0);
-            let later_start = later
-                .iter()
-                .flat_map(|item| item.source.spans())
-                .map(|span| span.offset)
-                .min();
-            if later_start.is_some_and(|later_start| kept_end > later_start) {
-                return Err(HistoryError::InvalidRequest(format!(
+            self.prefix_end(turn.items.end).ok_or_else(|| {
+                HistoryError::InvalidRequest(format!(
                     "Claude turn {} ends after a later turn begins; fork from another turn",
-                    self.turns[last].id
-                )));
-            }
-            kept_end
+                    turn.id
+                ))
+            })?
         };
         if length == 0 {
             return Err(HistoryError::InvalidRequest(format!(
                 "Claude turn {} has no conversation records to fork",
-                self.turns[last].id
+                turn.id
             )));
         }
         Ok(ForkPoint {
             length,
-            turns: self.turns[..=last]
-                .iter()
-                .map(|turn| turn.id.clone())
-                .collect(),
+            history: ForkHistory {
+                turns: self.turns[..=last]
+                    .iter()
+                    .map(|turn| turn.id.clone())
+                    .collect(),
+                cut: None,
+            },
         })
+    }
+
+    fn through_item(&self, turn: usize, item: usize) -> Result<ForkPoint, HistoryError> {
+        let chosen = &self.items[item];
+        let written = match &chosen.source {
+            Source::Synthetic(_) => false,
+            Source::Tool { result, .. } => result.is_some(),
+            _ => true,
+        };
+        if !written {
+            return Err(HistoryError::InvalidRequest(format!(
+                "Claude item {} is not complete in the transcript; fork from another message",
+                chosen.id
+            )));
+        }
+        let length = self.prefix_end(item + 1).ok_or_else(|| {
+            HistoryError::InvalidRequest(format!(
+                "Claude item {} ends after a later item begins; fork from another message",
+                chosen.id
+            ))
+        })?;
+        Ok(ForkPoint {
+            length,
+            history: ForkHistory {
+                turns: self.turns[..turn]
+                    .iter()
+                    .map(|turn| turn.id.clone())
+                    .collect(),
+                cut: Some(CutTurn {
+                    id: self.turns[turn].id.clone(),
+                    items: self.items[self.turns[turn].items.start..=item]
+                        .iter()
+                        .map(|item| item.id.clone())
+                        .collect(),
+                }),
+            },
+        })
+    }
+
+    fn prefix_end(&self, kept: usize) -> Option<u64> {
+        let (kept, later) = self.items.split_at(kept);
+        let kept_end = kept
+            .iter()
+            .flat_map(|item| item.source.spans())
+            .map(|span| span.offset + span.len as u64)
+            .max()
+            .unwrap_or(0);
+        let later_start = later
+            .iter()
+            .flat_map(|item| item.source.spans())
+            .map(|span| span.offset)
+            .min();
+        later_start
+            .is_none_or(|later_start| kept_end <= later_start)
+            .then_some(kept_end)
     }
 
     pub(crate) fn token_usage_replay(
@@ -823,7 +910,7 @@ impl Projection {
                 }
                 user_message_item(&item.id, &text, record.pointer("/attachment/prompt"))
             }
-            Source::Text { record, block } => {
+            Source::Text { record, block, .. } => {
                 let block = records
                     .read(*record)?
                     .pointer(&format!("/message/content/{block}"))
@@ -980,9 +1067,18 @@ fn scan(file: &File, length: u64) -> Result<Scan> {
 fn project(mut scan: Scan, index: &Index, active_turn: Option<&str>) -> Projection {
     for draft in &mut scan.drafts {
         for row in &mut draft.rows {
-            if let Source::Tool { result, .. } = &mut row.source {
-                *result = scan.tool_results.remove(&row.id);
-                row.completed_at_ms = result.as_ref().and_then(|result| result.completed_at_ms);
+            match &mut row.source {
+                Source::Tool { result, .. } => {
+                    *result = scan.tool_results.remove(&row.id);
+                    row.completed_at_ms = result.as_ref().and_then(|result| result.completed_at_ms);
+                }
+                Source::Text { result, .. } => {
+                    *result = scan
+                        .tool_results
+                        .remove(&row.id)
+                        .map(|result| result.record);
+                }
+                _ => {}
             }
         }
     }

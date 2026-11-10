@@ -190,6 +190,8 @@ pub(crate) struct HostInfoResponse {
     pub fleet_live_activity: bool,
     #[serde(default)]
     pub claude_queue: bool,
+    #[serde(default)]
+    pub claude_item_fork: bool,
 }
 
 #[derive(Debug, Deserialize)]
