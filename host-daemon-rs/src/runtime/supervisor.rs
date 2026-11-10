@@ -52,7 +52,7 @@ pub(super) async fn run(sources: &ConfigSources) -> Result<()> {
         push,
         ClaudeSettings::disabled(&paths),
         journal.clone(),
-        paths.state_directory(),
+        crate::gateway::GatewayState::host(&paths),
         None,
         router_config
             .map(|config| ExternalAuth::new(codex_router, config.codex_account().to_owned())),

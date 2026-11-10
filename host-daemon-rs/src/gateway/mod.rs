@@ -240,6 +240,31 @@ pub(crate) struct DaemonReady {
     pub started_at_unix_seconds: f64,
 }
 
+pub(crate) struct GatewayState {
+    directory: PathBuf,
+    catalog: sessions::CatalogConfig,
+}
+
+impl GatewayState {
+    pub(crate) fn host(paths: &crate::config::HostPaths) -> Self {
+        Self {
+            directory: paths.state_directory(),
+            catalog: sessions::CatalogConfig {
+                home: paths.home().to_owned(),
+                capacity: crate::sessions::storage::Capacity::Host,
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(directory: PathBuf) -> Self {
+        Self {
+            catalog: sessions::CatalogConfig::fixture(directory.join("fixture-home")),
+            directory,
+        }
+    }
+}
+
 struct GatewayConstruction {
     codex: Arc<CodexAppServer>,
     user_name: Option<String>,
@@ -247,6 +272,7 @@ struct GatewayConstruction {
     journal: Journal,
     turn_state_path: Option<PathBuf>,
     recovery_path: Option<PathBuf>,
+    session_catalog: sessions::CatalogConfig,
     call_delivery: Option<calls::CallDeliveryConfig>,
     external_auth: Option<external_auth::ExternalAuth>,
     external_providers: Option<Arc<ExternalProviders>>,
@@ -326,6 +352,7 @@ pub(crate) struct Gateway {
     preferences: Option<crate::user_preferences::UserPreferencesStore>,
     projects: Arc<crate::conversation_projects::ProjectResolver>,
     changes: crate::changes::ChangeReader,
+    session_catalog: sessions::CatalogConfig,
     session_runtime: tokio::sync::OnceCell<Arc<sessions::Runtime>>,
     request_budgets: Arc<transport::RequestBudgets>,
     review: conversation_review::Runtime,
@@ -366,6 +393,9 @@ impl Gateway {
             GatewayConstruction {
                 codex,
                 user_name: None,
+                session_catalog: sessions::CatalogConfig::fixture(
+                    claude_settings.claude_home.join("fixture-home"),
+                ),
                 claude_settings,
                 journal,
                 turn_state_path,
@@ -391,7 +421,7 @@ impl Gateway {
         apns: Arc<PushService>,
         claude_settings: ClaudeSettings,
         journal: Journal,
-        state_directory: PathBuf,
+        state: GatewayState,
         call_delivery: Option<calls::CallDeliveryConfig>,
         external_auth: Option<ExternalAuth>,
         external_providers: Option<Arc<ExternalProviders>>,
@@ -404,8 +434,9 @@ impl Gateway {
                 user_name,
                 claude_settings,
                 journal,
-                turn_state_path: Some(state_directory.join("active-codex-turns.json")),
-                recovery_path: Some(state_directory.join("codex-restart-recovery.json")),
+                turn_state_path: Some(state.directory.join("active-codex-turns.json")),
+                recovery_path: Some(state.directory.join("codex-restart-recovery.json")),
+                session_catalog: state.catalog,
                 call_delivery,
                 external_auth,
                 external_providers,
@@ -426,6 +457,7 @@ impl Gateway {
             journal,
             turn_state_path,
             recovery_path,
+            session_catalog,
             call_delivery,
             external_auth,
             external_providers,
@@ -575,6 +607,7 @@ impl Gateway {
             preferences,
             projects,
             changes: Default::default(),
+            session_catalog,
             session_runtime: tokio::sync::OnceCell::new(),
             request_budgets,
             device_tools,

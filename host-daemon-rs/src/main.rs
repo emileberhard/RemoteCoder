@@ -419,7 +419,7 @@ async fn run(
         apns,
         settings.claude.clone(),
         journal.clone(),
-        settings.host_paths.state_directory(),
+        gateway::GatewayState::host(&settings.host_paths),
         if recovery_only {
             None
         } else {

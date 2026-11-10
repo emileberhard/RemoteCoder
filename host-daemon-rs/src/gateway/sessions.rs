@@ -15,6 +15,23 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
 
+pub(super) struct CatalogConfig {
+    pub(super) home: std::path::PathBuf,
+    pub(super) capacity: crate::sessions::storage::Capacity,
+}
+
+#[cfg(test)]
+impl CatalogConfig {
+    pub(super) fn fixture(home: std::path::PathBuf) -> Self {
+        Self {
+            home,
+            capacity: crate::sessions::storage::Capacity::Fixed {
+                free_bytes: 1 << 40,
+            },
+        }
+    }
+}
+
 struct CatalogRead {
     control: Arc<ReadControl>,
     _cancel: CancelRead,
@@ -99,26 +116,16 @@ impl Gateway {
                         local_home: claude,
                     },
                 ];
-                #[cfg(not(test))]
-                let home = crate::config::HostPaths::from_env()?.home().to_owned();
-                #[cfg(test)]
-                let home = root.join("fixture-home");
+                let home = &self.session_catalog.home;
                 let skills = vec![
                     home.join(".agents/skills"),
                     origins[1].local_home.join("skills"),
                 ];
                 let cap_status =
                     home.join(".local/state/disk-cap-status/remotecoder-sessions.json");
+                let capacity = self.session_catalog.capacity;
                 tokio::task::spawn_blocking(move || -> Result<Arc<Runtime>> {
-                    #[cfg(not(test))]
-                    let store = Store::open(root.join("catalog.sqlite3"))?;
-                    #[cfg(test)]
-                    let store = Store::open_with_capacity(
-                        root.join("catalog.sqlite3"),
-                        crate::sessions::storage::Capacity::Fixed {
-                            free_bytes: 1 << 40,
-                        },
-                    )?;
+                    let store = Store::open(root.join("catalog.sqlite3"), capacity)?;
                     mirror::mark_initial_rebuild(&store)?;
                     let worker = Arc::new(Worker::start(
                         store.clone(),
@@ -572,7 +579,7 @@ mod tests {
             )
             .unwrap();
         }
-        let store = Store::open_with_capacity(
+        let store = Store::open(
             directory.path().join("sessions/catalog.sqlite3"),
             crate::sessions::storage::Capacity::Fixed {
                 free_bytes: 1 << 40,

@@ -18,14 +18,7 @@ pub(crate) struct Store {
 }
 
 impl Store {
-    pub fn open(path: PathBuf) -> Result<Self> {
-        Self::open_with_capacity(path, super::storage::Capacity::Host)
-    }
-
-    pub(crate) fn open_with_capacity(
-        path: PathBuf,
-        capacity: super::storage::Capacity,
-    ) -> Result<Self> {
+    pub(crate) fn open(path: PathBuf, capacity: super::storage::Capacity) -> Result<Self> {
         let parent = path
             .parent()
             .context("Session database needs a parent directory")?;

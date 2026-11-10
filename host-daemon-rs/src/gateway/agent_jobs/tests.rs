@@ -480,7 +480,7 @@ async fn job_owner_rejects_invalid_external_claude_starts_and_continuations_befo
         )),
         stub.settings.clone(),
         Journal::disabled(),
-        stub.state.clone(),
+        crate::gateway::GatewayState::fixture(stub.state.clone()),
         None,
         None,
         external_providers,

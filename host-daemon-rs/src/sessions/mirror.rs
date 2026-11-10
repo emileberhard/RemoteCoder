@@ -713,19 +713,12 @@ async fn sync_owned(
             changes: (!full).then(|| changed.into_iter().collect()),
             metadata: metadata.into_values().collect(),
         };
-        if let Some(worker) = store.worker.get() {
-            worker.project_mirror(projection).await?
-        } else {
-            #[cfg(not(test))]
-            anyhow::bail!("unavailable: session projection worker is not running");
-            #[cfg(test)]
-            projection.apply(
-                store,
-                &std::sync::atomic::AtomicBool::new(false),
-                &|| false,
-                &mut |_| Ok(()),
-            )?
-        }
+        store
+            .worker
+            .get()
+            .context("unavailable: session projection worker is not running")?
+            .project_mirror(projection)
+            .await?
     } else {
         saved.as_ref().is_some_and(|(_, _, projected)| *projected)
     };

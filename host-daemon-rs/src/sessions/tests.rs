@@ -32,7 +32,7 @@ fn codex_meta(id: &str, parent: Option<&str>) -> Value {
 }
 
 fn fixture_store(path: PathBuf) -> Result<Store> {
-    Store::open_with_capacity(
+    Store::open(
         path,
         super::storage::Capacity::Fixed {
             free_bytes: 1 << 40,
@@ -628,6 +628,7 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
     scan(&f);
     let destination = tempfile::tempdir().unwrap();
     let target = fixture_store(destination.path().join("state/catalog.sqlite3")).unwrap();
+    let _worker = start_worker(&target, &[]);
     let peer = f.store.clone();
     let origins = f.origins.clone();
     let call: mirror::Call = Arc::new(move |method: &'static str, params: Value| {
@@ -817,7 +818,10 @@ async fn sessions_cluster_search_keeps_unclassified_failures_unavailable() {
 fn sessions_measure_corpus() -> Result<()> {
     let manifest = std::env::var("RC_SESSIONS_MEASURE_ORIGINS")?;
     let origins: Vec<Origin> = serde_json::from_slice(&std::fs::read(manifest)?)?;
-    let store = Store::open(PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_DB")?))?;
+    let store = Store::open(
+        PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_DB")?),
+        super::storage::Capacity::Host,
+    )?;
     if let Ok(mode) = std::env::var("RC_SESSIONS_MEASURE_IDLE") {
         return super::idle_measurement::run(&store, &origins, &mode);
     }
@@ -936,7 +940,10 @@ fn sessions_audit_rejected_sources() -> Result<()> {
     let origins: Vec<Origin> = serde_json::from_slice(&std::fs::read(std::env::var(
         "RC_SESSIONS_MEASURE_ORIGINS",
     )?)?)?;
-    let store = Store::open(PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_DB")?))?;
+    let store = Store::open(
+        PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_DB")?),
+        super::storage::Capacity::Host,
+    )?;
     let mut db = store.writer()?;
     let mut errors = std::collections::BTreeMap::<String, usize>::new();
     for origin in origins.iter().filter(|o| o.provider == "claude") {
@@ -1154,7 +1161,10 @@ fn sessions_accounting_recovers_dirty_writes_without_request_walks() {
 #[test]
 #[ignore]
 fn sessions_measure_populated_mirror() -> Result<()> {
-    let store = Store::open(PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_DB")?))?;
+    let store = Store::open(
+        PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_DB")?),
+        super::storage::Capacity::Host,
+    )?;
     let mut times = Vec::new();
     for _ in 0..10 {
         for term in [
@@ -2320,6 +2330,7 @@ async fn sessions_mirror_idle_uses_only_feed_and_defers_full_tree_reconciliation
     scan(&f);
     let directory = tempfile::tempdir()?;
     let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
+    let _worker = start_worker(&target, &[]);
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let call = mirror_peer(&f, calls.clone(), Arc::new(AtomicBool::new(false)));
     assert_eq!(sync_mirror(&target, call.clone()).await?["full"], true);
@@ -2370,6 +2381,7 @@ async fn sessions_mirror_skips_failed_transfers_until_full_reconciliation_and_pr
     scan(&f);
     let directory = tempfile::tempdir()?;
     let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
+    let _worker = start_worker(&target, &[]);
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let fail = Arc::new(AtomicBool::new(false));
     let call = mirror_peer(&f, calls.clone(), fail.clone());
@@ -2442,6 +2454,7 @@ async fn sessions_mirror_replays_changes_that_race_the_initial_listing() -> Resu
     scan(&f);
     let directory = tempfile::tempdir()?;
     let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
+    let _worker = start_worker(&target, &[]);
     let peer = f.store.clone();
     let origins = f.origins.clone();
     let new = f.codex.with_file_name("racing.jsonl");
@@ -2511,6 +2524,7 @@ async fn sessions_mirror_skips_outside_entries_without_reclaiming() -> Result<()
     scan(&f);
     let directory = tempfile::tempdir()?;
     let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
+    let _worker = start_worker(&target, &[]);
     let peer = mirror_peer(&f, Arc::default(), Arc::new(AtomicBool::new(false)));
     sync_mirror(&target, peer.clone()).await?;
     let orphan = target
@@ -2559,6 +2573,7 @@ async fn sessions_mirror_appends_verified_growth_and_replaces_a_changed_prefix()
     scan(&f);
     let directory = tempfile::tempdir()?;
     let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
+    let _worker = start_worker(&target, &[]);
     let peer = mirror_peer(&f, Arc::default(), Arc::new(AtomicBool::new(false)));
     sync_mirror(&target, peer.clone()).await?;
     let path: String = target.reader()?.query_row(
@@ -3082,7 +3097,7 @@ fn sessions_rebuild_search_corpus() -> Result<()> {
         path.starts_with(root),
         "measurement database must be beside the manifest"
     );
-    let store = Store::open(path)?;
+    let store = Store::open(path, super::storage::Capacity::Host)?;
     let started = Instant::now();
     let outcome = ingest::scan(&store, &origins, &AtomicBool::new(false))?;
     {

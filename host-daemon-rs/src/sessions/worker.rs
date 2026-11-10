@@ -598,7 +598,7 @@ mod tests {
             .unwrap()
             .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000))
             .unwrap();
-        let store = Store::open_with_capacity(
+        let store = Store::open(
             directory.path().join("state/catalog.sqlite3"),
             super::super::storage::Capacity::Fixed {
                 free_bytes: 1 << 40,
