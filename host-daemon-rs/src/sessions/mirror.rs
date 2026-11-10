@@ -394,8 +394,6 @@ impl Projection {
         let tx = db.transaction()?;
         super::metadata::apply(&tx, &self.host, &self.metadata)?;
         tx.commit()?;
-        between(&mut db)?;
-        super::index::drain(&mut db, stop, between)?;
         Ok(outcome["parseFailures"] == 0 && !partial)
     }
 }

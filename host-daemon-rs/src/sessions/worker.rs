@@ -452,7 +452,7 @@ impl Worker {
                                     endpoint.serve(db, &origins);
                                     hot.observe(db, &origins)?;
                                 }
-                                parent_projection.refresh(db, &origins, &endpoint)
+                                Ok(())
                             },
                         )?;
                         {
@@ -471,17 +471,26 @@ impl Worker {
                         Ok(outcome)
                     })();
                     if let Some(MirrorRequest { projection, reply }) = mirror {
-                        let result = projection.apply(
-                            &store,
-                            &flag,
-                            &|| endpoint.inventory_waiting(),
-                            &mut |db| {
-                                if endpoint.requested() {
-                                    endpoint.serve(db, &origins);
-                                }
-                                parent_projection.refresh(db, &origins, &endpoint)
-                            },
-                        );
+                        let result = (|| {
+                            let projected = projection.apply(
+                                &store,
+                                &flag,
+                                &|| endpoint.inventory_waiting(),
+                                &mut |db| {
+                                    if endpoint.requested() {
+                                        endpoint.serve(db, &origins);
+                                    }
+                                    Ok(())
+                                },
+                            )?;
+                            let mut db = store.writer()?;
+                            parent_projection.refresh(&db, &origins, &endpoint)?;
+                            super::index::drain(&mut db, &flag, &mut |db| {
+                                endpoint.serve(db, &origins);
+                                Ok(())
+                            })?;
+                            Ok(projected)
+                        })();
                         let _ = reply.send(result);
                     }
                     if full && let Err(error) = store.storage.publish_cap(&cap_status) {

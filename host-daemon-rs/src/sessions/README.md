@@ -217,7 +217,9 @@ candidate, with lookaheads setting `truncated`; it reads
 metadata for ranking and fetches snippets only for the best three hits. Hits
 prefer distinct-term coverage, user/assistant text, then recency. `hitCount`
 counts unique items inside these bounded windows. Candidate or hit-window
-lookahead sets `truncated`; limiting the final conversation list alone does not.
+lookahead sets `truncated`. The app can present completed results while indicating
+that additional conversations or hits may exist. Limiting the final list alone
+leaves `truncated` false.
 Two dedicated reader permits isolate typing from the 16 inventory/mirror readers.
 The one-second deadline includes FIFO, admission and execution. Completed
 snapshots survive timeout with `truncated: true`; no completed stage yields
@@ -237,7 +239,8 @@ document while catalog text remains literal for the existing search endpoint.
 
 The origin records Codex names from its native append-only session index and
 current delegated parents from `JobStore`'s authoritative parent tags. The ingest
-worker applies these facts outside request lifetimes. Searches never consult the
+worker applies these facts outside request lifetimes, on ownership changes and
+when a new transcript can resolve a previously missing identity. Searches never consult the
 job store. Optional `sessionMetadata` fields on mirror page envelopes carry the
 facts with transcript evidence. Entry shapes and mirror schemaVersion remain
 unchanged: older receivers ignore the envelope field and newer receivers accept
