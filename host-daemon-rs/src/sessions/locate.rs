@@ -39,28 +39,41 @@ pub(crate) struct Item {
 
 pub(crate) fn item(db: &Reader, request: &Request, control: &ReadControl) -> Result<Item> {
     ensure!(!control.stopped(), "locate interrupted");
-    let row=db.query_row("SELECT s.thread_id,s.provider,i.turn_id,i.kind,i.source_ref,src.local_path,i.text FROM item i JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE i.item_key=?1 AND src.present=1",[&request.item_key],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?))).optional()?;
+    let row=db.query_row("SELECT s.thread_id,s.provider,i.turn_id,i.kind,i.source_ref,src.local_path,CASE WHEN s.provider='codex' AND i.kind IN ('user','assistant') THEN i.text END FROM item i JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE i.item_key=?1 AND src.present=1",[&request.item_key],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?))).optional()?;
     let (thread_id, provider, turn_id, kind, reference, path, text) =
         row.context("not_found: catalog item is unavailable")?;
-    let unique_text = if provider == "codex" {
+    let unique_text = if text.is_some() {
         db.query_row("SELECT count(*)=1 FROM (SELECT 1 FROM item WHERE session_key=(SELECT session_key FROM item WHERE item_key=?1) AND turn_id IS ?2 AND text IS ?3 LIMIT 2)",rusqlite::params![request.item_key,turn_id,text],|r|r.get(0))?
     } else {
         false
     };
     let reference: SourceRef = serde_json::from_str(&reference)?;
-    let raw = super::query::item_bytes(
+    let length = if text.is_some() {
+        usize::try_from(reference.length)?
+    } else {
+        0
+    };
+    let raw = super::query::verified_item_bytes(
         File::open(path).context("source deleted")?,
         &reference,
         0,
-        usize::try_from(reference.length)?,
+        length,
+        || {
+            ensure!(!control.stopped(), "locate interrupted");
+            Ok(())
+        },
     )?;
-    let record: serde_json::Value = serde_json::from_slice(&raw)?;
+    let provider_item_id = if length > 0 {
+        let record: serde_json::Value = serde_json::from_slice(&raw)?;
+        record
+            .pointer("/payload/id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    } else {
+        None
+    };
     ensure!(!control.stopped(), "locate interrupted");
-    let provider_item_id = record
-        .pointer("/payload/id")
-        .and_then(serde_json::Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned);
     let part = request
         .item_key
         .rsplit_once(':')

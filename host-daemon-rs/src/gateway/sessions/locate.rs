@@ -90,11 +90,15 @@ impl Gateway {
                             },
                             |file| {
                                 if matches!(target, LocateTarget::Item { .. }) {
-                                    crate::sessions::query::item_bytes(
+                                    crate::sessions::query::verified_item_bytes(
                                         file.try_clone()?,
                                         &item.reference,
                                         0,
-                                        1,
+                                        0,
+                                        || {
+                                            ensure!(!reading.stopped(), "locate interrupted");
+                                            Ok(())
+                                        },
                                     )?;
                                 }
                                 Ok(())

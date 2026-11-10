@@ -390,10 +390,20 @@ fn range_bytes(file: &mut File, total: u64, offset: u64, length: usize) -> Resul
 }
 
 pub(crate) fn item_bytes(
+    file: File,
+    reference: &SourceRef,
+    offset: u64,
+    length: usize,
+) -> Result<Vec<u8>> {
+    verified_item_bytes(file, reference, offset, length, || Ok(()))
+}
+
+pub(crate) fn verified_item_bytes(
     mut file: File,
     reference: &SourceRef,
     offset: u64,
     length: usize,
+    check: impl Fn() -> Result<()>,
 ) -> Result<Vec<u8>> {
     ensure!(
         reference.length <= crate::providers::claude::records::MAX_SESSION_RECORD_BYTES,
@@ -404,15 +414,32 @@ pub(crate) fn item_bytes(
         "Read offset exceeds source length"
     );
     file.seek(SeekFrom::Start(reference.offset))?;
-    let mut record = Vec::new();
-    file.take(reference.length).read_to_end(&mut record)?;
+    let end = offset.saturating_add(length as u64).min(reference.length);
+    let mut selected = Vec::new();
+    let mut record = file.take(reference.length);
+    let mut bytes = [0; 64 << 10];
+    let mut hash = blake3::Hasher::new();
+    let mut read = 0;
+    loop {
+        check()?;
+        let count = record.read(&mut bytes)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&bytes[..count]);
+        let next = read + count as u64;
+        let start = offset.max(read);
+        let stop = end.min(next);
+        if start < stop {
+            selected.extend_from_slice(&bytes[(start - read) as usize..(stop - read) as usize]);
+        }
+        read = next;
+    }
     ensure!(
-        record.len() as u64 == reference.length
-            && blake3::hash(&record).to_hex().as_str() == reference.hash,
+        read == reference.length && hash.finalize().to_hex().as_str() == reference.hash,
         "source_changed: exact record no longer matches the projection"
     );
-    let start = usize::try_from(offset)?;
-    Ok(record[start..record.len().min(start + length)].to_vec())
+    Ok(selected)
 }
 
 fn dependency_bytes(
