@@ -72,3 +72,20 @@ class ProcessIdentityTests(unittest.TestCase):
             finally:
                 replacement.kill()
                 replacement.wait(timeout=60)
+
+
+class GroupMembershipTests(unittest.TestCase):
+    def test_member_forked_after_the_listing_keeps_the_group_live(self):
+        listings = iter(([101], [101, 102]))
+        with (
+            patch.object(groups, "_group_pids", side_effect=lambda _: next(listings)),
+            patch.object(groups, "_in_group", side_effect=lambda pid, _: pid == 102),
+        ):
+            self.assertTrue(groups.group_has_live_members(100))
+
+    def test_stable_listing_without_other_live_members_is_drained(self):
+        with (
+            patch.object(groups, "_group_pids", return_value=[100, 101]),
+            patch.object(groups, "_in_group", side_effect=lambda pid, _: pid == 100),
+        ):
+            self.assertFalse(groups.group_has_live_members(100, exclude_pid=100))

@@ -3,6 +3,7 @@ import errno
 import os
 import signal
 import subprocess
+import sys
 import time
 from functools import cache
 from contextlib import contextmanager
@@ -219,22 +220,31 @@ def _group_pids(group: int) -> list[int]:
         capacity *= 4
 
 
-def _live_member(pid: int, group: int) -> bool:
-    info = _ProcessInfo()
-    if _libproc().proc_pidinfo(pid, 18, 0, ctypes.byref(info), ctypes.sizeof(info)):
-        return info.bsd.pgid == group
-    error = ctypes.get_errno()
-    if error == errno.ESRCH:
+def _in_group(pid: int, group: int) -> bool:
+    try:
+        return os.getpgid(pid) == group
+    except ProcessLookupError:
         return False
-    if error == errno.EPERM:
-        return True
-    raise OSError(error, "Cannot read process group member", pid)
 
 
 def group_has_live_members(group: int, exclude_pid: int = 0) -> bool:
-    return any(
-        pid != exclude_pid and _live_member(pid, group) for pid in _group_pids(group)
-    )
+    if sys.platform != "darwin":
+        rows = subprocess.check_output(
+            ["ps", "-axo", "pid=,pgid=,stat="], text=True, start_new_session=True
+        )
+        return any(
+            int(parts[1]) == group
+            and int(parts[0]) != exclude_pid
+            and not parts[2].startswith("Z")
+            for line in rows.splitlines()
+            if len(parts := line.split()) == 3
+        )
+    not_live = {exclude_pid}
+    while unchecked := set(_group_pids(group)) - not_live:
+        if any(_in_group(pid, group) for pid in unchecked):
+            return True
+        not_live |= unchecked
+    return False
 
 
 def terminate_group(identity: dict, grace_seconds: float):
@@ -266,7 +276,7 @@ def terminate_group(identity: dict, grace_seconds: float):
                         f"Measurement anchor {identity['pid']} died during group cleanup"
                     )
                 return
-            if not members:
+            if not members and not group_has_live_members(identity["pgid"], identity["pid"]):
                 signal_process(identity, signal.SIGKILL)
                 while audit_alive(identity):
                     time.sleep(0.01)
