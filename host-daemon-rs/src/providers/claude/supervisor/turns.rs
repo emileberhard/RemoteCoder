@@ -49,7 +49,7 @@ impl ClaudeSupervisor {
             .await
     }
 
-    pub(crate) async fn start_voice_turn(
+    pub(crate) async fn start_turn_with_recorded_selection(
         self: &Arc<Self>,
         mut request: ClaudeTurnRequest,
     ) -> Result<String, TurnStartError> {

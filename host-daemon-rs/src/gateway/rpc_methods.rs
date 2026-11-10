@@ -1302,6 +1302,17 @@ impl Gateway {
     }
 
     async fn claude_turn_start(&self, params: &Value) -> RpcResult {
+        let keeps_recorded_selection = params.get("model").and_then(Value::as_str).is_none();
+        if keeps_recorded_selection
+            && ["effort", "serviceTier"]
+                .iter()
+                .any(|key| params.get(key).is_some())
+        {
+            return Err(RpcError::new(
+                RpcCode::InvalidParams,
+                "effort and serviceTier require model; a turn without model keeps the conversation's selection",
+            ));
+        }
         let model = self.claude_rpc_model(params)?;
         let thread_id = params
             .get("threadId")
@@ -1381,7 +1392,12 @@ impl Gateway {
             cwd,
         };
 
-        match agent.start_turn(request).await {
+        let started = if keeps_recorded_selection {
+            agent.start_turn_with_recorded_selection(request).await
+        } else {
+            agent.start_turn(request).await
+        };
+        match started {
             Ok(turn_id) => Ok(serde_json::json!({
                 "turn": {
                     "id": turn_id,

@@ -5785,6 +5785,116 @@ async fn disabled_claude_history_is_empty_but_read_failures_are_errors() {
 }
 
 #[tokio::test]
+async fn claude_turn_without_a_model_keeps_the_recorded_selection() {
+    let owner = Arc::new(crate::providers::claude::settings::ClaudeSettings::isolated_for_test());
+    let home = owner.settings.claude_home.clone();
+    let cwd = home.to_string_lossy().into_owned();
+    let session = "11111111-2222-4333-8444-555555555555";
+    let thread = format!("claude_{session}");
+    let history = crate::providers::claude::timeline::session_path_for_cwd(&home, &cwd, session);
+    std::fs::create_dir_all(history.parent().unwrap()).unwrap();
+    std::fs::write(
+        &history,
+        "{\"type\":\"user\",\"message\":\"existing history\"}\n",
+    )
+    .unwrap();
+    let stub = home.join("claude-stub");
+    crate::test_support::write_claude_cli_stub(
+        &stub,
+        crate::test_support::ClaudeCliMode::MessagesAcknowledgeInterrupt(history),
+    );
+    let settings = ClaudeSettings {
+        enabled: true,
+        claude_path: stub,
+        mcp_endpoint: "http://127.0.0.1:8787/mcp".to_owned(),
+        ..owner.settings.clone()
+    };
+    let codex = Arc::new(CodexAppServer::new(
+        PathBuf::from("/bin/true"),
+        HashMap::new(),
+    ));
+    let gateway = crate::test_support::TestGateway::with_settings(codex, settings.clone(), owner);
+    let (events, _events) = mpsc::channel(128);
+    let agent = crate::providers::claude::ClaudeSupervisor::new(
+        settings,
+        events,
+        crate::observability::journal::Journal::disabled(),
+        crate::agents::mcp::McpTokens::default(),
+    );
+    gateway.set_claude_agent(Arc::clone(&agent));
+    agent
+        .record_initial_selection(
+            &thread,
+            &cwd,
+            &crate::providers::claude::ClaudeSelection {
+                model: "opus".to_owned(),
+                effort: Some("low".to_owned()),
+                fast: true,
+            },
+        )
+        .await
+        .unwrap();
+    let (tx, mut out_rx) = mpsc::channel(2);
+    let out_tx = test_client(1, tx);
+    let mut replies = Vec::new();
+    for selection in [json!({}), json!({"effort": "high"})] {
+        let mut params = json!({
+            "threadId": thread,
+            "cwd": cwd,
+            "input": [{"type": "text", "text": "next"}],
+        });
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(selection.as_object().unwrap().clone());
+        gateway
+            .handle_claude_rpc(
+                &out_tx,
+                ClaudeMethod::TurnStart,
+                &request("turn/start", params),
+            )
+            .await
+            .unwrap();
+        let ClientCommand::Text(text) = out_rx.recv().await.unwrap() else {
+            panic!("expected JSON response")
+        };
+        replies.push(serde_json::from_str::<Value>(&text).unwrap());
+    }
+    let launches = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let launches: Vec<Value> = std::fs::read_to_string(home.join("launches.jsonl"))
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect();
+            if !launches.is_empty() {
+                return launches;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    agent.stop_all().await;
+    assert_eq!(
+        replies[0]["result"]["turn"]["status"], "inProgress",
+        "{replies:#?}"
+    );
+    assert_eq!(replies[1]["error"]["code"], RpcCode::InvalidParams.value());
+    let launches = launches.unwrap();
+    assert_eq!(launches.len(), 1);
+    let args = launches[0]["argv"].as_array().unwrap();
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == [json!("--model"), json!("opus")])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == [json!("--effort"), json!("low")])
+    );
+    assert_eq!(launches[0]["fastMode"], true);
+}
+
+#[tokio::test]
 async fn claude_list_cursor_pages_beyond_five_hundred_and_finds_older_titles() {
     use std::io::Write;
     let owner = Arc::new(crate::providers::claude::settings::ClaudeSettings::isolated_for_test());

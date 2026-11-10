@@ -1912,9 +1912,11 @@ Claude. The `RC_CLAUDE_*` settings are in
   - It uses the latest request's active context rather than summing a tool
     loop's repeated requests.
 - **Model, effort and Fast are mutable conversation settings.**
-  - Every `turn/start` carries `model`. A `fast` service tier turns Claude Code's
+  - A `turn/start` with `model` carries the whole selection. A `fast` service tier turns Claude Code's
     Fast mode on, `null` turns it off, and an absent tier keeps the parent
-    record's choice only for the same model. The launch `--settings` file carries `fastMode`.
+    record's choice only for the same model. A `turn/start` without `model` keeps the
+    conversation's recorded model, effort and Fast through `recorded_selection`, and is
+    rejected when it carries `effort` or `serviceTier`. The launch `--settings` file carries `fastMode`.
     `conversation/settings/update` changes a warm runtime through correlated
     `apply_flag_settings` and `get_settings` controls; Fast reads back from
     `effective.fastMode`. On Codex the gateway itself resumes a `notLoaded` thread first,
@@ -1932,7 +1934,8 @@ Claude. The `RC_CLAUDE_*` settings are in
   - Voice toggles never retire the agent process. A cwd change needs a new
     runtime, and an idle runtime may be replaced after a failed settings
     control. Unknown readback stays unknown and can be retried.
-  - The gateway's default model covers an omitted model. The authoritative record
+  - The gateway's default model covers a `thread/start` without a model and a
+    conversation with no recorded selection. The authoritative record
     of what ran is the stream's `result.modelUsage`, not the requested id.
     Internal `/model` echoes never open turns.
 
