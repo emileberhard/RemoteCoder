@@ -487,7 +487,7 @@ impl Gateway {
                             warn!(client_id, %error, "gateway query failed");
                         },
                         QueryEvent::Expired(info) => {
-                            let duration = queries::query_deadline(&info.method);
+                            let duration = info.limit;
                             self.journal.transport("query_timed_out", serde_json::json!({
                                 "clientId": client_id, "method": info.method, "threadId": info.thread,
                                 "queueDepth": queries.queue_depth(), "limitMs": duration.as_millis(),

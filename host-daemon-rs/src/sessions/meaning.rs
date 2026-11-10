@@ -16,6 +16,7 @@ use tokio::{
 pub(crate) const ENV_KEY: &str = "RC_CODEX_GATEWAY_CONVERSATION_SEARCH_PROVIDER_FILE";
 pub(crate) const DEADLINE: Duration = Duration::from_secs(8);
 const OUTPUT_BYTES: u64 = 1 << 20;
+const STDERR_BYTES: usize = 4 << 10;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -92,13 +93,12 @@ impl Provider {
     }
 
     pub(crate) async fn search(&self, request: &Request) -> Result<Vec<Hit>> {
-        request.validate()?;
         let _permit = self.permits.clone().acquire_owned().await?;
         let mut child = tokio::process::Command::new(&self.command.command)
             .args(&self.command.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .process_group(0)
             .kill_on_drop(true)
             .spawn()
@@ -118,6 +118,10 @@ impl Provider {
             .take()
             .context("search provider stdout is unavailable")?
             .take(OUTPUT_BYTES + 1);
+        let stderr = child
+            .stderr
+            .take()
+            .context("search provider stderr is unavailable")?;
         let mut bytes = Vec::new();
         let input = serde_json::to_vec(request)?;
         let write = async move {
@@ -133,16 +137,48 @@ impl Provider {
             );
             Ok::<_, anyhow::Error>(())
         };
-        let ((), (), status) = tokio::try_join!(
+        let ((), (), stderr, status) = tokio::try_join!(
             async { write.await.map_err(anyhow::Error::from) },
             read,
+            async { stderr_tail(stderr).await.map_err(anyhow::Error::from) },
             async { child.wait().await.map_err(anyhow::Error::from) }
         )?;
-        ensure!(status.success(), "search provider failed");
-        let output: Output =
-            serde_json::from_slice(&bytes).context("search provider output is invalid")?;
+        if !status.success() {
+            let diagnostic = redact_stderr(&stderr, &request.query);
+            tracing::warn!(%status, stderr=%diagnostic, "Conversation search provider failed");
+            anyhow::bail!("search provider failed");
+        }
+        let output: Output = serde_json::from_slice(&bytes)
+            .map_err(|_| anyhow::anyhow!("search provider output is invalid"))?;
         Ok(output.conversations)
     }
+}
+
+async fn stderr_tail(mut stream: tokio::process::ChildStderr) -> std::io::Result<Vec<u8>> {
+    let mut chunk = [0; STDERR_BYTES];
+    let mut tail = Vec::with_capacity(STDERR_BYTES);
+    loop {
+        let read = stream.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(tail);
+        }
+        let excess = (tail.len() + read).saturating_sub(STDERR_BYTES);
+        tail.drain(..excess);
+        tail.extend_from_slice(&chunk[..read]);
+    }
+}
+
+fn redact_stderr(stderr: &[u8], query: &str) -> String {
+    let mut text = String::from_utf8_lossy(stderr).into_owned();
+    for value in [query, query.trim()] {
+        if value.is_empty() {
+            continue;
+        }
+        let encoded = serde_json::to_string(value).expect("string serialization");
+        text = text.replace(value, "[redacted]");
+        text = text.replace(&encoded[1..encoded.len() - 1], "[redacted]");
+    }
+    text
 }
 
 struct Group(Option<Pid>);
@@ -162,7 +198,7 @@ pub(crate) fn resolve(db: &Reader, hits: Vec<Hit>, limit: usize) -> Result<Respo
         if !matches!(hit.provider.as_str(), "claude" | "codex") || !hit.score.is_finite() {
             continue;
         }
-        let keys: Vec<String> = tx.prepare("SELECT session_key FROM session JOIN source USING(source_id) WHERE session.provider=?1 AND thread_id=?2 AND present=1 LIMIT 2")?.query_map(params![hit.provider,if hit.provider=="claude" { format!("claude_{}",hit.session_id) } else { hit.session_id }], |r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let keys: Vec<String> = tx.prepare("SELECT session_key FROM session JOIN source USING(source_id) WHERE session.provider=?1 AND thread_id=?2 AND present=1 LIMIT 2")?.query_map(params![hit.provider,if hit.provider=="claude" { crate::providers::claude::claude_thread_id(&hit.session_id) } else { hit.session_id }], |r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
         if keys.len() != 1 {
             continue;
         }

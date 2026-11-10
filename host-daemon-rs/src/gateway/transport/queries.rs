@@ -17,13 +17,32 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Instant, Sleep};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
-pub(super) fn query_deadline(method: &str) -> std::time::Duration {
-    if matches!(method, "sessions/conversations/search" | "sessions/locate") {
-        crate::sessions::conversations::DEADLINE
-    } else if method == "sessions/conversations/searchByMeaning" {
-        crate::sessions::meaning::DEADLINE
-    } else {
-        QUERY_DEADLINE
+#[derive(Clone, Copy)]
+struct QueryPolicy {
+    limit: std::time::Duration,
+    completes_at_deadline: bool,
+}
+
+impl QueryPolicy {
+    fn for_method(method: &str) -> Self {
+        match method {
+            "sessions/conversations/search" => Self {
+                limit: crate::sessions::conversations::DEADLINE,
+                completes_at_deadline: true,
+            },
+            "sessions/locate" => Self {
+                limit: crate::sessions::conversations::DEADLINE,
+                completes_at_deadline: false,
+            },
+            "sessions/conversations/searchByMeaning" => Self {
+                limit: crate::sessions::meaning::DEADLINE,
+                completes_at_deadline: false,
+            },
+            _ => Self {
+                limit: QUERY_DEADLINE,
+                completes_at_deadline: false,
+            },
+        }
     }
 }
 
@@ -48,12 +67,14 @@ pub(super) struct QueryInfo {
     pub id: Value,
     pub method: String,
     pub thread: Option<String>,
+    pub limit: std::time::Duration,
 }
 
 struct QueuedQuery {
     request: ClientRequest,
     bytes: usize,
     admission: Option<Admission>,
+    policy: QueryPolicy,
     deadline: Pin<Box<Sleep>>,
 }
 
@@ -63,6 +84,7 @@ impl QueuedQuery {
             id: self.request.object["id"].clone(),
             method: self.request.method.clone(),
             thread: request_thread(&self.request.object),
+            limit: self.policy.limit,
         }
     }
 }
@@ -151,13 +173,14 @@ impl ConnectionQueries {
         if let Some(resource) = resource {
             return Err(capacity_error(resource));
         }
-        let duration = query_deadline(&request.method);
+        let policy = QueryPolicy::for_method(&request.method);
         self.queued_bytes += bytes;
         self.queued.push_back(QueuedQuery {
             request,
             bytes,
             admission,
-            deadline: Box::pin(tokio::time::sleep_until(received + duration)),
+            policy,
+            deadline: Box::pin(tokio::time::sleep_until(received + policy.limit)),
         });
         Ok(())
     }
@@ -284,11 +307,13 @@ async fn run_query(
         request,
         admission,
         mut deadline,
+        policy,
         ..
     } = query;
     let id = request.object["id"].clone();
     let method = request.method.clone();
     let thread = request_thread(&request.object);
+    let request_deadline = deadline.deadline();
     let work = async {
         let _permits = permits;
         let _admission = admission;
@@ -299,23 +324,38 @@ async fn run_query(
             Ok(()) => (),
             Err(error) => return gateway.send_error_to(&out, Some(&id), &error).await,
         };
+        let target = request.owned.expect("owned query route").target;
+        if matches!(
+            target,
+            crate::rpc::dispatch::OwnedTarget::Gateway(crate::rpc::dispatch::OwnedRoute::Sessions)
+        ) {
+            let response = match gateway.validate_member_grant(&out.grant).await {
+                Ok(()) => {
+                    gateway
+                        .sessions_rpc(
+                            &out.grant,
+                            &request.method,
+                            request.object["params"].clone(),
+                            request_deadline,
+                            policy.limit,
+                        )
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            return gateway
+                .respond(&out, id.clone(), response, Some(&method))
+                .await
+                .map(|_| ());
+        }
         gateway
-            .handle_owned_rpc(
-                out.id,
-                &out,
-                &request.method,
-                request.owned.expect("owned query route").target,
-                &request.object,
-            )
+            .handle_owned_rpc(out.id, &out, &request.method, target, &request.object)
             .await
     };
-    let duration = query_deadline(&method);
-    let search_deadline = deadline.deadline().into_std();
-    let work = crate::gateway::sessions::SESSION_REQUEST_DEADLINE.scope(search_deadline, work);
     let outcome = if Instant::now() >= deadline.deadline() {
         drop(work);
         None
-    } else if method == "sessions/conversations/search" {
+    } else if policy.completes_at_deadline {
         tokio::select! {
             biased;
             result = work => Some(result),
@@ -335,11 +375,11 @@ async fn run_query(
                 "query_timed_out",
                 json!({
                     "clientId": out.id, "method": method, "threadId": thread,
-                    "limitMs": duration.as_millis(),
+                    "limitMs": policy.limit.as_millis(),
                 }),
             );
             gateway
-                .send_error_to(&out, Some(&id), &RpcError::request_timed_out(duration))
+                .send_error_to(&out, Some(&id), &RpcError::request_timed_out(policy.limit))
                 .await
         }
     }

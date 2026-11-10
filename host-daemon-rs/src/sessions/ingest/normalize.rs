@@ -266,10 +266,10 @@ impl Record<'_> {
                 let child = stem
                     .strip_prefix("agent-")
                     .context("Native child has no agent filename")?;
-                state.thread = Some(format!("claude:{parent}:{child}"));
-                state.parent = Some(format!("claude_{parent}"));
+                state.thread = Some(crate::providers::claude::subagent_thread_id(parent, child));
+                state.parent = Some(crate::providers::claude::claude_thread_id(parent));
             } else {
-                state.thread = Some(format!("claude_{stem}"));
+                state.thread = Some(crate::providers::claude::claude_thread_id(stem));
             }
         }
         state.cwd = string(&v["cwd"]).or(state.cwd.take());
@@ -468,7 +468,7 @@ impl Record<'_> {
         self.session(state)?;
         let key =
             super::super::session_key(self.origin, state.thread.as_deref().context("No session")?);
-        let item = format!("{key}@item:{}:{part}", self.offset);
+        let item = super::super::item_key(&key, self.offset, part);
         let (images, sidecars) = super::dependencies(value, &text, self.origin, self.path)?;
         for sidecar in &sidecars {
             let local = self.origin.local(std::path::Path::new(sidecar))?;

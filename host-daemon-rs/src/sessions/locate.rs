@@ -6,9 +6,6 @@ use anyhow::{Context, Result, ensure};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::time::Duration;
-
-pub(crate) const DEADLINE: Duration = Duration::from_secs(1);
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -74,12 +71,7 @@ pub(crate) fn item(db: &Reader, request: &Request, control: &ReadControl) -> Res
         None
     };
     ensure!(!control.stopped(), "locate interrupted");
-    let part = request
-        .item_key
-        .rsplit_once(':')
-        .context("Invalid item key")?
-        .1
-        .parse()?;
+    let part = super::item_part(&request.item_key)?;
     Ok(Item {
         response: Response {
             thread_id,

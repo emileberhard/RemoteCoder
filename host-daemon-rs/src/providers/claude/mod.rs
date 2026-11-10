@@ -46,6 +46,16 @@ pub(crate) fn session_uuid_from_thread_id(thread_id: &str) -> Option<&str> {
         .filter(|uuid| !uuid.is_empty())
 }
 
+const SUBAGENT_THREAD_PREFIX: &str = "claude:";
+
+pub(crate) fn subagent_thread_id(parent: &str, agent: &str) -> String {
+    format!("{SUBAGENT_THREAD_PREFIX}{parent}:{agent}")
+}
+
+pub(crate) fn subagent_thread_parts(thread: &str) -> Option<(&str, &str)> {
+    thread.strip_prefix(SUBAGENT_THREAD_PREFIX)?.split_once(':')
+}
+
 /// Session directory for a working directory.
 ///
 /// Claude slugs a cwd by replacing every character outside `[A-Za-z0-9]` with

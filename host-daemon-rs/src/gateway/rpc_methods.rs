@@ -65,7 +65,10 @@ impl Gateway {
             {
                 self.cluster_rpc(&out.grant, method, params).await
             }
-            OwnedRoute::Sessions => self.sessions_rpc(&out.grant, method, params).await,
+            OwnedRoute::Sessions => self
+                .session_request(&out.grant, method, params)
+                .await
+                .map_err(super::sessions::session_error),
             OwnedRoute::AgentJobs => self.agent_jobs_rpc(method, params).await,
             OwnedRoute::AgentRoutes => self.agent_routes_rpc(client_id, out, method, params).await,
             OwnedRoute::Calls => {

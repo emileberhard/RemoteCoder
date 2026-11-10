@@ -3132,7 +3132,7 @@ fn sessions_locate_preserves_native_turn_and_checks_exact_source() -> Result<()>
     let db = f.store.reader()?;
     let key: String = db.query_row("SELECT item_key FROM item WHERE kind='tool_result' AND session_key LIKE '%codex-root' LIMIT 1", [], |r| r.get(0))?;
     let request = super::locate::Request { item_key: key };
-    let control = super::store::ReadControl::new(Instant::now() + super::locate::DEADLINE);
+    let control = super::store::ReadControl::new(Instant::now() + super::conversations::DEADLINE);
     let item = super::locate::item(&db, &request, &control)?;
     assert_eq!(item.response.thread_id, "codex-root");
     assert_eq!(item.response.turn_id.as_deref(), Some("turn-1"));

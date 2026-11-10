@@ -92,6 +92,16 @@ pub(crate) fn session_key(origin: &Origin, id: &str) -> String {
     format!("{}:{}:{}:{id}", origin.host, origin.provider, &scope[..16])
 }
 
+fn item_key(session: &str, offset: u64, part: usize) -> String {
+    format!("{session}@item:{offset}:{part}")
+}
+
+fn item_part(key: &str) -> Result<usize> {
+    let (_, position) = key.rsplit_once("@item:").context("Invalid item key")?;
+    let (_, part) = position.split_once(':').context("Invalid item position")?;
+    Ok(part.parse()?)
+}
+
 pub(crate) fn default_database() -> Result<PathBuf> {
     Ok(crate::config::HostPaths::from_env()?.state("sessions/v1/catalog.sqlite3"))
 }

@@ -78,7 +78,7 @@ impl Connection {
                 .send_error_to(
                     &self.requests.out_tx,
                     Some(&info.id),
-                    &RpcError::request_timed_out(query_deadline(&info.method)),
+                    &RpcError::request_timed_out(info.limit),
                 )
                 .await
                 .unwrap(),

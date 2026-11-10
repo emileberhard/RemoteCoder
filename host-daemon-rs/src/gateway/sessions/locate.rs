@@ -1,7 +1,7 @@
-use super::{Gateway, SESSION_REQUEST_DEADLINE, session_error};
+use super::{CatalogRead, Gateway, Runtime, session_error};
 use crate::auth::installation_credentials::Grant;
 use crate::providers::claude::projection::LocateTarget;
-use crate::rpc::{RpcError, RpcResult};
+use crate::rpc::RpcResult;
 use crate::sessions::{cluster, locate, store::ReadControl};
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
@@ -13,141 +13,130 @@ impl Gateway {
         self: &Arc<Self>,
         grant: &Grant,
         params: Value,
+        read: &CatalogRead,
     ) -> RpcResult {
         let request: locate::Request =
-            serde_json::from_value(params).map_err(|e| session_error(e.into()))?;
-        let deadline = SESSION_REQUEST_DEADLINE
-            .try_with(|d| *d)
-            .unwrap_or_else(|_| std::time::Instant::now() + locate::DEADLINE);
-        let control = ReadControl::new(deadline);
-        let _cancel = control.cancel_on_drop();
-        let work = async {
-            let host = self.host_identity().await.map_err(session_error)?.host_id;
-            if !matches!(grant, Grant::Peer { .. })
-                && let Some(origin) = cluster::target_origin(&host, &request.item_key)
-            {
-                return self
-                    .cluster_link()
-                    .await
-                    .map_err(session_error)?
-                    .call(
-                        &origin,
-                        "sessions/locate",
-                        serde_json::to_value(&request).map_err(|e| session_error(e.into()))?,
-                    )
-                    .await
-                    .map_err(|e| session_error(e.into()));
-            }
-            let runtime = self
-                .sessions_runtime()
+            serde_json::from_value(params).map_err(|error| session_error(error.into()))?;
+        let host = self.host_identity().await.map_err(session_error)?.host_id;
+        if !matches!(grant, Grant::Peer { .. })
+            && let Some(origin) = cluster::target_origin(&host, &request.item_key)
+        {
+            return self
+                .cluster_link()
                 .await
                 .map_err(session_error)?
-                .clone();
-            let permit = runtime
-                .search_readers
-                .clone()
-                .acquire_owned()
+                .call(
+                    &origin,
+                    "sessions/locate",
+                    serde_json::to_value(request).map_err(|error| session_error(error.into()))?,
+                )
                 .await
-                .map_err(|e| session_error(e.into()))?;
-            let store = runtime.store.clone();
-            let gateway = self.clone();
-            let reading = control.clone();
-            let handle = tokio::runtime::Handle::current();
-            let item = tokio::task::spawn_blocking(move || -> Result<locate::Item> {
-                let _permit = permit;
-                let mut db = store.reader()?;
-                db.interrupt_on(reading.clone())?;
-                let mut item = locate::item(&db, &request, &reading)?;
-                if item.provider == "claude" {
-                    let child = item
-                        .response
-                        .thread_id
-                        .strip_prefix("claude:")
-                        .and_then(|id| id.split_once(':'))
-                        .map(|(parent, agent)| (format!("claude_{parent}"), agent.to_owned()));
-                    let target = if let Some((parent, agent_id)) = child {
-                        item.response.thread_id = parent;
-                        LocateTarget::Agent { agent_id }
-                    } else {
-                        LocateTarget::Item {
-                            offset: item.reference.offset,
-                            part: item.part,
-                        }
-                    };
-                    let active = handle.block_on(tokio::time::timeout_at(
-                        tokio::time::Instant::from_std(deadline),
-                        gateway.claude_active_turn_id(&item.response.thread_id),
-                    ))?;
-                    let location = gateway
-                        .claude_history
-                        .locate_blocking(
-                            &item.response.thread_id,
-                            active.as_deref(),
-                            &target,
-                            &|| {
-                                ensure!(!reading.stopped(), "locate interrupted");
-                                Ok(())
-                            },
-                            |file| {
-                                if matches!(target, LocateTarget::Item { .. }) {
-                                    crate::sessions::query::verified_item_bytes(
-                                        file.try_clone()?,
-                                        &item.reference,
-                                        0,
-                                        0,
-                                        || {
-                                            ensure!(!reading.stopped(), "locate interrupted");
-                                            Ok(())
-                                        },
-                                    )?;
-                                }
-                                Ok(())
-                            },
-                        )
-                        .map_err(|error| anyhow::anyhow!("Claude locate failed: {error:?}"))?;
-                    if let Some(location) = location {
-                        item.response.turn_id = Some(location.turn_id);
-                        item.response.item_id = Some(location.item_id);
-                        item.response.turns_cursor = Some(location.turns_cursor);
-                        item.response.items_cursor = Some(location.items_cursor);
-                    }
-                }
-                Ok(item)
+                .map_err(|error| session_error(error.into()));
+        }
+        let runtime = self.sessions_runtime().await.map_err(session_error)?;
+        let item = read
+            .read(runtime, move |db, control| {
+                locate::item(db, &request, control)
             })
             .await
-            .map_err(|e| session_error(e.into()))?
             .map_err(session_error)?;
-            if item.provider != "codex"
-                || (item.response.turn_id.is_none()
-                    && !matches!(item.kind.as_str(), "user" | "assistant"))
-            {
-                return serde_json::to_value(item.response).map_err(|e| session_error(e.into()));
-            }
-            let Ok(permit) = runtime.native_locates.clone().try_acquire_owned() else {
-                return serde_json::to_value(item.response).map_err(|e| session_error(e.into()));
-            };
-            let fallback = item.response.clone();
-            let gateway = self.clone();
-            let native_control = control.clone();
-            let (reply, result) = tokio::sync::oneshot::channel();
-            if !runtime
-                .locate_tasks
-                .spawn("sessions_locate_native", async move {
-                    let _permit = permit;
-                    let response = gateway.locate_native_item(item, native_control).await;
-                    let _ = reply.send(response);
-                    Ok(())
-                })
-            {
-                return serde_json::to_value(fallback).map_err(|e| session_error(e.into()));
-            }
-            serde_json::to_value(result.await.map_err(|e| session_error(e.into()))?)
-                .map_err(|e| session_error(e.into()))
+        let location = match item.provider.as_str() {
+            "claude" => self
+                .locate_claude(runtime, read, item)
+                .await
+                .map_err(session_error)?,
+            "codex" => self.locate_codex(runtime, read, item).await?,
+            _ => item.response,
         };
-        match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), work).await {
-            Ok(result) if !control.stopped() => result,
-            _ => Err(RpcError::request_timed_out(locate::DEADLINE)),
+        serde_json::to_value(location).map_err(|error| session_error(error.into()))
+    }
+
+    async fn locate_claude(
+        self: &Arc<Self>,
+        runtime: &Runtime,
+        read: &CatalogRead,
+        mut item: locate::Item,
+    ) -> Result<locate::Response> {
+        let target = if let Some((parent, agent)) =
+            crate::providers::claude::subagent_thread_parts(&item.response.thread_id)
+        {
+            let agent_id = agent.to_owned();
+            item.response.thread_id = crate::providers::claude::claude_thread_id(parent);
+            LocateTarget::Agent { agent_id }
+        } else {
+            LocateTarget::Item {
+                offset: item.reference.offset,
+                part: item.part,
+            }
+        };
+        let active = self.claude_active_turn_id(&item.response.thread_id).await;
+        let gateway = self.clone();
+        read.blocking(runtime, move |control| {
+            let check = || {
+                ensure!(!control.stopped(), "locate interrupted");
+                Ok(())
+            };
+            let verify_source_record = |file: &std::fs::File| -> Result<()> {
+                if matches!(target, LocateTarget::Item { .. }) {
+                    crate::sessions::query::verified_item_bytes(
+                        file.try_clone()?,
+                        &item.reference,
+                        0,
+                        0,
+                        check,
+                    )?;
+                }
+                Ok(())
+            };
+            let location = gateway
+                .claude_history
+                .locate_blocking(
+                    &item.response.thread_id,
+                    active.as_deref(),
+                    &target,
+                    &check,
+                    verify_source_record,
+                )
+                .map_err(|error| anyhow::anyhow!("Claude locate failed: {error:?}"))?;
+            if let Some(location) = location {
+                item.response.turn_id = Some(location.turn_id);
+                item.response.item_id = Some(location.item_id);
+                item.response.turns_cursor = Some(location.turns_cursor);
+                item.response.items_cursor = Some(location.items_cursor);
+            }
+            Ok(item.response)
+        })
+        .await
+    }
+
+    async fn locate_codex(
+        self: &Arc<Self>,
+        runtime: &Runtime,
+        read: &CatalogRead,
+        item: locate::Item,
+    ) -> std::result::Result<locate::Response, crate::rpc::RpcError> {
+        if item.response.turn_id.is_none() && !matches!(item.kind.as_str(), "user" | "assistant") {
+            return Ok(item.response);
         }
+        let Ok(permit) = runtime.native_locates.clone().try_acquire_owned() else {
+            return Ok(item.response);
+        };
+        let fallback = item.response.clone();
+        let gateway = self.clone();
+        let control = read.control.clone();
+        let (reply, result) = tokio::sync::oneshot::channel();
+        if !runtime
+            .locate_tasks
+            .spawn("sessions_locate_native", async move {
+                let _permit = permit;
+                let response = gateway.locate_native_item(item, control).await;
+                let _ = reply.send(response);
+                Ok(())
+            })
+        {
+            return Ok(fallback);
+        }
+        result.await.map_err(|error| session_error(error.into()))
     }
 
     async fn locate_native_item(
