@@ -16,6 +16,22 @@ try {
     {type:'assistant',sessionId:root,uuid:'answer',timestamp:'2026-11-01T10:00:01Z',message:{id:'answer',role:'assistant',content:[{type:'text',text:'Fix the flicker in Malmö'}]}},
   ];
   await writeFile(join(project,`${root}.jsonl`),records.map(v=>JSON.stringify(v)+'\n').join(''));
+  const codexThread='22222222-3333-4444-8555-666666666666';
+  const codexNeedle='GatewayNativeLocateFixture';
+  const codexAt='2026-11-01T10:00:00.000Z';
+  const codexEvent=(type,payload)=>({timestamp:codexAt,type:'event_msg',payload:{type,...payload}});
+  const codexSessions=join(lab.nativeDefault,'sessions','2026','11','01');
+  await mkdir(codexSessions,{recursive:true});
+  const rollout=[
+    {timestamp:codexAt,type:'session_meta',payload:{id:codexThread,session_id:codexThread,timestamp:codexAt,cwd:lab.root,originator:'codex_cli_rs',cli_version:'0.0.0',source:'cli',model_provider:'openai'}},
+    codexEvent('task_started',{turn_id:'fixture-turn-1',model_context_window:8192}),
+    codexEvent('user_message',{message:codexNeedle}),
+    codexEvent('task_complete',{turn_id:'fixture-turn-1',last_agent_message:null}),
+    codexEvent('task_started',{turn_id:'fixture-turn-2',model_context_window:8192}),
+    codexEvent('user_message',{message:'The second turn follows.'}),
+    codexEvent('task_complete',{turn_id:'fixture-turn-2',last_agent_message:null}),
+  ];
+  await writeFile(join(codexSessions,`rollout-2026-11-01T10-00-00-${codexThread}.jsonl`),rollout.map(row=>JSON.stringify(row)+'\n').join(''),{mode:0o600});
   const provider = lab.path('meaning.sh');
   await writeFile(provider,`cat >/dev/null\nprintf '%s' '${JSON.stringify({conversations:[{sessionId:'unknown',provider:'claude',summary:'omit',score:2},{sessionId:root,provider:'claude',summary:'Drawer reveal stutter',score:1}]})}'\n`);
   const config=lab.path('meaning.json');
@@ -43,6 +59,18 @@ try {
   const page=await rpc('thread/turns/list',{threadId:located.result.threadId,cursor:located.result.turnsCursor,sortDirection:'asc',itemsView:'full',limit:1});
   assert.equal(page.result.data[0].id,located.result.turnId);
   assert.ok(JSON.stringify(page.result).includes(located.result.itemId));
+  const codex=await lab.waitFor(async()=>{
+    const reply=await rpc('sessions/conversations/search',{query:codexNeedle,limit:30});
+    const conversation=reply.result?.conversations[0];
+    return conversation?.threadId===codexThread&&conversation;
+  },30);
+  const codexLocated=await rpc('sessions/locate',{itemKey:codex.hits[0].itemKey});
+  assert.equal(codexLocated.result.threadId,codexThread);
+  assert.equal(codexLocated.result.turnId,'fixture-turn-1');
+  assert.ok(codexLocated.result.turnsCursor&&codexLocated.result.itemsCursor&&codexLocated.result.itemId);
+  const codexItems=await rpc('thread/items/list',{threadId:codexThread,cursor:codexLocated.result.itemsCursor,sortDirection:'asc',limit:10});
+  assert.equal(codexItems.result.data[0].item.id,codexLocated.result.itemId);
+  assert.ok(codexItems.result.data.some(row=>row.turnId==='fixture-turn-2'));
   const folded=await rpc('sessions/conversations/search',{query:'malmo',limit:30});
   assert.equal(folded.result.conversations.length,1);
   const meaning=await rpc('sessions/conversations/searchByMeaning',{query:'the sidebar has a stutter when it is being revealed',limit:20});
@@ -65,7 +93,7 @@ try {
   assert.equal((await lab.within(cancelled,3000,'Meaning cancellation did not answer')).error.data.kind,'requestCancelled');
   await lab.waitFor(async()=>{try{process.kill(pid,0);return false;}catch{return true;}},3);
   ws.removeEventListener('message',listener);
-  console.log(JSON.stringify({ok:true,search:true,diacritics:true,locate:located.result,meaning:true}));
+  console.log(JSON.stringify({ok:true,search:true,diacritics:true,locate:located.result,codexLocate:codexLocated.result,meaning:true}));
 } catch(error) {failure=error;}
 finally {
   try {await lab.stop();} catch(error) {failure??=error;await lab.forceStop();}
