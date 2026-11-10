@@ -5814,7 +5814,7 @@ async fn claude_turn_without_a_model_keeps_the_recorded_selection() {
         HashMap::new(),
     ));
     let gateway = crate::test_support::TestGateway::with_settings(codex, settings.clone(), owner);
-    let (events, _events) = mpsc::channel(128);
+    let (events, mut events_rx) = mpsc::channel(128);
     let agent = crate::providers::claude::ClaudeSupervisor::new(
         settings,
         events,
@@ -5837,11 +5837,15 @@ async fn claude_turn_without_a_model_keeps_the_recorded_selection() {
     let (tx, mut out_rx) = mpsc::channel(2);
     let out_tx = test_client(1, tx);
     let mut replies = Vec::new();
-    for selection in [json!({}), json!({"effort": "high"})] {
+    for selection in [
+        json!({}),
+        json!({"effort": "high"}),
+        json!({"serviceTier": null}),
+    ] {
         let mut params = json!({
             "threadId": thread,
             "cwd": cwd,
-            "input": [{"type": "text", "text": "next"}],
+            "input": [{"type": "text", "text": "initial"}],
         });
         params
             .as_object_mut()
@@ -5860,27 +5864,28 @@ async fn claude_turn_without_a_model_keeps_the_recorded_selection() {
         };
         replies.push(serde_json::from_str::<Value>(&text).unwrap());
     }
-    let launches = tokio::time::timeout(Duration::from_secs(5), async {
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let launches: Vec<Value> = std::fs::read_to_string(home.join("launches.jsonl"))
-                .unwrap_or_default()
-                .lines()
-                .filter_map(|line| serde_json::from_str(line).ok())
-                .collect();
-            if !launches.is_empty() {
-                return launches;
+            let event = crate::test_support::claude_event(events_rx.recv().await.unwrap());
+            if event["method"] == "turn/completed" {
+                return event;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await;
     agent.stop_all().await;
+    let launches: Vec<Value> = std::fs::read_to_string(home.join("launches.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
     assert_eq!(
         replies[0]["result"]["turn"]["status"], "inProgress",
         "{replies:#?}"
     );
     assert_eq!(replies[1]["error"]["code"], RpcCode::InvalidParams.value());
-    let launches = launches.unwrap();
+    assert_eq!(replies[2]["error"]["code"], RpcCode::InvalidParams.value());
+    assert_eq!(completed.unwrap()["params"]["turn"]["status"], "completed");
     assert_eq!(launches.len(), 1);
     let args = launches[0]["argv"].as_array().unwrap();
     assert!(

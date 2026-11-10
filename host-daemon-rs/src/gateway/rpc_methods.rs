@@ -1381,13 +1381,14 @@ impl Gateway {
                     .get("effort")
                     .and_then(Value::as_str)
                     .map(claude_effort_wire_value),
-                fast: claude_fast_mode(
-                    &agent,
-                    &thread_id,
-                    model,
-                    params.get("serviceTier").map(Value::as_str),
-                )
-                .await?,
+                fast: !keeps_recorded_selection
+                    && claude_fast_mode(
+                        &agent,
+                        &thread_id,
+                        model,
+                        params.get("serviceTier").map(Value::as_str),
+                    )
+                    .await?,
             },
             cwd,
         };

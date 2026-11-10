@@ -54,11 +54,33 @@ impl ClaudeSupervisor {
         mut request: ClaudeTurnRequest,
     ) -> Result<String, TurnStartError> {
         let _start_guard = self.lifecycles.lock(&request.thread_id).await;
+        self.refuse_while_user_turn_runs(&request).await?;
         if let Some((selection, _)) = self.recorded_selection(&request.thread_id).await? {
             request.selection = selection;
         }
         self.start_turn_locked(request, TurnOrigin::Dispatched)
             .await
+    }
+
+    async fn refuse_while_user_turn_runs(
+        &self,
+        request: &ClaudeTurnRequest,
+    ) -> Result<(), TurnStartError> {
+        self.wait_for_finishing_turn(&request.thread_id).await;
+        if self
+            .runtimes
+            .lock()
+            .await
+            .get(&request.thread_id)
+            .is_some_and(|runtime| {
+                runtime
+                    .running_turn()
+                    .is_some_and(|turn| !turn.agent_initiated)
+            })
+        {
+            self.reserve_start(request).await?;
+        }
+        Ok(())
     }
 
     pub(super) async fn recorded_selection(
@@ -128,20 +150,7 @@ impl ClaudeSupervisor {
             })?;
         self.check_callback_generation(&request.thread_id, origin)
             .await?;
-        self.wait_for_finishing_turn(&request.thread_id).await;
-        if self
-            .runtimes
-            .lock()
-            .await
-            .get(&request.thread_id)
-            .is_some_and(|runtime| {
-                runtime
-                    .running_turn()
-                    .is_some_and(|turn| !turn.agent_initiated)
-            })
-        {
-            self.reserve_start(&request).await?;
-        }
+        self.refuse_while_user_turn_runs(&request).await?;
         let update_warm_runtime = self
             .runtimes
             .lock()
