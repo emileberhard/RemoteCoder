@@ -5,7 +5,7 @@ use anyhow::{Result, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Seek};
+use std::io::{BufRead, BufReader};
 
 pub(crate) type Parents = HashMap<ConversationIdentity, Option<AgentAddress>>;
 
@@ -53,17 +53,10 @@ pub(crate) fn parents(db: &Connection, origins: &[Origin], parents: &Parents) ->
     Ok(unresolved)
 }
 
-#[derive(Serialize, Deserialize)]
-struct TitleCheckpoint {
-    identity: String,
-    bytes: u64,
-    hash: String,
-}
-
 pub(crate) fn titles(db: &Connection, origins: &[Origin]) -> Result<()> {
     for origin in origins.iter().filter(|o| o.provider == "codex") {
         let path = origin.local_home.join("session_index.jsonl");
-        let mut file = match std::fs::File::open(&path) {
+        let file = match std::fs::File::open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
@@ -79,39 +72,14 @@ pub(crate) fn titles(db: &Connection, origins: &[Origin]) -> Result<()> {
             .query_row("SELECT value FROM meta WHERE key=?1", [&cache_key], |r| {
                 r.get::<_, String>(0)
             })
-            .optional()?
-            .and_then(|value| serde_json::from_str::<TitleCheckpoint>(&value).ok());
-        if prior
-            .as_ref()
-            .is_some_and(|prior| prior.identity == identity)
-        {
+            .optional()?;
+        if prior.as_deref() == Some(&identity) {
             continue;
         }
 
-        let mut hash = blake3::Hasher::new();
-        let mut offset = 0;
-        if let Some(prior) = prior.filter(|prior| prior.bytes > 0 && prior.bytes < revision.len()) {
-            let length = std::io::copy(&mut (&mut file).take(prior.bytes), &mut hash)?;
-            if length == prior.bytes && hash.finalize().to_hex().as_str() == prior.hash {
-                offset = prior.bytes;
-            } else {
-                file.rewind()?;
-                hash.reset();
-            }
-        }
-
-        let mut reader = BufReader::new(file.take(revision.len() - offset));
-        let mut line = Vec::new();
         let mut updates = HashMap::new();
-        loop {
-            line.clear();
-            let count = reader.read_until(b'\n', &mut line)?;
-            if count == 0 || !line.ends_with(b"\n") {
-                break;
-            }
-            offset += count as u64;
-            hash.update(&line);
-            let value: serde_json::Value = match serde_json::from_slice(&line) {
+        for line in BufReader::new(std::io::Read::take(file, revision.len())).lines() {
+            let value: serde_json::Value = match serde_json::from_str(&line?) {
                 Ok(value) => value,
                 Err(_) => continue,
             };
@@ -122,11 +90,6 @@ pub(crate) fn titles(db: &Connection, origins: &[Origin]) -> Result<()> {
                 updates.insert(id.to_owned(), title.to_owned());
             }
         }
-        let checkpoint = TitleCheckpoint {
-            identity,
-            bytes: offset,
-            hash: hash.finalize().to_hex().to_string(),
-        };
         let tx = db.unchecked_transaction()?;
         {
             let mut update =
@@ -137,7 +100,7 @@ pub(crate) fn titles(db: &Connection, origins: &[Origin]) -> Result<()> {
         }
         tx.execute(
             "INSERT OR REPLACE INTO meta VALUES(?1,?2)",
-            params![cache_key, serde_json::to_string(&checkpoint)?],
+            params![cache_key, identity],
         )?;
         tx.commit()?;
     }
