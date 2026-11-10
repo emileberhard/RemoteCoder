@@ -269,7 +269,7 @@ mod tests {
             ("—", false),
             ("&", false),
             ("€", false),
-            ("🧰", false),
+            ("😀", false),
             ("\u{0345}", false),
             ("\"", false),
         ] {
@@ -283,6 +283,7 @@ mod tests {
             assert_eq!(matches, searchable, "{term:?}");
             assert_eq!(has_token_character(term), matches, "{term:?}");
         }
+        assert!(!has_token_character("🧰"));
         assert_eq!(
             Request {
                 query: "a -> b & c — d $ e -> f -> g -> h".into(),

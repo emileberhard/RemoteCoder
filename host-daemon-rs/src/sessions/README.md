@@ -184,8 +184,9 @@ The trimmed query accepts 1–512 UTF-8 bytes and at most eight deduplicated,
 case-insensitive whitespace-separated terms. `limit` is required and accepts
 1–50 conversations. Unknown fields are invalid params. All terms must be covered
 by the conversation across its title, folder and messages; the final term is a
-word prefix. Punctuation-only terms are ignored. A query with no searchable
-word is invalid. SQLite unicode61 folds case and Latin diacritics, including
+word prefix. Terms without a letter, number or private-use character are
+ignored, including punctuation and emoji. A query with no searchable word is
+invalid. SQLite unicode61 folds case and Latin diacritics, including
 Malmö for `malmo`. Two- and three-character prefixes have dedicated indexes.
 Word prefixes start at token boundaries. For example, `searchsession` does
 not match `ConversationSearchSession`.
