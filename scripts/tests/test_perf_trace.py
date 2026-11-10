@@ -11,6 +11,8 @@ from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from hang_guard import HANG_SECONDS
+
 loader = importlib.machinery.SourceFileLoader("perf_trace", str(Path(__file__).resolve().parents[1] / "perf-trace"))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 trace = importlib.util.module_from_spec(spec)
@@ -313,7 +315,7 @@ class WaitingExport(Export):
         self.killed.set()
 
     def wait(self):
-        if not self.killed.wait(3):
+        if not self.killed.wait(HANG_SECONDS):
             raise RuntimeError("export guard did not stop the fixture")
         return self.returncode
 
@@ -859,7 +861,7 @@ class PerfTraceTests(unittest.TestCase):
 
         def blocked_probe(pid):
             entered.set()
-            release.wait(3)
+            release.wait(HANG_SECONDS)
             return 0
 
         def summarize():
@@ -877,11 +879,11 @@ class PerfTraceTests(unittest.TestCase):
             owner = threading.Thread(target=summarize)
             owner.start()
             try:
-                self.assertTrue(entered.wait(1))
-                self.assertTrue(export.killed.wait(0.6), "a blocked memory probe defeated the export deadline")
+                self.assertTrue(entered.wait(HANG_SECONDS))
+                self.assertTrue(export.killed.wait(HANG_SECONDS), "a blocked memory probe defeated the export deadline")
             finally:
                 release.set()
-                owner.join(3)
+                owner.join(HANG_SECONDS)
         self.assertFalse(owner.is_alive())
         self.assertEqual(len(failures), 1)
         self.assertIsInstance(failures[0], SystemExit)

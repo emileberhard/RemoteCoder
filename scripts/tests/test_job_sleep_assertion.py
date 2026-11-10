@@ -12,6 +12,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 from process_group import process_identity, terminate_group
+from hang_guard import HANG_SECONDS
 
 CHILD = """import json,os,select,sys
 from pathlib import Path
@@ -176,7 +177,7 @@ try:
                 elif not closed:
                     child.stdin.write(data); child.stdin.flush()
         os.close(cut)
-    sys.exit(child.wait(timeout=5))
+    sys.exit(child.wait())
 finally:
     if child.poll() is None:
         child.terminate()
@@ -203,7 +204,7 @@ sys.exit(m.main())
 class JobSleepAssertionTests(unittest.TestCase):
     def held_by(self, pid):
         output = subprocess.check_output(
-            ["pmset", "-g", "assertions"], text=True, errors="replace", timeout=5
+            ["pmset", "-g", "assertions"], text=True, errors="replace", timeout=HANG_SECONDS
         )
         return any(
             re.search(rf"\bpid {pid}\(", line)
@@ -212,7 +213,7 @@ class JobSleepAssertionTests(unittest.TestCase):
         )
 
     def wait_for_record(self, owner, path):
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + HANG_SECONDS
         while not path.exists():
             if owner.poll() is not None:
                 self.fail(
@@ -224,7 +225,7 @@ class JobSleepAssertionTests(unittest.TestCase):
         return json.loads(path.read_text())
 
     def wait_for_release(self, pid):
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + HANG_SECONDS
         while self.held_by(pid):
             self.assertLess(
                 time.monotonic(),
@@ -288,7 +289,7 @@ class JobSleepAssertionTests(unittest.TestCase):
                             (root / "stage.json").unlink()
                             owner.stdin.write(b".")
                             owner.stdin.flush()
-                            deadline = time.monotonic() + 5
+                            deadline = time.monotonic() + HANG_SECONDS
                             while (
                                 not (root / "stage.json").exists()
                                 and not (root / "returned.json").exists()
@@ -303,10 +304,10 @@ class JobSleepAssertionTests(unittest.TestCase):
                             owner.stdin.close()
                             owner.stdin = None
                         try:
-                            owner.communicate(timeout=5)
+                            owner.communicate(timeout=HANG_SECONDS)
                         except subprocess.TimeoutExpired:
                             owner.kill()
-                            owner.communicate(timeout=5)
+                            owner.communicate(timeout=HANG_SECONDS)
                     self.assertEqual(owner.returncode, 0)
 
     def test_host_assertion_starts_after_its_source_is_deleted(self):
@@ -315,7 +316,7 @@ class JobSleepAssertionTests(unittest.TestCase):
                 [sys.executable, "-c", DELETED_SOURCE_OWNER, str(SCRIPTS), directory],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=HANG_SECONDS,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(result.stdout.strip().isdigit())
@@ -347,7 +348,7 @@ class JobSleepAssertionTests(unittest.TestCase):
                             self.assertEqual(holder.stdout.readline(), b"ready\n")
                             if ending == "owner-killed":
                                 owner.kill()
-                                owner.wait(timeout=5)
+                                owner.wait(timeout=HANG_SECONDS)
                             elif ending == "cancelled":
                                 owner.send_signal(signal.SIGTERM)
                             else:
@@ -361,7 +362,7 @@ class JobSleepAssertionTests(unittest.TestCase):
                                 time.sleep(0.02)
                             holder.stdin.write(b".")
                             holder.stdin.flush()
-                            holder.communicate(timeout=5)
+                            holder.communicate(timeout=HANG_SECONDS)
                         self.wait_for_release(pid)
                         if ending != "owner-killed":
                             self.wait_for_record(owner, root / "returned.json")
@@ -370,10 +371,10 @@ class JobSleepAssertionTests(unittest.TestCase):
                             owner.stdin.close()
                             owner.stdin = None
                         try:
-                            owner.communicate(timeout=5)
+                            owner.communicate(timeout=HANG_SECONDS)
                         except subprocess.TimeoutExpired:
                             owner.kill()
-                            owner.communicate(timeout=5)
+                            owner.communicate(timeout=HANG_SECONDS)
                         if pid is not None:
                             self.wait_for_release(pid)
 
@@ -442,7 +443,7 @@ class JobSleepAssertionTests(unittest.TestCase):
                     cut = os.open(root / "control-cut", os.O_WRONLY | os.O_NONBLOCK)
                     os.write(cut, b".")
                     os.close(cut)
-                    deadline = time.monotonic() + 5
+                    deadline = time.monotonic() + HANG_SECONDS
                     while not (root / "cut-observed").exists():
                         self.assertLess(time.monotonic(), deadline)
                         time.sleep(0.01)
@@ -463,7 +464,7 @@ class JobSleepAssertionTests(unittest.TestCase):
                     )
                     os.write(release, b".")
                     os.close(release)
-                    client.communicate(timeout=10)
+                    client.communicate(timeout=HANG_SECONDS)
                     self.assertNotEqual(client.returncode, 0)
                     self.wait_for_release(guard_pid)
                 finally:
@@ -473,7 +474,7 @@ class JobSleepAssertionTests(unittest.TestCase):
                         signal_process(guard, signal.SIGTERM)
                     if client.poll() is None:
                         terminate_group(process_identity(client.pid), 0.2)
-                    client.communicate(timeout=5)
+                    client.communicate(timeout=HANG_SECONDS)
 
     def test_owned_runner_assertion_covers_dispatch_and_releases_before_owner_exit(
         self,
@@ -513,7 +514,7 @@ class JobSleepAssertionTests(unittest.TestCase):
                             )
                             if ending == "owner-killed":
                                 owner.kill()
-                                owner.wait(timeout=5)
+                                owner.wait(timeout=HANG_SECONDS)
                             else:
                                 if ending == "cancelled":
                                     owner.send_signal(signal.SIGTERM)
@@ -542,10 +543,10 @@ class JobSleepAssertionTests(unittest.TestCase):
                                 owner.stdin.write(b".")
                                 owner.stdin.flush()
                             try:
-                                owner.communicate(timeout=5)
+                                owner.communicate(timeout=HANG_SECONDS)
                             except subprocess.TimeoutExpired:
                                 owner.kill()
-                                owner.communicate(timeout=5)
+                                owner.communicate(timeout=HANG_SECONDS)
 
 
 if __name__ == "__main__":

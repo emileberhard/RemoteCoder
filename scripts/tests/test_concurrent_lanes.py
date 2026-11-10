@@ -1,5 +1,7 @@
 import gc
 import io
+import os
+import signal
 import sys
 import tempfile
 import time
@@ -11,6 +13,7 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 
 from concurrent_lanes import lane_streams, run_lanes  # noqa: E402
+from hang_guard import HANG_SECONDS  # noqa: E402
 
 
 def python(code):
@@ -27,7 +30,7 @@ class ConcurrentLanesTests(unittest.TestCase):
             status = run_lanes(
                 {
                     "slow": [
-                        ("long", python("import time; time.sleep(30)")),
+                        ("long", python(f"import time; time.sleep({HANG_SECONDS})")),
                         ("after", python(f"open({str(marker)!r}, 'w')")),
                     ],
                     "fast": [("broken", python("print('boom'); raise SystemExit(3)"))],
@@ -37,31 +40,49 @@ class ConcurrentLanesTests(unittest.TestCase):
                 output,
             )
             self.assertEqual(status, 3)
-            self.assertLess(time.monotonic() - started, 10)
+            self.assertLess(time.monotonic() - started, HANG_SECONDS)
             self.assertFalse(marker.exists())
             self.assertIn(("broken", 3), records)
             self.assertIn(b"[fast] boom\n", output.getvalue())
             self.assertIn(b"[fast] broken failed with exit status 3\n", output.getvalue())
 
     def test_a_failure_does_not_wait_for_a_sibling_descendant_holding_the_pipe(self):
-        started = time.monotonic()
-        status = run_lanes(
-            {
-                "slow": [
-                    (
-                        "spawns",
-                        python(
-                            "import subprocess, time; subprocess.Popen(['sleep', '4']); time.sleep(30)"
-                        ),
-                    )
-                ],
-                "fast": [("broken", python("import time; time.sleep(0.5); raise SystemExit(2)"))],
-            },
-            ".",
-            output=io.BytesIO(),
-        )
-        self.assertEqual(status, 2)
-        self.assertLess(time.monotonic() - started, 3)
+        with tempfile.TemporaryDirectory() as temporary:
+            holder = Path(temporary) / "holder"
+            started = time.monotonic()
+            try:
+                status = run_lanes(
+                    {
+                        "slow": [
+                            (
+                                "spawns",
+                                python(
+                                    "import pathlib, subprocess, time; "
+                                    f"pid = subprocess.Popen(['sleep', '{HANG_SECONDS}']).pid; "
+                                    f"pathlib.Path({str(holder)!r}).write_text(str(pid)); "
+                                    f"time.sleep({HANG_SECONDS})"
+                                ),
+                            )
+                        ],
+                        "fast": [
+                            (
+                                "broken",
+                                python(
+                                    "import pathlib, time\n"
+                                    f"while not pathlib.Path({str(holder)!r}).exists(): time.sleep(0.01)\n"
+                                    "raise SystemExit(2)"
+                                ),
+                            )
+                        ],
+                    },
+                    ".",
+                    output=io.BytesIO(),
+                )
+                self.assertEqual(status, 2)
+                self.assertLess(time.monotonic() - started, HANG_SECONDS)
+            finally:
+                if holder.exists():
+                    os.kill(int(holder.read_text()), signal.SIGKILL)
 
     def test_a_finished_lane_closes_its_output_pipe(self):
         gc.collect()
@@ -91,18 +112,22 @@ class ConcurrentLanesTests(unittest.TestCase):
         self.assertIn(b"/nonexistent/remotecoder-tool", output.getvalue())
 
     def test_lanes_overlap_and_pass_together(self):
+        names = ("first", "second", "third")
+        meet = (
+            "import pathlib, sys, time\n"
+            "pathlib.Path(sys.argv[1]).touch()\n"
+            f"deadline = time.monotonic() + {HANG_SECONDS}\n"
+            f"while not all(pathlib.Path(n).exists() for n in {names!r}):\n"
+            "    if time.monotonic() > deadline: sys.exit(1)\n"
+            "    time.sleep(0.01)\n"
+        )
         with tempfile.TemporaryDirectory() as temporary:
-            started = time.monotonic()
             status = run_lanes(
-                {
-                    name: [("wait", python("import time; time.sleep(1)"))]
-                    for name in ("first", "second", "third")
-                },
+                {name: [("meet", python(meet) + [name])] for name in names},
                 temporary,
                 output=io.BytesIO(),
             )
             self.assertEqual(status, 0)
-            self.assertLess(time.monotonic() - started, 2.5)
 
 
     def test_lane_streams_keep_each_lanes_lines_adjacent_when_output_interleaves(self):

@@ -523,7 +523,10 @@ class MeasurementTests(unittest.TestCase):
                     output, errors = contender.communicate(timeout=60)
                     self.assertEqual(contender.returncode, 0, output + errors)
                     self.assertIn(b"admitted", output)
-                    self.assertFalse(audit_alive(guard))
+                    deadline = time.monotonic() + 60
+                    while audit_alive(guard):
+                        self.assertLess(time.monotonic(), deadline)
+                        time.sleep(0.01)
                     self.assertFalse(record_path.exists())
                     self.assertEqual(mutex.stat().st_ino, inode)
                     self.assert_capacity_free()
