@@ -232,15 +232,12 @@ impl Worker {
         self.wake.1.notify_one();
     }
 
-    pub fn start(store: Store, mut origins: Vec<Origin>, cap_status: PathBuf) -> Result<Self> {
-        let home = crate::config::HostPaths::from_env()?.home().to_owned();
-        let mut skills = vec![home.join(".agents/skills")];
-        skills.extend(
-            origins
-                .iter()
-                .filter(|o| o.provider == "claude")
-                .map(|o| o.local_home.join("skills")),
-        );
+    pub fn start(
+        store: Store,
+        mut origins: Vec<Origin>,
+        skills: Vec<PathBuf>,
+        cap_status: PathBuf,
+    ) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let wake = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let mailbox = Arc::new(Mailbox {
@@ -587,6 +584,7 @@ mod tests {
         let worker = Worker::start(
             store.clone(),
             vec![origin.clone()],
+            Vec::new(),
             directory.path().join("disk-cap-status.json"),
         )?;
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -619,7 +617,7 @@ mod tests {
         let (directory, store, origin, path) = fixture();
         std::fs::File::open(&path)?.set_modified(std::time::SystemTime::now())?;
         let status = directory.path().join("disk-cap-status.json");
-        let worker = Worker::start(store.clone(), vec![origin], status.clone())?;
+        let worker = Worker::start(store.clone(), vec![origin], Vec::new(), status.clone())?;
         let deadline = Instant::now() + Duration::from_secs(60);
         while !status.exists() {
             ensure!(Instant::now() < deadline, "Initial source did not finish");

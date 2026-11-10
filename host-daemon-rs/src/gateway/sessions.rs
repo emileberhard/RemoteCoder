@@ -56,13 +56,20 @@ impl Gateway {
                         local_home: claude,
                     },
                 ];
-                let cap_status = crate::config::HostPaths::from_env()?
-                    .home()
-                    .join(".local/state/disk-cap-status/remotecoder-sessions.json");
+                #[cfg(not(test))]
+                let home = crate::config::HostPaths::from_env()?.home().to_owned();
+                #[cfg(test)]
+                let home = root.join("fixture-home");
+                let skills = vec![
+                    home.join(".agents/skills"),
+                    origins[1].local_home.join("skills"),
+                ];
+                let cap_status =
+                    home.join(".local/state/disk-cap-status/remotecoder-sessions.json");
                 tokio::task::spawn_blocking(move || -> Result<Arc<Runtime>> {
                     let store = Store::open(root.join("catalog.sqlite3"))?;
                     let worker =
-                        Arc::new(Worker::start(store.clone(), origins.clone(), cap_status)?);
+                        Arc::new(Worker::start(store.clone(), origins.clone(), skills, cap_status)?);
                     Ok(Arc::new(Runtime {
                         store,
                         origins,
@@ -465,6 +472,7 @@ mod tests {
             Worker::start(
                 store.clone(),
                 vec![origin.clone()],
+                Vec::new(),
                 directory.path().join("cap-status.json"),
             )
             .unwrap(),

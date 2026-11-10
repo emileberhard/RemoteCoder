@@ -164,6 +164,7 @@ pub(super) fn run(store: &Store, origins: &[Origin], mode: &str) -> Result<()> {
     let worker = Worker::start(
         store.clone(),
         origins.to_vec(),
+        Vec::new(),
         store.path.with_file_name("disk-cap-status.json"),
     )?;
     let started = Instant::now();
@@ -280,6 +281,7 @@ fn active(store: &Store, origins: &[Origin]) -> Result<()> {
     let worker = Worker::start(
         store.clone(),
         origins.to_vec(),
+        Vec::new(),
         store.path.with_file_name("disk-cap-status.json"),
     )?;
     let waiting = Instant::now();

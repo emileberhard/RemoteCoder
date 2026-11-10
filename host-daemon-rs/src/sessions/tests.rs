@@ -113,7 +113,13 @@ fn cap_status(store: &Store) -> PathBuf {
         .with_file_name("disk-cap-status.json")
 }
 fn start_worker(store: &Store, origins: &[Origin]) -> super::worker::Worker {
-    super::worker::Worker::start(store.clone(), origins.to_vec(), cap_status(store)).unwrap()
+    super::worker::Worker::start(
+        store.clone(),
+        origins.to_vec(),
+        Vec::new(),
+        cap_status(store),
+    )
+    .unwrap()
 }
 fn await_full_pass(store: &Store) {
     let status = cap_status(store);
@@ -2976,3 +2982,4 @@ fn sessions_conversations_excerpt_keeps_the_match_on_character_boundaries() {
     assert!(excerpt.contains("Malmö"));
     assert!(excerpt.chars().count() <= 240);
 }
+
