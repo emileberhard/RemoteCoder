@@ -32,6 +32,35 @@ impl CatalogConfig {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum CatalogMethod {
+    Search,
+    Locate,
+    SearchByMeaning,
+}
+
+impl CatalogMethod {
+    pub(super) fn parse(method: &str) -> Option<Self> {
+        Some(match method {
+            "sessions/conversations/search" => Self::Search,
+            "sessions/locate" => Self::Locate,
+            "sessions/conversations/searchByMeaning" => Self::SearchByMeaning,
+            _ => return None,
+        })
+    }
+
+    pub(super) fn deadline(self) -> std::time::Duration {
+        match self {
+            Self::Search | Self::Locate => conversations::DEADLINE,
+            Self::SearchByMeaning => crate::sessions::meaning::DEADLINE,
+        }
+    }
+
+    pub(super) fn returns_partial(self) -> bool {
+        matches!(self, Self::Search)
+    }
+}
+
 struct CatalogRead {
     control: Arc<ReadControl>,
     _cancel: CancelRead,
@@ -332,47 +361,29 @@ impl Gateway {
     pub(super) async fn sessions_rpc(
         self: &Arc<Self>,
         grant: &crate::auth::installation_credentials::Grant,
-        method: &str,
+        method: CatalogMethod,
         params: Value,
         deadline: tokio::time::Instant,
-        limit: std::time::Duration,
     ) -> RpcResult {
-        if !matches!(
-            method,
-            "sessions/conversations/search"
-                | "sessions/conversations/searchByMeaning"
-                | "sessions/locate"
-        ) {
-            return self
-                .session_request(grant, method, params)
-                .await
-                .map_err(session_error);
-        }
         let read = CatalogRead::new(deadline);
         let completed: conversations::Completed = Arc::default();
         let work = async {
             match method {
-                "sessions/conversations/search" => {
-                    self.conversation_search(params, &read, &completed).await
-                }
-                "sessions/conversations/searchByMeaning" => {
+                CatalogMethod::Search => self.conversation_search(params, &read, &completed).await,
+                CatalogMethod::SearchByMeaning => {
                     self.conversation_search_by_meaning(params, &read).await
                 }
-                _ => self.locate_session(grant, params, &read).await,
+                CatalogMethod::Locate => self.locate_session(grant, params, &read).await,
             }
         };
         match tokio::time::timeout_at(deadline, work).await {
-            Ok(Ok(result))
-                if method == "sessions/conversations/search" || !read.control.stopped() =>
-            {
-                Ok(result)
-            }
+            Ok(Ok(result)) if method.returns_partial() || !read.control.stopped() => Ok(result),
             Ok(Err(error)) if !read.control.stopped() => Err(error),
             Ok(_) | Err(_) => conversations::partial(&completed)
                 .map(|response| {
                     serde_json::to_value(response).map_err(|error| session_error(error.into()))
                 })
-                .unwrap_or_else(|| Err(RpcError::request_timed_out(limit))),
+                .unwrap_or_else(|| Err(RpcError::request_timed_out(method.deadline()))),
         }
     }
 
@@ -665,10 +676,9 @@ mod tests {
         let response = gateway
             .sessions_rpc(
                 &grant,
-                "sessions/conversations/search",
+                CatalogMethod::Search,
                 json!({"query":"ownershipneedle","limit":30}),
                 tokio::time::Instant::now() + conversations::DEADLINE,
-                conversations::DEADLINE,
             )
             .await
             .unwrap();
@@ -697,10 +707,9 @@ mod tests {
         let response = gateway
             .sessions_rpc(
                 &grant,
-                "sessions/conversations/search",
+                CatalogMethod::Search,
                 json!({"query":"ownershipneedle","limit":30}),
                 tokio::time::Instant::now() + conversations::DEADLINE,
-                conversations::DEADLINE,
             )
             .await
             .unwrap();
@@ -718,10 +727,9 @@ mod tests {
                 gateway
                     .sessions_rpc(
                         &grant,
-                        "sessions/conversations/search",
+                        CatalogMethod::Search,
                         params,
-                        tokio::time::Instant::now() + conversations::DEADLINE,
-                        conversations::DEADLINE
+                        tokio::time::Instant::now() + conversations::DEADLINE
                     )
                     .await
                     .unwrap_err()

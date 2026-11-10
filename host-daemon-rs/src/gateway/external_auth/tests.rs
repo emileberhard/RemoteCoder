@@ -168,7 +168,7 @@ impl Fixture {
             )),
             claude.settings.clone(),
             journal,
-            crate::gateway::GatewayState::fixture(directory.path().join("state")),
+            crate::gateway::GatewayStorage::fixture(directory.path().join("state")),
             None,
             Some(super::ExternalAuth::new(
                 crate::providers::codex::router::Router::for_test(config),

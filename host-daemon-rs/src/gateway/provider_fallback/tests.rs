@@ -229,7 +229,7 @@ async fn both_first_party_unavailable_use_configured_copilot_with_native_codex_a
         )),
         home.settings.clone(),
         journal,
-        crate::gateway::GatewayState::fixture(state),
+        crate::gateway::GatewayStorage::fixture(state),
         None,
         None,
         Some(external),

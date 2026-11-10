@@ -240,12 +240,12 @@ pub(crate) struct DaemonReady {
     pub started_at_unix_seconds: f64,
 }
 
-pub(crate) struct GatewayState {
+pub(crate) struct GatewayStorage {
     directory: PathBuf,
     catalog: sessions::CatalogConfig,
 }
 
-impl GatewayState {
+impl GatewayStorage {
     pub(crate) fn host(paths: &crate::config::HostPaths) -> Self {
         Self {
             directory: paths.state_directory(),
@@ -421,7 +421,7 @@ impl Gateway {
         apns: Arc<PushService>,
         claude_settings: ClaudeSettings,
         journal: Journal,
-        state: GatewayState,
+        state: GatewayStorage,
         call_delivery: Option<calls::CallDeliveryConfig>,
         external_auth: Option<ExternalAuth>,
         external_providers: Option<Arc<ExternalProviders>>,

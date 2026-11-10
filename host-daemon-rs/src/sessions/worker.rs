@@ -168,6 +168,29 @@ struct ParentProjection {
 }
 
 impl ParentProjection {
+    fn refresh_metadata(
+        &mut self,
+        db: &rusqlite::Connection,
+        origins: &[Origin],
+        mailbox: &Mailbox,
+    ) -> Result<()> {
+        super::metadata::titles(db, origins)?;
+        self.refresh(db, origins, mailbox)
+    }
+
+    fn settle(
+        &mut self,
+        db: &mut rusqlite::Connection,
+        origins: &[Origin],
+        mailbox: &Mailbox,
+    ) -> Result<()> {
+        self.refresh_metadata(db, origins, mailbox)?;
+        super::index::drain(db, &mailbox.stop, &mut |db| {
+            mailbox.serve(db, origins);
+            Ok(())
+        })
+    }
+
     fn refresh(
         &mut self,
         db: &rusqlite::Connection,
@@ -415,11 +438,7 @@ impl Worker {
                         if !full && paths.is_empty() && !endpoint.requested() {
                             if parent_update {
                                 let mut db = store.writer()?;
-                                parent_projection.refresh(&db, &origins, &endpoint)?;
-                                super::index::drain(&mut db, &flag, &mut |db| {
-                                    endpoint.serve(db, &origins);
-                                    Ok(())
-                                })?;
+                                parent_projection.settle(&mut db, &origins, &endpoint)?;
                             }
                             return Ok(serde_json::json!({"ingested":0,"parseFailures":0}));
                         }
@@ -432,8 +451,7 @@ impl Worker {
                             _watcher = Some(watch(&mut origins, signal.clone())?);
                             let mut db = store.writer()?;
                             endpoint.reconcile(&mut db, &origins)?;
-                            parent_projection.refresh(&db, &origins, &endpoint)?;
-                            super::metadata::titles(&db, &origins)?;
+                            parent_projection.refresh_metadata(&db, &origins, &endpoint)?;
                             endpoint.serve(&mut db, &origins);
                             hot.observe(&db, &origins)?;
                         } else if endpoint.requested() {
@@ -457,12 +475,7 @@ impl Worker {
                         )?;
                         {
                             let mut db = store.writer()?;
-                            super::metadata::titles(&db, &origins)?;
-                            parent_projection.refresh(&db, &origins, &endpoint)?;
-                            super::index::drain(&mut db, &flag, &mut |db| {
-                                endpoint.serve(db, &origins);
-                                Ok(())
-                            })?;
+                            parent_projection.settle(&mut db, &origins, &endpoint)?;
                         }
                         hot.observe(&*store.reader()?, &origins)?;
                         if full && outcome["cancelled"] != true {
@@ -484,11 +497,7 @@ impl Worker {
                                 },
                             )?;
                             let mut db = store.writer()?;
-                            parent_projection.refresh(&db, &origins, &endpoint)?;
-                            super::index::drain(&mut db, &flag, &mut |db| {
-                                endpoint.serve(db, &origins);
-                                Ok(())
-                            })?;
+                            parent_projection.settle(&mut db, &origins, &endpoint)?;
                             Ok(projected)
                         })();
                         let _ = reply.send(result);

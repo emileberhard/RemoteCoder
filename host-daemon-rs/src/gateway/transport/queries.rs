@@ -1,5 +1,5 @@
 use super::{ClientTx, Gateway, QUERY_DEADLINE};
-use crate::gateway::admission::Admission;
+use crate::gateway::{admission::Admission, sessions::CatalogMethod};
 use crate::rpc::dispatch::ClientRequest;
 use crate::rpc::error::{ErrorKind, RpcCode, RpcData};
 use crate::rpc::{RequestPermit, RpcError};
@@ -20,32 +20,18 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 #[derive(Clone, Copy)]
 struct QueryPolicy {
     limit: std::time::Duration,
-    completes_at_deadline: bool,
+    catalog: Option<CatalogMethod>,
 }
 
 impl QueryPolicy {
     fn for_method(method: &str) -> Self {
-        match method {
-            "sessions/conversations/search" => Self {
-                limit: crate::sessions::conversations::DEADLINE,
-                completes_at_deadline: true,
-            },
-            "sessions/locate" => Self {
-                limit: crate::sessions::conversations::DEADLINE,
-                completes_at_deadline: false,
-            },
-            "sessions/conversations/searchByMeaning" => Self {
-                limit: crate::sessions::meaning::DEADLINE,
-                completes_at_deadline: false,
-            },
-            _ => Self {
-                limit: QUERY_DEADLINE,
-                completes_at_deadline: false,
-            },
+        let catalog = CatalogMethod::parse(method);
+        Self {
+            limit: catalog.map_or(QUERY_DEADLINE, CatalogMethod::deadline),
+            catalog,
         }
     }
 }
-
 const RUNNING_LIMIT: usize = 8;
 const QUEUE_LIMIT: usize = 64;
 const QUERY_BYTES: usize = 2 * 1024 * 1024;
@@ -325,10 +311,7 @@ async fn run_query(
             Err(error) => return gateway.send_error_to(&out, Some(&id), &error).await,
         };
         let target = request.owned.expect("owned query route").target;
-        if matches!(
-            target,
-            crate::rpc::dispatch::OwnedTarget::Gateway(crate::rpc::dispatch::OwnedRoute::Sessions)
-        ) {
+        if let Some(method) = policy.catalog {
             let response = match gateway.validate_member_grant(&out.grant).await {
                 Ok(()) => {
                     gateway
@@ -344,7 +327,7 @@ async fn run_query(
                 Err(error) => Err(error),
             };
             return gateway
-                .respond(&out, id.clone(), response, Some(&method))
+                .respond(&out, id.clone(), response, Some(&request.method))
                 .await
                 .map(|_| ());
         }
@@ -355,7 +338,7 @@ async fn run_query(
     let outcome = if Instant::now() >= deadline.deadline() {
         drop(work);
         None
-    } else if policy.completes_at_deadline {
+    } else if policy.catalog.is_some_and(CatalogMethod::returns_partial) {
         tokio::select! {
             biased;
             result = work => Some(result),
