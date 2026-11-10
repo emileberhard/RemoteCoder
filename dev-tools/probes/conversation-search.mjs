@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdir, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {IsolatedGateway} from './isolated-gateway.mjs';
 
@@ -22,7 +22,7 @@ try {
   await writeFile(config,JSON.stringify({command:'/bin/sh',args:[provider]}));
   await lab.writeGatewayEnv(['RC_CLAUDE_ENABLED=false',`RC_CLAUDE_HOME=${home}`,`RC_CODEX_GATEWAY_CONVERSATION_SEARCH_PROVIDER_FILE=${config}`]);
   await lab.start();
-  const {rpc}=await lab.connect();
+  const {ws,rpc}=await lab.connect();
   const info=await rpc('host/info',{});
   assert.equal(info.result.conversationSearch,true);
   assert.equal(info.result.conversationSearchByMeaning,true);
@@ -50,6 +50,19 @@ try {
   for(const params of [{query:'',limit:30},{query:'drawer',limit:0},{query:'drawer',limit:30,extra:true}]) {
     assert.equal((await rpc('sessions/conversations/search',params)).error.code,-32602);
   }
+  const pidFile=lab.path('meaning.pid');
+  await writeFile(provider,`cat >/dev/null\necho $$ > '${pidFile}'\nsleep 30\n`);
+  let resolveCancelled;
+  const cancelled=new Promise(resolve=>{resolveCancelled=resolve;});
+  const listener=event=>{const message=JSON.parse(String(event.data));if(message.id==='meaning-cancel')resolveCancelled(message);};
+  ws.addEventListener('message',listener);
+  ws.send(JSON.stringify({id:'meaning-cancel',method:'sessions/conversations/searchByMeaning',params:{query:'cancel this provider',limit:20}}));
+  let pid;
+  await lab.waitFor(async()=>{try{pid=Number((await readFile(pidFile,'utf8')).trim());return pid>0;}catch{return false;}},10);
+  ws.send(JSON.stringify({method:'$/cancelRequest',params:{id:'meaning-cancel'}}));
+  assert.equal((await lab.within(cancelled,3000,'Meaning cancellation did not answer')).error.data.kind,'requestCancelled');
+  await lab.waitFor(async()=>{try{process.kill(pid,0);return false;}catch{return true;}},3);
+  ws.removeEventListener('message',listener);
   console.log(JSON.stringify({ok:true,search:true,diacritics:true,locate:located.result,meaning:true}));
 } catch(error) {failure=error;}
 finally {

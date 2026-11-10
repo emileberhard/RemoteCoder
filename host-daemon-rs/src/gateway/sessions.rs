@@ -72,12 +72,14 @@ impl Gateway {
                     home.join(".local/state/disk-cap-status/remotecoder-sessions.json");
                 tokio::task::spawn_blocking(move || -> Result<Arc<Runtime>> {
                     #[cfg(not(test))]
-                    let capacity = crate::sessions::storage::Capacity::Host;
+                    let store = Store::open(root.join("catalog.sqlite3"))?;
                     #[cfg(test)]
-                    let capacity = crate::sessions::storage::Capacity::Fixed {
-                        free_bytes: 1 << 40,
-                    };
-                    let store = Store::open_with_capacity(root.join("catalog.sqlite3"), capacity)?;
+                    let store = Store::open_with_capacity(
+                        root.join("catalog.sqlite3"),
+                        crate::sessions::storage::Capacity::Fixed {
+                            free_bytes: 1 << 40,
+                        },
+                    )?;
                     let worker = Arc::new(Worker::start(
                         store.clone(),
                         origins.clone(),
