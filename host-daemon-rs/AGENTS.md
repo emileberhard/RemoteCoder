@@ -543,6 +543,12 @@ blocks startup or provider journal retirement.
   handler on cancellation, disconnect or deadline. Two dedicated reader permits
   isolate it from inventory/mirror reads. `src/sessions/README.md` owns its wire
   contract and measured bounds. The existing `sessions/search` stays unchanged.
+- `sessions/locate` shares the `conversationSearch` capability and a one-second
+  Query lifetime. Claude uses the existing projection, including exact native
+  child-to-Agent links in the parent. Codex uses read-only occurrences and exact
+  item verification, never resume/subscription. Two physical native reads retain
+  permits until their replies even if the waiter cancels; saturation returns the
+  known turn immediately. Catalog and Claude scans share search cancellation.
 - `host/info` returns the gateway process's `homeDirectory`, physical `hostname`,
   `automationsAuthority`, `speechAvailable`, `fleetLiveActivity`, `claudeQueue` and `conversationSearch` capabilities. These are the
   authoritative inputs for client feature availability and physical-host routing.

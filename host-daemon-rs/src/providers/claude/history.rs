@@ -48,6 +48,33 @@ impl ClaudeHistory {
         }
     }
 
+    pub(crate) fn locate_blocking(
+        &self,
+        thread_id: &str,
+        active_turn: Option<&str>,
+        target: &super::projection::LocateTarget,
+        check: &dyn Fn() -> Result<()>,
+        verify: impl FnOnce(&File) -> Result<()>,
+    ) -> Result<Option<super::projection::Location>, HistoryError> {
+        let session_uuid = crate::providers::claude::session_uuid_from_thread_id(thread_id)
+            .ok_or_else(|| HistoryError::InvalidRequest("Invalid Claude thread identity".into()))?;
+        let path = find_session_path(session_uuid, &self.home)?
+            .ok_or_else(|| HistoryError::InvalidRequest("Claude source is unavailable".into()))?;
+        self.projections
+            .read_cancellable(
+                &self.home,
+                thread_id,
+                &path,
+                active_turn,
+                check,
+                |projection, file| {
+                    verify(file)?;
+                    Ok(projection.locate(file, target, check)?)
+                },
+            )
+            .map(|(location, _)| location)
+    }
+
     pub(crate) async fn read_projection<T: Send + 'static>(
         &self,
         thread_id: &str,

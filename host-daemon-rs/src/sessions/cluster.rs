@@ -38,11 +38,19 @@ pub(crate) fn forward_read(
     if request.local {
         return Ok(None);
     }
-    let mut parts = request.target.splitn(4, ':');
+    let Some(host) = target_origin(local_host, &request.target) else {
+        return Ok(None);
+    };
+    request.local = true;
+    Ok(Some((host, serde_json::to_value(request)?)))
+}
+
+pub(crate) fn target_origin(local_host: &str, target: &str) -> Option<String> {
+    let mut parts = target.splitn(4, ':');
     let (Some(host), Some(provider), Some(home), Some(thread)) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     else {
-        return Ok(None);
+        return None;
     };
     if host == local_host
         || host.is_empty()
@@ -51,11 +59,9 @@ pub(crate) fn forward_read(
         || !home.bytes().all(|b| b.is_ascii_hexdigit())
         || thread.is_empty()
     {
-        return Ok(None);
+        return None;
     }
-    let host = host.to_owned();
-    request.local = true;
-    Ok(Some((host, serde_json::to_value(request)?)))
+    Some(host.to_owned())
 }
 
 pub(crate) async fn search(

@@ -1,3 +1,5 @@
+mod locate;
+
 use super::Gateway;
 use crate::rpc::error::{RpcCode, RpcData};
 use crate::rpc::{RpcError, RpcResult};
@@ -14,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
 
 tokio::task_local! {
-    pub(super) static CONVERSATION_SEARCH_DEADLINE: std::time::Instant;
+    pub(super) static SESSION_REQUEST_DEADLINE: std::time::Instant;
 }
 
 pub(super) struct Runtime {
@@ -23,6 +25,8 @@ pub(super) struct Runtime {
     worker: Arc<Worker>,
     readers: Arc<Semaphore>,
     search_readers: Arc<Semaphore>,
+    native_locates: Arc<Semaphore>,
+    locate_tasks: crate::tasks::owned_tasks::OwnedTasks,
     mirror_lock: Mutex<()>,
     mirror_failures: Arc<mirror::Failures>,
     mirror_stop: tokio_util::sync::CancellationToken,
@@ -68,14 +72,20 @@ impl Gateway {
                     home.join(".local/state/disk-cap-status/remotecoder-sessions.json");
                 tokio::task::spawn_blocking(move || -> Result<Arc<Runtime>> {
                     let store = Store::open(root.join("catalog.sqlite3"))?;
-                    let worker =
-                        Arc::new(Worker::start(store.clone(), origins.clone(), skills, cap_status)?);
+                    let worker = Arc::new(Worker::start(
+                        store.clone(),
+                        origins.clone(),
+                        skills,
+                        cap_status,
+                    )?);
                     Ok(Arc::new(Runtime {
                         store,
                         origins,
                         worker,
                         readers: Arc::new(Semaphore::new(16)),
                         search_readers: Arc::new(Semaphore::new(2)),
+                        native_locates: Arc::new(Semaphore::new(2)),
+                        locate_tasks: Default::default(),
                         mirror_lock: Mutex::new(()),
                         mirror_failures: Arc::default(),
                         mirror_stop: tokio_util::sync::CancellationToken::new(),
@@ -132,6 +142,7 @@ impl Gateway {
 
     pub(super) async fn stop_sessions(&self) {
         if let Some(runtime) = self.session_runtime.get() {
+            runtime.locate_tasks.stop().await;
             runtime.mirror_stop.cancel();
             let task = runtime.mirror_task.lock().await.take();
             if let Some(task) = task {
@@ -247,6 +258,9 @@ impl Gateway {
         method: &str,
         params: Value,
     ) -> RpcResult {
+        if method == "sessions/locate" {
+            return self.locate_session(grant, params).await;
+        }
         if method == "sessions/conversations/search" {
             return self.conversation_search(params).await;
         }
@@ -259,7 +273,7 @@ impl Gateway {
         let request: conversations::Request =
             serde_json::from_value(params).map_err(|error| session_error(error.into()))?;
         request.terms().map_err(session_error)?;
-        let deadline = CONVERSATION_SEARCH_DEADLINE
+        let deadline = SESSION_REQUEST_DEADLINE
             .try_with(|deadline| *deadline)
             .unwrap_or_else(|_| std::time::Instant::now() + conversations::DEADLINE);
         let control = ReadControl::new(deadline);
@@ -490,6 +504,8 @@ mod tests {
                 worker,
                 readers: Arc::new(Semaphore::new(16)),
                 search_readers: Arc::new(Semaphore::new(2)),
+                native_locates: Arc::new(Semaphore::new(2)),
+                locate_tasks: Default::default(),
                 mirror_lock: Mutex::new(()),
                 mirror_failures: Arc::default(),
                 mirror_stop: tokio_util::sync::CancellationToken::new(),

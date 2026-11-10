@@ -23,6 +23,9 @@ enum Operation {
         #[arg(long, default_value_t = 30)]
         limit: usize,
     },
+    Locate {
+        item_key: String,
+    },
     Search {
         query: String,
         #[arg(long)]
@@ -82,6 +85,7 @@ fn request(command: &Command) -> Result<(&'static str, Value)> {
                 limit: *limit,
             })?,
         ),
+        Operation::Locate { item_key } => ("sessions/locate", json!({"itemKey":item_key})),
         Operation::Search {
             query,
             since: date,

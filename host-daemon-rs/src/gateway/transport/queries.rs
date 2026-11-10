@@ -18,8 +18,9 @@ use tokio::time::{Instant, Sleep};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 pub(super) fn query_deadline(method: &str) -> std::time::Duration {
-    if method == "sessions/conversations/search" {
+    if matches!(method, "sessions/conversations/search" | "sessions/locate") {
         crate::sessions::conversations::DEADLINE
+
     } else {
         QUERY_DEADLINE
     }
@@ -309,7 +310,7 @@ async fn run_query(
     };
     let duration = query_deadline(&method);
     let search_deadline = deadline.deadline().into_std();
-    let work = crate::gateway::sessions::CONVERSATION_SEARCH_DEADLINE.scope(search_deadline, work);
+    let work = crate::gateway::sessions::SESSION_REQUEST_DEADLINE.scope(search_deadline, work);
     let outcome = if Instant::now() >= deadline.deadline() {
         drop(work);
         None

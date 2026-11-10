@@ -739,6 +739,18 @@ impl Gateway {
         let response = render_codex_tool_response(&call.id, &outcome);
         Ok(serde_json::to_string(&response)?)
     }
+    pub(super) async fn call_control_read_until_reply(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value> {
+        let (reply, _pending) = self.send_control_call(method, params).await?;
+        reply
+            .await
+            .context("Codex read response channel closed")?
+            .map_err(anyhow::Error::msg)
+    }
+
     pub(super) async fn call_control(&self, method: &str, params: Value) -> Result<Value> {
         self.call_control_with_timeout(
             method,

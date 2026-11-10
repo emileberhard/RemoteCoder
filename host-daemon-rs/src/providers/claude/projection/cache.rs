@@ -67,6 +67,33 @@ impl ProjectionCache {
         active_turn: Option<&str>,
         read: impl FnOnce(&Projection, &File) -> Result<T, HistoryError>,
     ) -> Result<(T, CacheOutcome), HistoryError> {
+        self.read_with_check(home, thread_id, path, active_turn, None, read)
+    }
+
+    pub(crate) fn read_cancellable<T>(
+        &self,
+        home: &Path,
+        thread_id: &str,
+        path: &Path,
+        active_turn: Option<&str>,
+        check: &dyn Fn() -> Result<()>,
+        read: impl FnOnce(&Projection, &File) -> Result<T, HistoryError>,
+    ) -> Result<(T, CacheOutcome), HistoryError> {
+        self.read_with_check(home, thread_id, path, active_turn, Some(check), read)
+    }
+
+    fn read_with_check<T>(
+        &self,
+        home: &Path,
+        thread_id: &str,
+        path: &Path,
+        active_turn: Option<&str>,
+        check: Option<&dyn Fn() -> Result<()>>,
+        read: impl FnOnce(&Projection, &File) -> Result<T, HistoryError>,
+    ) -> Result<(T, CacheOutcome), HistoryError> {
+        if let Some(check) = check {
+            check()?;
+        }
         let file =
             File::open(path).with_context(|| format!("failed opening {}", path.display()))?;
         let session = FileRevision::from(
@@ -80,23 +107,44 @@ impl ProjectionCache {
         };
         let gate = self.gate(path);
         let (projection, outcome) = {
-            let _building = gate.lock().unwrap_or_else(PoisonError::into_inner);
+            let _building = if let Some(check) = check {
+                loop {
+                    check()?;
+                    match gate.try_lock() {
+                        Ok(guard) => break guard,
+                        Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+                        Err(std::sync::TryLockError::WouldBlock) => {
+                            std::thread::sleep(std::time::Duration::from_millis(2))
+                        }
+                    }
+                }
+            } else {
+                gate.lock().unwrap_or_else(PoisonError::into_inner)
+            };
             match self.cached(path, &key) {
                 Some(projection) => (projection, CacheOutcome::Hit),
                 None => {
                     let index =
                         crate::providers::claude::conversation_index::read(home, thread_id)?;
-                    let projection = Arc::new(Projection::build(
-                        &file,
-                        key.session.length,
-                        &index,
-                        active_turn,
-                    )?);
+                    let projection = Arc::new(if let Some(check) = check {
+                        Projection::build_checked(
+                            &file,
+                            key.session.length,
+                            &index,
+                            active_turn,
+                            Some(check),
+                        )?
+                    } else {
+                        Projection::build(&file, key.session.length, &index, active_turn)?
+                    });
                     let outcome = self.insert(path, key, Arc::clone(&projection));
                     (projection, outcome)
                 }
             }
         };
+        if let Some(check) = check {
+            check()?;
+        }
         Ok((read(&projection, &file)?, outcome))
     }
 

@@ -389,7 +389,7 @@ fn range_bytes(file: &mut File, total: u64, offset: u64, length: usize) -> Resul
     Ok(bytes)
 }
 
-fn item_bytes(
+pub(crate) fn item_bytes(
     mut file: File,
     reference: &SourceRef,
     offset: u64,

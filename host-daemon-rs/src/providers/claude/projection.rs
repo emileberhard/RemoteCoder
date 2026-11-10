@@ -412,6 +412,18 @@ impl Scan {
     }
 }
 
+pub(crate) enum LocateTarget {
+    Item { offset: u64, part: usize },
+    Agent { agent_id: String },
+}
+
+#[derive(Debug)]
+pub(crate) struct Location {
+    pub turn_id: String,
+    pub item_id: String,
+    pub turns_cursor: String,
+}
+
 impl Projection {
     pub(crate) fn build(
         file: &File,
@@ -419,8 +431,113 @@ impl Projection {
         index: &Index,
         active_turn: Option<&str>,
     ) -> Result<Self> {
-        let scan = scan(file, length)?;
-        Ok(project(scan, index, active_turn))
+        Self::build_checked(file, length, index, active_turn, None)
+    }
+
+    pub(super) fn build_checked(
+        file: &File,
+        length: u64,
+        index: &Index,
+        active_turn: Option<&str>,
+        check: Option<&dyn Fn() -> Result<()>>,
+    ) -> Result<Self> {
+        let scan = scan(file, length, check)?;
+        if let Some(check) = check {
+            check()?;
+        }
+        let projection = project(scan, index, active_turn);
+        if let Some(check) = check {
+            check()?;
+        }
+        Ok(projection)
+    }
+
+    pub(crate) fn locate(
+        &self,
+        file: &File,
+        target: &LocateTarget,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Option<Location>> {
+        match target {
+            LocateTarget::Item { offset, part } => self.locate_item(*offset, *part, check),
+            LocateTarget::Agent { agent_id } => {
+                let mut found = None;
+                let mut records = RecordReader::new(file);
+                for item in &self.items {
+                    check()?;
+                    let Source::Tool {
+                        record,
+                        block,
+                        result: Some(result),
+                    } = &item.source
+                    else {
+                        continue;
+                    };
+                    if records
+                        .read(*record)?
+                        .pointer(&format!("/message/content/{block}/name"))
+                        .and_then(Value::as_str)
+                        != Some("Agent")
+                    {
+                        continue;
+                    }
+                    if records
+                        .read(result.record)?
+                        .pointer("/toolUseResult/agentId")
+                        .and_then(Value::as_str)
+                        == Some(agent_id)
+                    {
+                        if found.is_some() {
+                            return Ok(None);
+                        }
+                        found = Some(self.location(item)?);
+                    }
+                }
+                Ok(found)
+            }
+        }
+    }
+
+    fn location(&self, item: &Item) -> Result<Location> {
+        let turn_id = self.turns[item.turn].id.clone();
+        Ok(Location {
+            item_id: item.id.clone(),
+            turns_cursor: serde_json::to_string(&TurnsCursor {
+                turn_id: turn_id.clone(),
+                include_anchor: true,
+            })?,
+            turn_id,
+        })
+    }
+
+    fn locate_item(
+        &self,
+        offset: u64,
+        part: usize,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Option<Location>> {
+        for item in &self.items {
+            check()?;
+            let matches = match &item.source {
+                Source::Prompt(span) | Source::Queued(span) => span.offset == offset,
+                Source::Text { record, block } => record.offset == offset && *block == part,
+                Source::Tool {
+                    record,
+                    block,
+                    result,
+                } => {
+                    record.offset == offset && *block == part
+                        || result
+                            .as_ref()
+                            .is_some_and(|r| r.record.offset == offset && r.part == part)
+                }
+                Source::Synthetic(_) => false,
+            };
+            if matches {
+                return Ok(Some(self.location(item)?));
+            }
+        }
+        Ok(None)
     }
 
     pub(crate) fn estimated_bytes(&self) -> usize {
@@ -936,7 +1053,7 @@ fn validate_record_ids(record: &Value) -> Result<()> {
     Ok(())
 }
 
-fn scan(file: &File, length: u64) -> Result<Scan> {
+fn scan(file: &File, length: u64, check: Option<&dyn Fn() -> Result<()>>) -> Result<Scan> {
     let mut reader = BufReader::new(file.take(length));
     let mut scan = Scan::default();
     let mut block_offsets = HashMap::new();
@@ -944,6 +1061,9 @@ fn scan(file: &File, length: u64) -> Result<Scan> {
     let mut line = Vec::new();
     let mut offset = 0u64;
     loop {
+        if let Some(check) = check {
+            check()?;
+        }
         line.clear();
         let (read, kind) = read_bounded_line(&mut reader, &mut line, MAX_SESSION_RECORD_BYTES)
             .context("failed reading Claude session")?;

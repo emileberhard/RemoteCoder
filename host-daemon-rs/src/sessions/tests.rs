@@ -2983,3 +2983,30 @@ fn sessions_conversations_excerpt_keeps_the_match_on_character_boundaries() {
     assert!(excerpt.chars().count() <= 240);
 }
 
+#[test]
+fn sessions_locate_preserves_native_turn_and_checks_exact_source() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let db = f.store.reader()?;
+    let key: String = db.query_row("SELECT item_key FROM item WHERE kind='tool_result' AND session_key LIKE '%codex-root' LIMIT 1", [], |r| r.get(0))?;
+    let request = super::locate::Request { item_key: key };
+    let control = super::store::ReadControl::new(Instant::now() + super::locate::DEADLINE);
+    let item = super::locate::item(&db, &request, &control)?;
+    assert_eq!(item.response.thread_id, "codex-root");
+    assert_eq!(item.response.turn_id.as_deref(), Some("turn-1"));
+    assert!(item.response.item_id.is_none() && item.response.turns_cursor.is_none());
+    std::fs::write(&f.codex, "changed source\n")?;
+    assert!(
+        super::locate::item(&db, &request, &control)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("source_changed")
+    );
+    assert!(
+        serde_json::from_value::<super::locate::Request>(json!({"itemKey":"x","unknown":true}))
+            .is_err()
+    );
+    Ok(())
+}
+

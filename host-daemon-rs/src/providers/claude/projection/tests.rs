@@ -1443,3 +1443,71 @@ fn context_notes_never_appear_in_plain_or_queued_user_history() {
         }
     }
 }
+
+#[test]
+fn locate_maps_exact_parts_and_agent_links_to_inclusive_turn_cursors() {
+    let home = tempfile::tempdir().unwrap();
+    let records = [
+        json!({"type":"user","uuid":"prompt","cwd":CWD,"message":{"role":"user","content":"Start"}}),
+        json!({"type":"assistant","uuid":"answer","message":{"id":"answer","content":[{"type":"text","text":"First"},{"type":"tool_use","id":"spawn","name":"Agent","input":{"prompt":"Child"}}]}}),
+        json!({"type":"user","uuid":"result","toolUseResult":{"agentId":"child"},"message":{"content":[{"type":"tool_result","tool_use_id":"spawn","content":"Done"}]}}),
+    ];
+    let path = write_session(home.path(), CWD, "locate", &records);
+    let (projection, file) = project(home.path(), "claude_locate", &path, None);
+    let offset = serde_json::to_vec(&records[0]).unwrap().len() as u64 + 1;
+    let text = projection
+        .locate(&file, &LocateTarget::Item { offset, part: 0 }, &|| Ok(()))
+        .unwrap()
+        .unwrap();
+    let tool = projection
+        .locate(&file, &LocateTarget::Item { offset, part: 1 }, &|| Ok(()))
+        .unwrap()
+        .unwrap();
+    assert_ne!(text.item_id, tool.item_id);
+    let agent = projection
+        .locate(
+            &file,
+            &LocateTarget::Agent {
+                agent_id: "child".into(),
+            },
+            &|| Ok(()),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(agent.item_id, tool.item_id);
+    let page = projection
+        .turns_page(
+            &file,
+            &turns_params(
+                "claude_locate",
+                Some(agent.turns_cursor),
+                Some(1),
+                Some(ItemsView::Full),
+            ),
+        )
+        .unwrap();
+    assert_eq!(page["data"][0]["id"], agent.turn_id);
+    assert!(
+        projection
+            .locate(
+                &file,
+                &LocateTarget::Agent {
+                    agent_id: "missing".into()
+                },
+                &|| Ok(())
+            )
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        projection
+            .locate(
+                &file,
+                &LocateTarget::Agent {
+                    agent_id: "child".into()
+                },
+                &|| anyhow::bail!("cancelled")
+            )
+            .is_err()
+    );
+}
