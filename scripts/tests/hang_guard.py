@@ -1,0 +1,1 @@
+HANG_SECONDS = 60
