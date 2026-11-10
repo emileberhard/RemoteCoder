@@ -676,7 +676,11 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let draftID = newChatDraftID
         ownedTasks.start(.searchAsk) { [weak self] in
             guard let self, await self.prepareDraft(), !Task.isCancelled, self.newChatDraftID == draftID,
-                  self.activeSessionID == nil, !self.isRetired, !self.showsUnsentContent else { return }
+                  self.activeSessionID == nil, !self.isRetired else { return }
+            guard !self.showsUnsentContent else {
+                self.present(.conversation("This chat has an unsent draft. Open a new chat before asking an agent to search."))
+                return
+            }
             self.input = ConversationSearchQuery.agentPrompt(for: query)
             _ = await self.send()
         }
