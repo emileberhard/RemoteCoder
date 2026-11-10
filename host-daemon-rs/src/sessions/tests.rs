@@ -2865,6 +2865,31 @@ fn sessions_conversations_timeout_preserves_completed_results() {
 }
 
 #[test]
+fn sessions_conversations_ignore_punctuation_only_query_terms() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let key = super::session_key(&f.origins[0], "codex-root");
+    f.store.writer()?.execute(
+        "UPDATE session SET title='Fix arrow a b' WHERE session_key=?1",
+        [&key],
+    )?;
+    for query in ["fix -> arrow", "fix — arrow", "a & b"] {
+        let result = conversation_search(&f.store, query, 30, Default::default());
+        assert_eq!(result.conversations.len(), 1);
+        assert!(result.conversations[0].title_match);
+    }
+    assert!(
+        super::conversations::Request {
+            query: "\"".into(),
+            limit: 30
+        }
+        .terms()
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn sessions_conversations_validate_the_pinned_params() {
     use super::conversations::Request;
     for value in [

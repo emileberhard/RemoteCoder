@@ -38,6 +38,10 @@ impl Request {
             }
         }
         ensure!(terms.len() <= 8, "query accepts at most 8 distinct terms");
+        terms.retain(|term| {
+            term.chars().any(|c| c.is_alphanumeric() || matches!(c, '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}'))
+        });
+        ensure!(!terms.is_empty(), "query must contain a searchable word");
         Ok(terms)
     }
 }

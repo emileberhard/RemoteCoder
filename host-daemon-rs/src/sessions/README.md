@@ -184,8 +184,11 @@ The trimmed query accepts 1–512 UTF-8 bytes and at most eight deduplicated,
 case-insensitive whitespace-separated terms. `limit` is required and accepts
 1–50 conversations. Unknown fields are invalid params. All terms must be covered
 by the conversation across its title, folder and messages; the final term is a
-word prefix. SQLite unicode61 folds case and Latin diacritics, including Malmö
-for `malmo`. Two- and three-character prefixes have dedicated indexes.
+word prefix. Punctuation-only terms are ignored. A query with no searchable
+word is invalid. SQLite unicode61 folds case and Latin diacritics, including
+Malmö for `malmo`. Two- and three-character prefixes have dedicated indexes.
+Word prefixes start at token boundaries. For example, `searchsession` does
+not match `ConversationSearchSession`.
 
 Conversation documents contain separately weighted title, typed-user,
 assistant/reasoning and folder columns. Title and typed text receive weights
@@ -204,7 +207,8 @@ to three `hits`. A hit contains its exact `itemKey`, catalog `kind`, nullable
 `at`, an excerpt of at most 240 Unicode characters, and nullable `agentThreadId`
 for a folded child. Unknown dates and metadata stay null. Deleted sources are
 excluded. Native ancestry and persisted delegated parents fold through at most
-16 links; missing, ambiguous or cyclic ancestry leaves a session unfolded.
+16 links. A missing ancestor stops the walk at the nearest present ancestor.
+Ambiguous delegated ownership and cycles leave the session unfolded.
 Explicit promotion overrides native ancestry.
 
 At most 128 ranked document candidates are fetched. A scoped item word index
