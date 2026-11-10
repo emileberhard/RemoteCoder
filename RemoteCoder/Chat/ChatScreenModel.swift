@@ -42,7 +42,13 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     var renderWindowIDs: Set<UUID> {
         Set(messages.map(\.id)).union(preparingRenderWindows.values.flatMap { $0 })
     }
-    private(set) var forkableMessageIDs: Set<UUID> = []
+    private var projectedForkBoundaries: [UUID: ForkBoundary] = [:]
+    var forkBoundaries: [UUID: ForkBoundary] {
+        guard let activeSessionID, target.supportsItemForks(threadID: activeSessionID) else {
+            return projectedForkBoundaries.filter { $0.value.isTurnEnd }
+        }
+        return projectedForkBoundaries
+    }
     private(set) var editBases: [UUID: MessageEditBase] = [:]
     var isComposerFocused = false
     private(set) var composerSends = 0
@@ -244,7 +250,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func countChanges(from message: ChatMessage) {
-        guard forkableMessageIDs.contains(message.id), let turnID = message.canonicalTurnID else { return }
+        guard case .turnEnd(let turnID) = forkBoundaries[message.id] else { return }
         changeSummary?.select(.since(ChangesAnchor(turnID: turnID, boundary: .end)))
     }
 
@@ -311,7 +317,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         compaction = nil
         pendingTranscriptRequest = nil
         messages = []
-        forkableMessageIDs = []
+        projectedForkBoundaries = [:]
         editBases = [:]
         streamItems = []
         canPrefetchOlderHistory = false
@@ -329,7 +335,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         guard let presentation = target.recentPresentation(threadID: threadID),
               renderedMessages.hasOpeningRendered(presentation.messages) else { return }
         messages = presentation.messages
-        forkableMessageIDs = presentation.forkableMessageIDs
+        projectedForkBoundaries = presentation.forkBoundaries
         editBases = presentation.editBases
         streamItems = presentation.items
         htmlVisualReplies.update(.unknown, threadID: threadID)
@@ -396,7 +402,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         }
         showsRecentPresentation = false
         messages = snapshot.messages
-        forkableMessageIDs = snapshot.forkableMessageIDs
+        projectedForkBoundaries = snapshot.forkBoundaries
         editBases = snapshot.editBases
         streamItems = snapshot.items
         htmlVisualReplies.update(snapshot.visualReplies, threadID: snapshot.threadID)
@@ -1149,7 +1155,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func forkConversation(_ thread: ConversationHeader) async {
-        await fork(threadID: thread.id, lastTurnID: nil, serviceTier: forkServiceTier(for: thread.id))
+        await fork(threadID: thread.id, through: nil, serviceTier: forkServiceTier(for: thread.id))
     }
 
     func forkServiceTier(for threadID: String) -> CodexAppServerV2.ServiceTierOverride? {
@@ -1157,19 +1163,15 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func forkConversation(from message: ChatMessage) async {
-        guard forkableMessageIDs.contains(message.id), let sessionID = activeSessionID else { return }
-        guard let turnID = message.canonicalTurnID else {
-            present(.conversation("This message's canonical turn is not loaded yet. Reload its history before forking."))
-            return
-        }
-        await fork(threadID: sessionID, lastTurnID: turnID, serviceTier: serviceTierOverride)
+        guard let boundary = forkBoundaries[message.id], let sessionID = activeSessionID else { return }
+        await fork(threadID: sessionID, through: boundary, serviceTier: serviceTierOverride)
     }
 
-    private func fork(threadID: String, lastTurnID: String?,
+    private func fork(threadID: String, through boundary: ForkBoundary?,
                       serviceTier: CodexAppServerV2.ServiceTierOverride?) async {
         let feedback = target.feedbackForCurrentConversation()
         do {
-            let response = try await target.gatewayClient.forkThread(threadID: threadID, lastTurnID: lastTurnID, serviceTier: serviceTier)
+            let response = try await target.gatewayClient.forkThread(threadID: threadID, through: boundary, serviceTier: serviceTier)
             if AgentProvider.provider(forThreadID: response.thread.id) == .claude {
                 await target.metadataService.sync()
             }

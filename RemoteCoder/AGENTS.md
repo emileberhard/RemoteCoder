@@ -460,7 +460,7 @@ entrypoint linked above.
 - History for both providers uses thread-wide `thread/items/list` pages and
   `thread/turns/list` metadata with opaque directional cursors, including
   forks. Live notifications stay authoritative for current activity. Fork boundaries come from canonical turn
-  identity, never a full-history reverse lookup.
+  and item identity, never a full-history reverse lookup.
 - `ConversationIndex` is the actor-backed store mapping Codex thread ids to
   local conversation UUIDs, so resumes and completion routing never rely on
   heuristics.
@@ -749,11 +749,16 @@ entrypoint linked above.
     replica; host invalidations and reconnect retain their full refresh paths.
   - Unknown state offers Refresh, never an inferred pending prompt. Summary
     previews never pin an unpositioned question to the transcript tail.
-- Only the final assistant bubble of a completed turn, with its history tail
-  loaded, offers **Fork from Here** and, beside it, **Count Changes from Here**
-  (hidden on the current start point). The server cutoff includes the whole turn,
-  so user bubbles, intermediate replies, active turns and pages with newer items
-  must not offer it.
+- **Fork from Here** comes from the projection's `ConversationSnapshot.forkBoundaries`.
+  The final assistant bubble of a completed turn, with its history tail loaded,
+  forks through that turn and offers, beside it, **Count Changes from Here**
+  (hidden on the current start point). In a Claude conversation whose host
+  advertises `host/info.claudeItemFork`, every other settled assistant bubble with
+  canonical turn and item identity, also in a running turn, forks through its
+  item; `ChatScreenModel.forkBoundaries` drops those for other hosts and Codex,
+  whose cutoff includes the whole turn, so their intermediate replies, active
+  turns and pages with newer items must not offer it. User bubbles and streaming
+  replies never offer it.
 - An earlier user bubble offers **Edit as Fork** only when the projection proves
   its edit base (`ConversationSnapshot.editBases`, carried in `TranscriptRowInputs`):
   a sent, non-steer turn head that is fully restorable

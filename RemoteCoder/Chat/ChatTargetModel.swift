@@ -1122,6 +1122,13 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         }
     }
 
+    func supportsItemForks(threadID: String) -> Bool {
+        switch AgentProvider.provider(forThreadID: threadID) {
+        case .codex: false
+        case .claude: directories.information?.claudeItemFork == true
+        }
+    }
+
     func queueSupport(threadID: String) async -> Bool? {
         switch AgentProvider.provider(forThreadID: threadID) {
         case .codex: true

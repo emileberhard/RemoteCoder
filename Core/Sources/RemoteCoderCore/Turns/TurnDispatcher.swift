@@ -497,7 +497,7 @@ final class TurnDispatcher {
                 guard !isClosed else { return }
                 let thread: CodexAppServerV2.Thread
                 if case .fork(let point) = target {
-                    thread = try await gateway.forkThread(threadID: point.threadID, lastTurnID: point.lastTurnID,
+                    thread = try await gateway.forkThread(threadID: point.threadID, through: .turnEnd(point.lastTurnID),
                                                           serviceTier: settings.serviceTier).thread
                     if provider == .claude { await metadata.sync() }
                 } else {

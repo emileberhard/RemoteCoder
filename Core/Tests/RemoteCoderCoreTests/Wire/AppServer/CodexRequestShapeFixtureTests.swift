@@ -75,10 +75,12 @@ struct CodexRequestShapeFixtureTests {
 
     @Test
     func threadForkKeepsItsRequestShape() throws {
-        try expectShape(CodexAppServerV2.ThreadForkParams(threadId: "thread-1", lastTurnId: nil, serviceTier: nil),
+        try expectShape(CodexAppServerV2.ThreadForkParams(threadId: "thread-1", lastTurnId: nil, lastItemId: nil, serviceTier: nil),
             #"{"threadId":"thread-1","threadSource":"user","persistExtendedHistory":true,"excludeTurns":true}"#)
-        try expectShape(CodexAppServerV2.ThreadForkParams(threadId: "thread-1", lastTurnId: "turn-1", serviceTier: .set(.fast)),
+        try expectShape(CodexAppServerV2.ThreadForkParams(threadId: "thread-1", lastTurnId: "turn-1", lastItemId: nil, serviceTier: .set(.fast)),
             #"{"threadId":"thread-1","lastTurnId":"turn-1","serviceTier":"fast","threadSource":"user","persistExtendedHistory":true,"excludeTurns":true}"#)
+        try expectShape(CodexAppServerV2.ThreadForkParams(threadId: "claude_1", lastTurnId: "turn-1", lastItemId: "msg_1#0", serviceTier: nil),
+            #"{"threadId":"claude_1","lastTurnId":"turn-1","lastItemId":"msg_1#0","threadSource":"user","persistExtendedHistory":true,"excludeTurns":true}"#)
     }
 
     @Test

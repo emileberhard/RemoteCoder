@@ -139,6 +139,7 @@ extension CodexAppServerV2 {
     struct ThreadForkParams: Encodable, Sendable {
         let threadId: String
         let lastTurnId: String?
+        let lastItemId: String?
         let serviceTier: ServiceTierOverride?
         let threadSource = "user"
         let persistExtendedHistory = true

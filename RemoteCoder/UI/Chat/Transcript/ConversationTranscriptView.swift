@@ -102,7 +102,7 @@ struct ConversationTranscriptView: View {
             readingScope: screen.transcriptSurfaceID,
             retainedSurfaces: retainedSurfaces?.scope(owner: screen.transcriptSurfaceID),
             renderedMessages: screen.target.renderedMessages,
-            forkableMessageIDs: screen.forkableMessageIDs,
+            forkBoundaries: screen.forkBoundaries,
             editBases: screen.editBases,
             scrollToRow: screen.pendingTranscriptRequest,
             onFork: { message in
