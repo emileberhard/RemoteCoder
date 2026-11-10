@@ -6,6 +6,13 @@ import Testing
 @testable import RemoteCoder
 #endif
 
+extension CodexHistoryGateway {
+    func locateConversationItem(_ itemKey: String) async throws -> ConversationSearchLocation {
+        Issue.record("Unexpected locate request")
+        throw GatewayClient.ClientError.invalidMessage
+    }
+}
+
 actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
     enum HeldRead: Sendable { case header, classification, list, page, locate }
     enum Failure: Error { case offline }
@@ -43,8 +50,8 @@ actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
     private var claudeHeaders: [CodexAppServerV2.Thread] = []
     private var claudePageSizeCap = 500
     private var shouldFail = false
-    private var locateReply: Data?
-    func setLocateReply(_ data: Data?) { locateReply = data }
+    private var locateReply: ConversationSearchLocation?
+    func setLocateReply(_ location: ConversationSearchLocation?) { locateReply = location }
     private var heldRead: HeldRead?
     private var readSuspension: CheckedContinuation<Void, Never>?
     private var readArrival: (id: UUID, continuation: CheckedContinuation<Bool, Never>)?
@@ -172,13 +179,14 @@ actor HistoryGatewayFixture: CodexHistoryGateway, ConversationMarksRemote {
         await suspendRead(.header)
         return .init(thread: captured)
     }
+    func locateConversationItem(_ itemKey: String) async throws -> ConversationSearchLocation {
+        let captured = locateReply
+        await suspendRead(.locate)
+        guard let captured else { throw Failure.offline }
+        return captured
+    }
+
     func historyPageData(method: String, params: JSONValue) async throws -> Data {
-        if method == "sessions/locate" {
-            let captured = locateReply
-            await suspendRead(.locate)
-            guard let captured else { throw Failure.offline }
-            return captured
-        }
         if method == "conversation/agents/classify" {
             let ids = params.objectValue?["threadIds"]?.arrayValue?.compactMap(\.stringValue) ?? []
             classificationRequests.append(ids)

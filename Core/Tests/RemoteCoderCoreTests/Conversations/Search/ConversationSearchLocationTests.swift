@@ -27,6 +27,40 @@ struct ConversationSearchLocationTests {
         #expect(newer.window.turns.last?.id != positioned.window.turns.last?.id)
     }
 
+    @Test func aLocatedWindowKeepsAnActiveTurnBehindTheHistoryGap() async throws {
+        let fixture = Fixture()
+        defer { fixture.cleanUp() }
+        await fixture.gateway.setHistory(HistoryGatewayFixture.workingHistory(turns: 100, ordinals: true))
+        await fixture.gateway.setLocateReply(reply(items: "30", turns: "10", turn: "t10", item: "u10"))
+        let header = fixture.gateway.header
+        var state = ConversationState(conversationID: UUID(), threadID: header.id)
+        let tail = try await fixture.service.openTail(header: header, base: nil)
+        state.merge(tail, read: state.beginHistoryRead())
+        #expect(state.hasVerifiedNewestHistory)
+        state.apply(try GatewayEventFixture.item("item/started", item: .agentMessage(id: "answer", text: "A"),
+            threadID: header.id, turnID: "live", ordinal: 310, startedAtMs: 1_000, completedAtMs: 2_000))
+        #expect(ConversationProjection.project(state).messages.contains { $0.canonicalItemID == "answer" })
+
+        let read = state.beginHistoryRead()
+        let located = try await fixture.service.openSearchHit(header: header, itemKey: "key", fallback: .keepCurrentWindow)
+        state.merge(try #require(located.snapshot), read: read)
+        state.apply(try GatewayEventFixture.delta("B", threadID: header.id, turnID: "live", itemID: "answer"))
+
+        let historical = ConversationProjection.project(state)
+        #expect(historical.messages.contains { $0.canonicalItemID == "u10" })
+        #expect(!historical.messages.contains { $0.canonicalTurnID == "live" || $0.canonicalTurnID == "t99" })
+        #expect(historical.items.endsAtNewerHistoryEdge)
+        #expect(!state.hasVerifiedNewestHistory)
+        #expect(state.turns["live"]?.items["answer"]?.value == .agentMessage(id: "answer", text: "AB"))
+
+        let jump = state.beginHistoryRead()
+        state.merge(try await fixture.service.openTail(header: header, base: jump.base, bypassCache: true), read: jump)
+        let latest = ConversationProjection.project(state)
+        #expect(latest.messages.contains { $0.canonicalItemID == "answer" && $0.text == "AB" })
+        #expect(!latest.items.endsAtNewerHistoryEdge)
+        #expect(state.hasVerifiedNewestHistory)
+    }
+
     @Test func anExactItemBeyondTheInitialPageIsLoadedWithoutReadingTheTail() async throws {
         let fixture = Fixture()
         defer { fixture.cleanUp() }
@@ -100,10 +134,8 @@ struct ConversationSearchLocationTests {
         #expect(await location.reveal(in: [.timeline(group)]) == .init(rowID: "activity-gw-fixture-t1-tool", groupToExpand: "segment"))
     }
 
-    private func reply(items: String?, turns: String?, turn: String?, item: String?, thread: String = "fixture") -> Data {
-        let fields: [String: Any] = ["threadId": thread, "turnId": turn as Any? ?? NSNull(),
-            "turnsCursor": turns as Any? ?? NSNull(), "itemsCursor": items as Any? ?? NSNull(), "itemId": item as Any? ?? NSNull()]
-        return (try? JSONSerialization.data(withJSONObject: ["result": fields])) ?? Data()
+    private func reply(items: String?, turns: String?, turn: String?, item: String?, thread: String = "fixture") -> ConversationSearchLocation {
+        ConversationSearchLocation(threadId: thread, turnId: turn, turnsCursor: turns, itemsCursor: items, itemId: item)
     }
 
     private struct Fixture {

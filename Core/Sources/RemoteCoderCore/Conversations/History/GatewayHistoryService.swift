@@ -532,29 +532,31 @@ actor GatewayHistoryService {
     func openSearchHit(header: ConversationHeader, itemKey: String, fallback: SearchFallback) async throws -> SearchSnapshot {
         let readEpoch = epoch
         let generation = generations[header.id]
+        func checkFence() throws {
+            try Task.checkCancellation()
+            guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
+        }
         var location: ConversationSearchLocation?
         do {
-            let data = try await gateway.historyPageData(method: "sessions/locate", params: .object(["itemKey": .string(itemKey)]))
-            let response: RPCResult<ConversationSearchLocation> = try await Self.decodePage(data)
-            try Task.checkCancellation()
-            guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
-            if response.result.threadId == header.id { location = response.result }
-            if let location, let cursor = location.itemsCursor {
-                let snapshot = try await openLocated(header: header, cursor: cursor, location: location)
-                try Task.checkCancellation()
-                guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
-                return SearchSnapshot(snapshot: snapshot, location: location)
+            let located = try await gateway.locateConversationItem(itemKey)
+            try checkFence()
+            guard located.threadId == header.id else { throw GatewayClient.ClientError.invalidMessage }
+            location = located
+            if let cursor = located.itemsCursor {
+                let snapshot = try await openLocated(header: header, cursor: cursor, location: located)
+                try checkFence()
+                return SearchSnapshot(snapshot: snapshot, location: located)
             }
         } catch {
-            try Task.checkCancellation()
-            guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
+            try checkFence()
+            let step = location == nil ? "locate request" : "located history read"
+            logger.notice("Search opening fell back after failed \(step)")
         }
         guard case .openTail(let base, let bypassCache) = fallback else {
             return SearchSnapshot(snapshot: nil, location: location)
         }
         let snapshot = try await openTail(header: header, base: base, bypassCache: bypassCache)
-        try Task.checkCancellation()
-        guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
+        try checkFence()
         return SearchSnapshot(snapshot: snapshot, location: location)
     }
 

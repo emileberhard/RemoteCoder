@@ -49,6 +49,7 @@ extension GatewayClient {
         guard response.schemaVersion == ConversationSearchResponse.schemaVersion else { throw ClientError.invalidMessage }
         return response
     }
+
     func searchConversationsByMeaning(_ params: ConversationSearchParams) async throws -> ConversationMeaningResponse {
         let data = try await callRaw(method: "sessions/conversations/searchByMeaning", params: encodeToJSONValue(params),
                                      timeout: .seconds(10))
@@ -58,4 +59,8 @@ extension GatewayClient {
         return response
     }
 
+    func locateConversationItem(_ itemKey: String) async throws -> ConversationSearchLocation {
+        try await callDecodable(method: "sessions/locate", params: .object(["itemKey": .string(itemKey)]),
+                                timeout: .seconds(2))
+    }
 }
