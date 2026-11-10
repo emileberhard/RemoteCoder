@@ -215,9 +215,11 @@ Explicit promotion overrides native ancestry.
 At most 128 ranked document candidates are fetched. The scoped item word index
 uses the same user, assistant and reasoning kinds as the document. It covers
 at most 128 member sessions and finds 64 newest hits per term per
-candidate, with lookaheads setting `truncated`; it reads
-metadata for ranking and fetches snippets only for the best three hits. Hits
-prefer distinct-term coverage, user/assistant text, then recency. `hitCount`
+candidate, with lookaheads setting `truncated`. Ranking reads metadata. The
+gateway applies SQLite's tokenizer to the selected text of at most three hits
+per result to build excerpts. Items larger than 1 MiB are skipped for excerpts
+and set `truncated`. Hits prefer distinct-term coverage, user/assistant text,
+then recency. `hitCount`
 counts unique items inside these bounded windows. Candidate or hit-window
 lookahead sets `truncated`. The app can present completed results while indicating
 that additional conversations or hits may exist. Limiting the final list alone

@@ -1,6 +1,6 @@
 use super::store::{ReadControl, Reader};
 use anyhow::{Result, ensure};
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -8,6 +8,7 @@ use std::time::Duration;
 
 pub(crate) const DEADLINE: Duration = Duration::from_secs(1);
 pub(super) const TERM_WINDOW: usize = 64;
+const EXCERPT_INPUT_BYTES: i64 = 1 << 20;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -109,7 +110,7 @@ fn literal(term: &str, prefix: bool) -> String {
 pub(crate) fn search(
     db: &Reader,
     request: &Request,
-    control: &ReadControl,
+    control: &Arc<ReadControl>,
     completed: &Completed,
 ) -> Result<Response> {
     let terms = request.terms()?;
@@ -136,6 +137,9 @@ pub(crate) fn search(
         *completed
             .lock()
             .expect("conversation search progress poisoned") = Some(response.clone());
+        let snippets = Snippets::new(control, &expressions)?;
+        let mut find_hits = db.prepare("SELECT i.rowid,i.kind,i.at,i.text_bytes FROM item_word_fts JOIN item i ON i.rowid=item_word_fts.rowid WHERE item_word_fts MATCH ?1 ORDER BY item_word_fts.rowid DESC LIMIT ?2")?;
+        let mut hit_text = db.prepare("SELECT i.item_key,s.thread_id,i.session_key,i.text FROM item i JOIN session s USING(session_key) WHERE i.rowid=?1")?;
         for header in candidates.into_iter().take(128) {
             ensure!(!control.stopped(), "conversation search interrupted");
             let title_match: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid WHERE d.session_key=?1 AND conversation_fts MATCH ?2)", params![header.session_key, format!("title:({expression})")], |r| r.get(0))?;
@@ -147,23 +151,25 @@ pub(crate) fn search(
                 .map(|s| format!("scope:{s}"))
                 .collect::<Vec<_>>()
                 .join(" OR ");
-            let mut hits: HashMap<i64, (u8, String, Option<String>)> = HashMap::new();
+            let mut hits = HashMap::new();
             if !scope.is_empty() {
                 for (n, term) in expressions.iter().enumerate() {
-                    let mut statement = db.prepare("SELECT i.rowid,i.kind,i.at FROM item_word_fts JOIN item i ON i.rowid=item_word_fts.rowid WHERE item_word_fts MATCH ?1 ORDER BY item_word_fts.rowid DESC LIMIT ?2")?;
-                    let stage: Vec<(i64, String, Option<String>)> = statement
+                    let stage: Vec<(i64, String, Option<String>, i64)> = find_hits
                         .query_map(
                             params![format!("({scope}) AND text:{term}"), TERM_WINDOW as i64 + 1],
-                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                         )?
                         .collect::<rusqlite::Result<_>>()?;
                     response.truncated |= stage.len() > TERM_WINDOW;
-                    for (id, kind, at) in stage.into_iter().take(TERM_WINDOW) {
-                        hits.entry(id).and_modify(|hit| hit.0 |= 1 << n).or_insert((
-                            1 << n,
-                            kind,
-                            at,
-                        ));
+                    for (id, kind, at, bytes) in stage.into_iter().take(TERM_WINDOW) {
+                        hits.entry(id)
+                            .and_modify(|hit: &mut RankedHit| hit.terms |= 1 << n)
+                            .or_insert(RankedHit {
+                                terms: 1 << n,
+                                kind,
+                                at,
+                                bytes,
+                            });
                     }
                 }
             }
@@ -172,23 +178,41 @@ pub(crate) fn search(
                 continue;
             }
             let mut hits: Vec<_> = hits.into_iter().collect();
-            hits.sort_by(|(a, (am, ak, at)), (b, (bm, bk, bt))| {
-                bm.count_ones()
-                    .cmp(&am.count_ones())
-                    .then_with(|| {
-                        matches!(bk.as_str(), "user" | "assistant")
-                            .cmp(&matches!(ak.as_str(), "user" | "assistant"))
-                    })
-                    .then_with(|| bt.cmp(at))
+            hits.sort_by(|(a, left), (b, right)| {
+                right
+                    .terms
+                    .count_ones()
+                    .cmp(&left.terms.count_ones())
+                    .then_with(|| right.preferred().cmp(&left.preferred()))
+                    .then_with(|| right.at.cmp(&left.at))
                     .then_with(|| b.cmp(a))
             });
             let mut excerpts = Vec::new();
-            for (id, _) in hits.into_iter().take(3) {
-                let hit = db.query_row("SELECT i.item_key,i.kind,i.at,s.thread_id,i.session_key,snippet(item_word_fts,0,'\u{e000}','\u{e001}','…',32) FROM item_word_fts JOIN item i ON i.rowid=item_word_fts.rowid JOIN session s USING(session_key) WHERE item_word_fts.rowid=?1 AND item_word_fts MATCH ?2", params![id,format!("text:({})", expressions.join(" OR "))], |r| {
-                    let snippet: String = r.get(5)?;
-                    Ok(Hit { item_key:r.get(0)?, kind:r.get(1)?, at:r.get(2)?, agent_thread_id: if r.get::<_,String>(4)? == header.session_key { None } else { Some(r.get(3)?) }, excerpt:excerpt(&snippet) })
-                })?;
-                excerpts.push(hit);
+            for (id, hit) in hits {
+                ensure!(!control.stopped(), "conversation search interrupted");
+                if hit.bytes > EXCERPT_INPUT_BYTES {
+                    response.truncated = true;
+                    continue;
+                }
+                let (item_key, thread_id, session_key, text): (String, String, String, String) =
+                    hit_text
+                        .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+                excerpts.push(Hit {
+                    item_key,
+                    kind: hit.kind,
+                    at: hit.at,
+                    agent_thread_id: (session_key != header.session_key).then_some(thread_id),
+                    excerpt: snippets.render(&text)?,
+                });
+                if excerpts.len() == 3 {
+                    break;
+                }
+            }
+            if !title_match && excerpts.is_empty() {
+                *completed
+                    .lock()
+                    .expect("conversation search progress poisoned") = Some(response.clone());
+                continue;
             }
             response.conversations.push(Conversation {
                 session_key: header.session_key,
@@ -216,6 +240,48 @@ pub(crate) fn search(
             partial(completed).ok_or_else(|| anyhow::anyhow!("conversation search timed out"))
         }
         result => result,
+    }
+}
+
+struct RankedHit {
+    terms: u8,
+    kind: String,
+    at: Option<String>,
+    bytes: i64,
+}
+
+impl RankedHit {
+    fn preferred(&self) -> bool {
+        matches!(self.kind.as_str(), "user" | "assistant")
+    }
+}
+
+struct Snippets {
+    db: Connection,
+    expression: String,
+}
+
+impl Snippets {
+    fn new(control: &Arc<ReadControl>, expressions: &[String]) -> Result<Self> {
+        let db = Connection::open_in_memory()?;
+        control.install(&db)?;
+        db.execute_batch("CREATE VIRTUAL TABLE excerpt_fts USING fts5(text,tokenize='unicode61 remove_diacritics 2')")?;
+        Ok(Self {
+            db,
+            expression: expressions.join(" OR "),
+        })
+    }
+
+    fn render(&self, text: &str) -> Result<String> {
+        self.db.execute(
+            "INSERT OR REPLACE INTO excerpt_fts(rowid,text) VALUES(1,?1)",
+            [text],
+        )?;
+        let snippet: String = self.db.query_row(
+            "SELECT snippet(excerpt_fts,0,'\u{e000}','\u{e001}','…',32) FROM excerpt_fts WHERE excerpt_fts MATCH ?1",
+            [&self.expression], |r| r.get(0),
+        )?;
+        Ok(excerpt(&snippet))
     }
 }
 

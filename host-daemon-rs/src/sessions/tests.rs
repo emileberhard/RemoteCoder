@@ -3236,6 +3236,32 @@ fn sessions_conversations_excerpt_keeps_the_match_on_character_boundaries() {
 }
 
 #[test]
+fn sessions_conversations_excerpt_finds_a_deep_prefix() {
+    let f = fixture();
+    scan(&f);
+    let key = super::session_key(&f.origins[0], "codex-root");
+    {
+        let db = f.store.writer().unwrap();
+        conversation_item(
+            &db,
+            &key,
+            445,
+            &format!(
+                "{} DeepMalmöFlickering {}",
+                "ordinary ".repeat(12000),
+                "tail ".repeat(100)
+            ),
+            "assistant",
+            None,
+        );
+    }
+    let result = conversation_search(&f.store, "deepmalmoflick", 1, Default::default());
+    let excerpt = &result.conversations[0].hits[0].excerpt;
+    assert!(excerpt.contains("DeepMalmöFlickering"));
+    assert!(excerpt.chars().count() <= 240);
+}
+
+#[test]
 fn sessions_locate_preserves_native_turn_and_checks_exact_source() -> Result<()> {
     let f = fixture();
     scan(&f);

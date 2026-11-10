@@ -92,7 +92,7 @@ impl CatalogRead {
     async fn read<T: Send + 'static>(
         &self,
         runtime: &Runtime,
-        work: impl FnOnce(&Reader, &ReadControl) -> Result<T> + Send + 'static,
+        work: impl FnOnce(&Reader, &Arc<ReadControl>) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let store = runtime.store.clone();
         self.blocking(runtime, move |control| {

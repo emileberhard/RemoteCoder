@@ -129,9 +129,7 @@ pub(crate) struct Reader {
 
 impl Reader {
     pub(crate) fn interrupt_on(&mut self, control: Arc<ReadControl>) -> Result<()> {
-        self.db
-            .progress_handler(1000, Some(move || control.stopped()))?;
-        Ok(())
+        control.install(&self.db)
     }
 }
 
@@ -146,6 +144,12 @@ impl ReadControl {
             deadline,
             cancelled: AtomicBool::new(false),
         })
+    }
+
+    pub(super) fn install(self: &Arc<Self>, db: &Connection) -> Result<()> {
+        let control = self.clone();
+        db.progress_handler(1000, Some(move || control.stopped()))?;
+        Ok(())
     }
 
     pub(crate) fn stopped(&self) -> bool {
