@@ -120,7 +120,10 @@ struct ClaudeRouterAccount: Codable, Equatable, Sendable, Identifiable {
     let observedAt: Double?
     var resets: AccountResets? = nil
 
-    var planTitle: String { (tier?.replacingOccurrences(of: "_", with: " ") ?? plan).capitalized }
+    var planTitle: String {
+        let name = tier?.replacingOccurrences(of: "_", with: " ") ?? plan
+        return name.prefix(1).uppercased() + name.dropFirst()
+    }
 
     func usageRows(now: Date) -> [CodexUsageLimitRow] {
         windows.map { window in
