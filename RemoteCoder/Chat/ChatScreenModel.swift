@@ -1135,45 +1135,14 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             try await session.restore()
             if previousOwner !== session, thread.id.hasPrefix("claude_") {
                 await target.replayOpenedClaudeThread(threadID: thread.id, owner: session)
-                guard isCurrentResumeLoad(loadID, threadID: thread.id) else { throw CancellationError() }
+                try checkResumeLoad(loadID, threadID: thread.id)
             }
             await publish(await session.snapshot())
-            let stored = await session.beginHistoryRead()
-            if !revisiting, let cached = await historyService.cachedConversation(header: thread) {
-                await applyConversationSnapshot(cached, read: stored, from: session, source: "disk")
-            }
-            let observed = target.conversationWarmer.observation(threadID: thread.id, revision: thread.updatedAt)
-            let read = await session.beginHistoryRead()
-            let snapshot: GatewayHistoryService.ConversationSnapshot?
-            var location: ConversationSearchLocation?
-            let bypassCache = target.conversationWarmer.needsRead(threadID: thread.id, revision: thread.updatedAt)
-            if let opening {
-                let fallback: GatewayHistoryService.SearchFallback = revisiting ? .keepCurrentWindow
-                    : .openTail(base: read.base, bypassCache: bypassCache)
-                let opened = try await historyService.openSearchHit(header: thread, itemKey: opening.itemKey, fallback: fallback)
-                snapshot = opened.snapshot
-                location = opened.location
-            } else {
-                snapshot = try await historyService.openTail(header: thread, base: read.base, bypassCache: bypassCache)
-            }
-            guard isCurrentResumeLoad(loadID, threadID: thread.id), !Task.isCancelled else { throw CancellationError() }
-            if let snapshot {
-                logger.notice("Conversation opening thread=\(thread.id) retained=\(previousOwner === session) source=\(String(describing: snapshot.source))")
-                await applyConversationSnapshot(snapshot, read: read, from: session, source: String(describing: snapshot.source))
-                if snapshot.window.newer == nil {
-                    target.conversationWarmer.readSucceeded(threadID: thread.id, observation: observed)
-                }
-            }
-            if let location, let reveal = await location.reveal(in: streamItems) {
-                guard isCurrentResumeLoad(loadID, threadID: thread.id) else { throw CancellationError() }
-                if let group = reveal.groupToExpand {
-                    let expanded = await session.expandGroupForSearch(group)
-                    guard isCurrentResumeLoad(loadID, threadID: thread.id) else { throw CancellationError() }
-                    await publish(expanded)
-                    guard isCurrentResumeLoad(loadID, threadID: thread.id) else { throw CancellationError() }
-                }
-                revealTranscriptRow(reveal.rowID, highlighted: true)
-                if let term = opening?.findTerm { searchFindRequest = .init(term: term, rowID: reveal.rowID) }
+            try checkResumeLoad(loadID, threadID: thread.id)
+            let location = try await loadOpeningHistory(thread, session: session, retained: previousOwner === session,
+                loadID: loadID, opening: opening, revisiting: revisiting)
+            if let location {
+                try await revealLocatedHistory(location, findTerm: opening?.findTerm, session: session, loadID: loadID)
             }
             target.dispatcher.reconcileQueue(threadID: thread.id)
             if isCurrentResumeLoad(loadID, threadID: thread.id), contextWindowUsage == nil {
@@ -1201,6 +1170,64 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         target.warmConversationsIfIdle()
         if let refreshed { await adoptForkOrigin(of: refreshed) }
         return failure.map(ResumeOutcome.failed) ?? .loaded
+    }
+
+    private func checkResumeLoad(_ loadID: UUID, threadID: String) throws {
+        guard isCurrentResumeLoad(loadID, threadID: threadID) else { throw CancellationError() }
+    }
+
+    private func loadOpeningHistory(_ thread: ConversationHeader, session: ConversationSession, retained: Bool,
+                                    loadID: UUID, opening: ConversationSearchOpening?,
+                                    revisiting: Bool) async throws -> ConversationSearchLocation? {
+        if !revisiting {
+            let stored = await session.beginHistoryRead()
+            if let cached = await historyService.cachedConversation(header: thread) {
+                try checkResumeLoad(loadID, threadID: thread.id)
+                await applyConversationSnapshot(cached, read: stored, from: session, source: "disk")
+            }
+        }
+        try checkResumeLoad(loadID, threadID: thread.id)
+        let observed = target.conversationWarmer.observation(threadID: thread.id, revision: thread.updatedAt)
+        let read = await session.beginHistoryRead()
+        try checkResumeLoad(loadID, threadID: thread.id)
+        let bypassCache = target.conversationWarmer.needsRead(threadID: thread.id, revision: thread.updatedAt)
+        let snapshot: GatewayHistoryService.ConversationSnapshot?
+        let location: ConversationSearchLocation?
+        if let opening {
+            let fallback: GatewayHistoryService.SearchFallback = revisiting ? .keepCurrentWindow
+                : .openTail(base: read.base, bypassCache: bypassCache)
+            let opened = try await historyService.openSearchHit(header: thread, itemKey: opening.itemKey, fallback: fallback)
+            snapshot = opened.snapshot
+            location = opened.location
+        } else {
+            snapshot = try await historyService.openTail(header: thread, base: read.base, bypassCache: bypassCache)
+            location = nil
+        }
+        try checkResumeLoad(loadID, threadID: thread.id)
+        if let snapshot {
+            logger.notice("Conversation opening thread=\(thread.id) retained=\(retained) source=\(String(describing: snapshot.source))")
+            await applyConversationSnapshot(snapshot, read: read, from: session, source: String(describing: snapshot.source))
+            try checkResumeLoad(loadID, threadID: thread.id)
+            if snapshot.window.newer == nil {
+                target.conversationWarmer.readSucceeded(threadID: thread.id, observation: observed)
+            }
+        }
+        return location
+    }
+
+    private func revealLocatedHistory(_ location: ConversationSearchLocation, findTerm: String?,
+                                      session: ConversationSession, loadID: UUID) async throws {
+        let reveal = await location.reveal(in: streamItems)
+        try checkResumeLoad(loadID, threadID: location.threadId)
+        guard let reveal else { return }
+        if let group = reveal.groupToExpand {
+            let expanded = await session.expandGroupForSearch(group)
+            try checkResumeLoad(loadID, threadID: location.threadId)
+            await publish(expanded)
+            try checkResumeLoad(loadID, threadID: location.threadId)
+        }
+        revealTranscriptRow(reveal.rowID, highlighted: true)
+        if let findTerm { searchFindRequest = .init(term: findTerm, rowID: reveal.rowID) }
     }
 
     func forkConversation(_ thread: ConversationHeader) async {
