@@ -37,7 +37,7 @@ pub(crate) fn role(database: &Path) -> Result<bool> {
 }
 
 pub(crate) fn mark_initial_rebuild(store: &Store) -> Result<()> {
-    if role(&store.path).unwrap_or(true) {
+    if role(&store.path)? {
         store.writer()?.execute(
             "INSERT OR IGNORE INTO meta SELECT 'mirror_rebuilding','1' WHERE NOT EXISTS(SELECT 1 FROM mirror_state)",
             [],
@@ -394,11 +394,8 @@ impl Projection {
         let tx = db.transaction()?;
         super::metadata::apply(&tx, &self.host, &self.metadata)?;
         tx.commit()?;
-        while !stop.load(std::sync::atomic::Ordering::Acquire)
-            && super::index::rebuild_one(&mut db)?
-        {
-            between(&mut db)?;
-        }
+        between(&mut db)?;
+        super::index::drain(&mut db, stop, between)?;
         Ok(outcome["parseFailures"] == 0 && !partial)
     }
 }

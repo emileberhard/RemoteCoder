@@ -9,31 +9,48 @@ use std::io::{BufRead, BufReader};
 
 pub(crate) type Parents = HashMap<ConversationIdentity, Option<AgentAddress>>;
 
-pub(crate) fn parents(db: &Connection, origins: &[Origin], parents: &Parents) -> Result<()> {
-    for (identity, parent) in parents {
-        let ProviderHome::Known { path } = &identity.provider_home else {
-            continue;
-        };
-        let Some(origin) = origins
-            .iter()
-            .find(|o| o.provider == identity.provider.as_str() && o.provider_home == *path)
-        else {
-            continue;
-        };
-        let key = super::session_key(origin, &identity.thread_id);
-        let parent_key = match parent {
-            None => None,
-            Some(parent) => {
-                let keys: Vec<String> = db.prepare("SELECT session_key FROM session JOIN source USING(source_id) WHERE session.origin_host=?1 AND thread_id=?2 AND source.present=1 LIMIT 2")?.query_map(params![parent.host_id,parent.thread_id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-                if keys.len() != 1 {
-                    continue;
-                }
-                keys.into_iter().next()
+pub(crate) fn parents(db: &Connection, origins: &[Origin], parents: &Parents) -> Result<Parents> {
+    let tx = db.unchecked_transaction()?;
+    let mut unresolved = Parents::new();
+    {
+        let mut existing = tx.prepare("SELECT EXISTS(SELECT 1 FROM session JOIN source USING(source_id) WHERE session_key=?1 AND source.present=1)")?;
+        let mut find_parent = tx.prepare("SELECT session_key FROM session JOIN source USING(source_id) WHERE session.origin_host=?1 AND thread_id=?2 AND source.present=1 LIMIT 2")?;
+        let mut update = tx.prepare("UPDATE session SET delegated_parent_known=1,delegated_parent_session_key=?2 WHERE session_key=?1 AND (delegated_parent_known=0 OR delegated_parent_session_key IS NOT ?2)")?;
+        for (identity, parent) in parents {
+            let ProviderHome::Known { path } = &identity.provider_home else {
+                continue;
+            };
+            let Some(origin) = origins
+                .iter()
+                .find(|o| o.provider == identity.provider.as_str() && o.provider_home == *path)
+            else {
+                continue;
+            };
+            let key = super::session_key(origin, &identity.thread_id);
+            if !existing.query_row([&key], |r| r.get::<_, bool>(0))? {
+                unresolved.insert(identity.clone(), parent.clone());
+                continue;
             }
-        };
-        db.execute("UPDATE session SET delegated_parent_known=1,delegated_parent_session_key=?2 WHERE session_key=?1 AND (delegated_parent_known=0 OR delegated_parent_session_key IS NOT ?2)", params![key,parent_key])?;
+            let parent_key = match parent {
+                None => None,
+                Some(address) => {
+                    let keys = find_parent
+                        .query_map(params![address.host_id, address.thread_id], |r| {
+                            r.get::<_, String>(0)
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    if keys.len() != 1 {
+                        unresolved.insert(identity.clone(), parent.clone());
+                        continue;
+                    }
+                    keys.into_iter().next()
+                }
+            };
+            update.execute(params![key, parent_key])?;
+        }
     }
-    Ok(())
+    tx.commit()?;
+    Ok(unresolved)
 }
 
 pub(crate) fn titles(db: &Connection, origins: &[Origin]) -> Result<()> {
@@ -71,18 +88,32 @@ pub(crate) fn titles(db: &Connection, origins: &[Origin]) -> Result<()> {
                 titles.insert(id.to_owned(), title.to_owned());
             }
         }
-        for (thread, title) in titles {
-            db.execute(
-                "UPDATE session SET title=?2 WHERE session_key=?1 AND title IS NOT ?2",
-                params![super::session_key(origin, &thread), title],
-            )?;
+        let tx = db.unchecked_transaction()?;
+        {
+            let mut update =
+                tx.prepare("UPDATE session SET title=?2 WHERE session_key=?1 AND title IS NOT ?2")?;
+            for (thread, title) in titles {
+                update.execute(params![super::session_key(origin, &thread), title])?;
+            }
         }
-        db.execute(
+        tx.execute(
             "INSERT OR REPLACE INTO meta VALUES(?1,?2)",
             params![cache_key, identity],
         )?;
+        tx.commit()?;
     }
     Ok(())
+}
+
+pub(super) fn identity_generation(db: &Connection) -> Result<i64> {
+    Ok(db
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM meta WHERE key='session_identity_generation'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0))
 }
 
 fn titles_key(origin: &Origin) -> String {
@@ -101,7 +132,14 @@ pub(super) fn source_replaced(
     db: &Connection,
     origin: &Origin,
     prior: Option<&SessionMetadata>,
+    thread: Option<&str>,
 ) -> Result<()> {
+    if let Some(thread) = thread {
+        let key = super::session_key(origin, thread);
+        if prior.is_none_or(|prior| prior.session_key != key) {
+            db.execute("INSERT INTO meta VALUES('session_identity_generation','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1", [])?;
+        }
+    }
     let codex = origin.provider == "codex";
     if codex {
         db.execute("DELETE FROM meta WHERE key=?1", [titles_key(origin)])?;

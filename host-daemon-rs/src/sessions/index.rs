@@ -55,6 +55,17 @@ pub(crate) fn root(db: &Connection, key: &str) -> Result<String> {
     Ok(key.to_owned())
 }
 
+pub(super) fn drain(
+    db: &mut Connection,
+    stop: &std::sync::atomic::AtomicBool,
+    between: &mut impl FnMut(&mut Connection) -> Result<()>,
+) -> Result<()> {
+    while !stop.load(std::sync::atomic::Ordering::Acquire) && rebuild_one(db)? {
+        between(db)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn rebuild_one(db: &mut Connection) -> Result<bool> {
     let key: Option<String> = db.query_row("SELECT d.session_key FROM search_dirty d LEFT JOIN session s USING(session_key) ORDER BY s.last_at DESC,d.session_key LIMIT 1", [], |r| r.get(0)).optional()?;
     let Some(key) = key else {

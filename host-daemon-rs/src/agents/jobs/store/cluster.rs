@@ -45,8 +45,15 @@ impl Inner {
 }
 
 impl JobStore {
-    pub(crate) async fn catalog_parents(&self) -> Result<crate::sessions::metadata::Parents> {
-        self.access(|inner| Ok(inner.parents.clone())).await
+    pub(crate) async fn catalog_parents(
+        &self,
+        previous: std::sync::Arc<crate::sessions::metadata::Parents>,
+    ) -> Result<Option<std::sync::Arc<crate::sessions::metadata::Parents>>> {
+        self.access(move |inner| {
+            Ok((&inner.parents != previous.as_ref())
+                .then(|| std::sync::Arc::new(inner.parents.clone())))
+        })
+        .await
     }
 
     pub(crate) async fn admit_native(&self, job: JobRecord) -> Result<JobRecord> {

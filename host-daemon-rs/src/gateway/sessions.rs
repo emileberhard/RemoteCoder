@@ -154,36 +154,56 @@ impl Gateway {
         let weak = Arc::downgrade(self);
         let stop = runtime.mirror_stop.clone();
         *task = Some(tokio::spawn(async move {
-            let Some(gateway) = weak.upgrade() else {
-                return;
-            };
-            let mut changes = gateway.jobs.changes();
-            if let Ok(store) = gateway.jobs.store().await
-                && let Ok(parents) = store.catalog_parents().await
-                && let Some(runtime) = gateway.session_runtime.get()
-            {
-                runtime.worker.parents(parents);
-            }
-            drop(gateway);
-            loop {
-                tokio::select! {
-                    _=stop.cancelled()=>break,
-                    _=tokio::time::sleep(std::time::Duration::from_secs(5))=>{},
-                    _=changes.changed()=>{}
-                }
+            let parents = async {
                 let Some(gateway) = weak.upgrade() else {
-                    break;
+                    return;
                 };
-                if let Ok(store) = gateway.jobs.store().await
-                    && let Ok(parents) = store.catalog_parents().await
-                    && let Some(runtime) = gateway.session_runtime.get()
-                {
-                    runtime.worker.parents(parents);
+                let mut changes = gateway.jobs.changes();
+                drop(gateway);
+                let mut previous = Arc::default();
+                loop {
+                    let Some(gateway) = weak.upgrade() else {
+                        return;
+                    };
+                    let update = async {
+                        let store = gateway.jobs.store().await?;
+                        store.catalog_parents(previous.clone()).await
+                    }
+                    .await;
+                    match update {
+                        Ok(Some(parents)) => {
+                            previous = parents.clone();
+                            if let Some(runtime) = gateway.session_runtime.get() {
+                                runtime.worker.parents(parents);
+                            }
+                        }
+                        Ok(None) => (),
+                        Err(error) => {
+                            tracing::warn!(%error, "Session origin ownership unavailable")
+                        }
+                    }
+                    drop(gateway);
+                    tokio::select! {
+                        _ = stop.cancelled() => return,
+                        result = changes.changed() => if result.is_err() { return },
+                    }
                 }
-                if let Err(error) = gateway.sync_session_mirror().await {
-                    tracing::warn!(%error,"Session mirror is stale");
+            };
+            let mirrors = async {
+                loop {
+                    tokio::select! {
+                        _ = stop.cancelled() => return,
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {},
+                    }
+                    let Some(gateway) = weak.upgrade() else {
+                        return;
+                    };
+                    if let Err(error) = gateway.sync_session_mirror().await {
+                        tracing::warn!(%error,"Session mirror is stale");
+                    }
                 }
-            }
+            };
+            tokio::join!(parents, mirrors);
         }));
         Ok(())
     }
@@ -629,7 +649,7 @@ mod tests {
             crate::sessions::metadata::parents(
                 &db,
                 &runtime.origins,
-                &jobs.catalog_parents().await.unwrap(),
+                &jobs.catalog_parents(Arc::default()).await.unwrap().unwrap(),
             )
             .unwrap();
             while crate::sessions::index::rebuild_one(&mut db).unwrap() {}
@@ -662,7 +682,7 @@ mod tests {
             crate::sessions::metadata::parents(
                 &db,
                 &runtime.origins,
-                &jobs.catalog_parents().await.unwrap(),
+                &jobs.catalog_parents(Arc::default()).await.unwrap().unwrap(),
             )
             .unwrap();
             while crate::sessions::index::rebuild_one(&mut db).unwrap() {}

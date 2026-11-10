@@ -16,7 +16,7 @@ const PENDING_PATHS: usize = 512;
 struct Pending {
     paths: Vec<BTreeSet<PathBuf>>,
     inventory: Vec<InventoryRequest>,
-    parents: Option<super::metadata::Parents>,
+    parents: Option<Arc<super::metadata::Parents>>,
     mirror: Option<MirrorRequest>,
 }
 
@@ -116,7 +116,7 @@ impl Mailbox {
 
     fn requested(&self) -> bool {
         let pending = self.wake.0.lock().expect("Session worker wake poisoned");
-        !pending.inventory.is_empty() || pending.parents.is_some()
+        !pending.inventory.is_empty()
     }
 
     fn reconcile(&self, db: &mut rusqlite::Connection, origins: &[Origin]) -> Result<()> {
@@ -137,11 +137,6 @@ impl Mailbox {
         let requests = {
             let mut pending = self.wake.0.lock().expect("Session worker wake poisoned");
             let requests = std::mem::take(&mut pending.inventory);
-            if let Some(parents) = pending.parents.take()
-                && let Err(error) = super::metadata::parents(db, origins, &parents)
-            {
-                tracing::warn!(%error,"Session origin ownership unavailable");
-            }
             self.wake.1.notify_all();
             requests
         };
@@ -163,6 +158,42 @@ impl Mailbox {
         for request in requests {
             let _ = request.reply.try_send(result.clone());
         }
+    }
+}
+
+#[derive(Default)]
+struct ParentProjection {
+    unresolved: Arc<super::metadata::Parents>,
+    generation: Option<i64>,
+}
+
+impl ParentProjection {
+    fn refresh(
+        &mut self,
+        db: &rusqlite::Connection,
+        origins: &[Origin],
+        mailbox: &Mailbox,
+    ) -> Result<()> {
+        let pending = mailbox
+            .wake
+            .0
+            .lock()
+            .expect("Session worker wake poisoned")
+            .parents
+            .take();
+        if let Some(pending) = pending {
+            self.unresolved = pending;
+            self.generation = None;
+        }
+        if self.unresolved.is_empty() {
+            return Ok(());
+        }
+        let generation = super::metadata::identity_generation(db)?;
+        if self.generation != Some(generation) {
+            self.unresolved = Arc::new(super::metadata::parents(db, origins, &self.unresolved)?);
+            self.generation = Some(generation);
+        }
+        Ok(())
     }
 }
 
@@ -302,7 +333,7 @@ fn watch(
 }
 
 impl Worker {
-    pub(crate) fn parents(&self, parents: super::metadata::Parents) {
+    pub(crate) fn parents(&self, parents: Arc<super::metadata::Parents>) {
         self.wake
             .0
             .lock()
@@ -336,6 +367,7 @@ impl Worker {
             .spawn(move || {
                 let mut _watcher = None;
                 let mut hot = Hot::default();
+                let mut parent_projection = ParentProjection::default();
                 let mut next_hot = Instant::now();
                 #[cfg(target_os = "macos")]
                 if unsafe {
@@ -370,7 +402,7 @@ impl Worker {
                         break;
                     }
                     let full = Instant::now() >= next_reconcile;
-                    let parents = pending.parents.take();
+                    let parent_update = pending.parents.is_some();
                     let mirror = pending.mirror.take();
                     let batches = pending.take();
                     drop(pending);
@@ -380,18 +412,15 @@ impl Worker {
                             paths.extend(hot.changed()?);
                             next_hot = Instant::now() + Duration::from_secs(1);
                         }
-                        if let Some(parents) = &parents {
-                            let mut db = store.writer()?;
-                            let tx = db.transaction()?;
-                            super::metadata::parents(&tx, &origins, parents)?;
-                            tx.commit()?;
-                            while !flag.load(Ordering::Acquire)
-                                && super::index::rebuild_one(&mut db)?
-                            {
-                                endpoint.serve(&mut db, &origins);
-                            }
-                        }
                         if !full && paths.is_empty() && !endpoint.requested() {
+                            if parent_update {
+                                let mut db = store.writer()?;
+                                parent_projection.refresh(&db, &origins, &endpoint)?;
+                                super::index::drain(&mut db, &flag, &mut |db| {
+                                    endpoint.serve(db, &origins);
+                                    Ok(())
+                                })?;
+                            }
                             return Ok(serde_json::json!({"ingested":0,"parseFailures":0}));
                         }
                         let scope = if full {
@@ -403,6 +432,7 @@ impl Worker {
                             _watcher = Some(watch(&mut origins, signal.clone())?);
                             let mut db = store.writer()?;
                             endpoint.reconcile(&mut db, &origins)?;
+                            parent_projection.refresh(&db, &origins, &endpoint)?;
                             super::metadata::titles(&db, &origins)?;
                             endpoint.serve(&mut db, &origins);
                             hot.observe(&db, &origins)?;
@@ -422,20 +452,17 @@ impl Worker {
                                     endpoint.serve(db, &origins);
                                     hot.observe(db, &origins)?;
                                 }
-                                Ok(())
+                                parent_projection.refresh(db, &origins, &endpoint)
                             },
                         )?;
                         {
-                            let db = store.writer()?;
-                            super::metadata::titles(&db, &origins)?;
-                        }
-                        {
                             let mut db = store.writer()?;
-                            while !flag.load(Ordering::Acquire)
-                                && super::index::rebuild_one(&mut db)?
-                            {
-                                endpoint.serve(&mut db, &origins);
-                            }
+                            super::metadata::titles(&db, &origins)?;
+                            parent_projection.refresh(&db, &origins, &endpoint)?;
+                            super::index::drain(&mut db, &flag, &mut |db| {
+                                endpoint.serve(db, &origins);
+                                Ok(())
+                            })?;
                         }
                         hot.observe(&*store.reader()?, &origins)?;
                         if full && outcome["cancelled"] != true {
@@ -452,7 +479,7 @@ impl Worker {
                                 if endpoint.requested() {
                                     endpoint.serve(db, &origins);
                                 }
-                                Ok(())
+                                parent_projection.refresh(db, &origins, &endpoint)
                             },
                         );
                         let _ = reply.send(result);

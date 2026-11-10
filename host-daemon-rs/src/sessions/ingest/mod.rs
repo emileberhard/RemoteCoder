@@ -225,7 +225,9 @@ pub(crate) fn scan_scope(
     scope: Scope<'_>,
     stop: &AtomicBool,
 ) -> Result<Value> {
-    scan_serving(store, origins, scope, stop, &|| false, &mut |_| Ok(()))
+    let outcome = scan_serving(store, origins, scope, stop, &|| false, &mut |_| Ok(()))?;
+    super::index::drain(&mut *store.writer()?, stop, &mut |_| Ok(()))?;
+    Ok(outcome)
 }
 
 pub(super) fn scan_serving(
@@ -340,12 +342,6 @@ pub(super) fn scan_serving(
             longest_source = longest_source.max(elapsed);
             slow_sources += usize::from(elapsed > 5.0);
             super::index::rebuild_one(&mut db)?;
-            between(&mut db)?;
-        }
-    }
-    {
-        let mut db = store.writer()?;
-        while !stop.load(Ordering::Acquire) && super::index::rebuild_one(&mut db)? {
             between(&mut db)?;
         }
     }
@@ -750,7 +746,7 @@ fn ingest_source(
     drop(reader);
     normalize::save_session(&tx, origin, source, &state)?;
     if !append {
-        super::metadata::source_replaced(&tx, origin, metadata.as_ref())?;
+        super::metadata::source_replaced(&tx, origin, metadata.as_ref(), state.thread.as_deref())?;
     }
     if mode != ReadMode::Inventory && !checkpointed {
         refresh_dependencies(&tx, origin, source, &companions)?;
