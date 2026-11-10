@@ -486,6 +486,7 @@ mod tests {
         let stopping = worker.clone();
         tokio::task::spawn_blocking(move || stopping.stop())
             .await
+            .unwrap()
             .unwrap();
         gateway
             .session_runtime

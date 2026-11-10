@@ -2630,28 +2630,7 @@ fn sessions_conversations_rank_coverage_title_hits_and_native_children() {
         db.execute("DELETE FROM item", []).unwrap();
         db.execute("UPDATE session SET title=NULL,cwd=NULL,last_at=NULL", [])
             .unwrap();
-        db.execute(
-            "UPDATE session SET title='drawer' WHERE session_key=?1",
-            [&root],
-        )
-        .unwrap();
         conversation_item(&db, &child, 0, "flicker", "assistant", None);
-        conversation_item(
-            &db,
-            &root,
-            1,
-            "drawer flicker",
-            "tool_result",
-            Some("2026-11-04T10:00:00Z"),
-        );
-        conversation_item(
-            &db,
-            &root,
-            2,
-            "drawer flicker",
-            "user",
-            Some("2026-11-03T10:00:00Z"),
-        );
         conversation_item(
             &db,
             &root,
@@ -2667,6 +2646,28 @@ fn sessions_conversations_rank_coverage_title_hits_and_native_children() {
             "drawer",
             "user",
             Some("2026-11-06T10:00:00Z"),
+        );
+    }
+    let split = conversation_search(&f.store, "drawer flicker", 30, Default::default());
+    assert_eq!(split.conversations[0].session_key, root);
+    assert_eq!(split.conversations[0].hit_count, 2);
+    {
+        let db = f.store.writer().unwrap();
+        conversation_item(
+            &db,
+            &root,
+            1,
+            "drawer flicker",
+            "tool_result",
+            Some("2026-11-04T10:00:00Z"),
+        );
+        conversation_item(
+            &db,
+            &root,
+            2,
+            "drawer flicker",
+            "user",
+            Some("2026-11-03T10:00:00Z"),
         );
     }
     let found = conversation_search(&f.store, "drawer flicker", 30, Default::default());
