@@ -233,8 +233,9 @@ receipt shape, and note what each leaves behind:
   caching is observed without a pass/fail threshold.
   It removes its gateway, daemon and private homes and retains a content-safe
   receipt under `/tmp/steer-fork-evidence-*`. Never route it to production.
-- `e2e-reads` is read-only. `e2e-fork-live` and `e2e-claude-fork-live` leave their
-  source and two forks in history. The Codex `e2e-thread-name-live` probe thread
+- `e2e-reads` is read-only. `e2e-fork-live` leaves its source and two forks in
+  history; `e2e-claude-fork-live` also forks through an item of a finished and of a
+  running turn, leaving four. The Codex `e2e-thread-name-live` probe thread
   is archived; the Claude session stays in history like the other Claude probes.
 - `e2e-device-tools-live` issues a temporary installation through the owning
   host's credential CLI (`--ssh-host` must name that gateway host), then uses

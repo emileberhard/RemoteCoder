@@ -36,7 +36,7 @@ surface:
 | Delegated jobs: Codex and Claude children spawned from a parent's tool process, results, parent callbacks, Stop, restart recovery and same-ID retry (isolated gateway, deterministic Codex model, host router for Claude) | `just gateway-e2e-delegated-jobs-isolated /absolute/gateway/binary /absolute/runtime/package` |
 | Fleet Live Activity: merged peer reports, exact rows, unavailable versus empty, End only when every declared host is current and empty, member and coordinator restarts, local-only legacy tokens (three isolated gateways, stub broker, deterministic Codex model) | `just gateway-e2e-fleet-live-activity-isolated /absolute/gateway/binary /absolute/runtime/package` |
 | First-party-first new conversation admission and last-resort effort clamping (isolated gateway, host router; logged-out Codex xhigh runs on Opus, then unavailable Claude forces Argon high, including a resumed Fast request) | `just gateway-e2e-provider-fallback-isolated /absolute/gateway/binary` |
-| `thread/fork(lastTurnId:)` boundaries (creates threads) | `just gateway-e2e-fork-live`, `just gateway-e2e-claude-fork-live` |
+| `thread/fork(lastTurnId:)` boundaries, plus Claude `lastItemId` boundaries in a finished and a running turn (creates threads) | `just gateway-e2e-fork-live`, `just gateway-e2e-claude-fork-live` |
 | Claude steering folds into one completion (router-backed Sonnet; one completion plus an empty active-turn snapshot) | `just gateway-e2e-claude-steer-live` |
 | Claude agent-initiated turns | `just gateway-e2e-claude-wake-live` |
 | Thread naming on a live and an idle runtime (one `thread/name/updated` per rename, `-32602` before a Claude thread's first turn) | `just gateway-e2e-thread-name-live` |
@@ -531,7 +531,7 @@ blocks startup or provider journal retirement.
   correlated to its request (`src/rpc/upstream_errors.rs`), pinned by a test to
   the fork commit in `docs/codex/compatibility.json`.
 - `host/info` returns the gateway process's `homeDirectory`, physical `hostname`,
-  `automationsAuthority`, `speechAvailable`, `fleetLiveActivity` and `claudeQueue` capabilities. These are the
+  `automationsAuthority`, `speechAvailable`, `fleetLiveActivity`, `claudeQueue` and `claudeItemFork` capabilities. These are the
   authoritative inputs for client feature availability and physical-host routing.
   Missing capabilities stay unknown/unavailable, never guessed from a display
   name. It is the only way a client learns the home directory; `command/exec` serves
@@ -1600,7 +1600,7 @@ Claude. The `RC_CLAUDE_*` settings are in
 - **Parity.** Claude supports live steering and exposes assistant deltas, tool
   actions, plans, reasoning progress, usage and completion through the same UI
   contract as Codex, and `thread/fork` works for both (*A fork copies the
-  conversation through a finished turn*).
+  conversation through a turn or one of its items*).
 - **Text between tool calls is narration; other thinking is a reasoning row.**
   - Current Claude models return narration as `thinking` blocks whose signature
     is tagged `narration`. In stream-json mode the CLI sends no thinking display
@@ -1769,9 +1769,9 @@ Claude. The `RC_CLAUDE_*` settings are in
     installation as the `take_photo` driver, which the queue-started turn keeps.
   - The queue file is not part of restart capture: it survives as is, the
     resumed turn runs first, and the drain owner starts the head afterwards.
-- **A fork copies the conversation through a finished turn.** `thread/fork` on
-  a `claude_…` thread runs in the source's host-default Claude profile
-  (`src/gateway/claude_fork.rs`).
+- **A fork copies the conversation through a turn or one of its items.**
+  `thread/fork` on a `claude_…` thread runs in the source's host-default Claude
+  profile (`src/gateway/claude_fork.rs`).
   - It mints a new `claude_<uuid>` and writes its transcript beside the
     source: every complete source record through the kept turn's last rendered
     record or tool result (the whole file when that turn is the latest and none
@@ -1797,10 +1797,23 @@ Claude. The `RC_CLAUDE_*` settings are in
     which nothing reads, and its metadata record, which metadata reads still
     return. Once the transcript exists the fork is complete, even if the
     response fails.
-  - A running turn never moves. Forking at or after one is refused, and a
-    whole-thread fork stops before it. The fork point is read under the
-    source's lifecycle lock, and the fork is refused if the running turn
-    changed meanwhile.
+  - `lastItemId`, valid only with `lastTurnId`, ends the copy at that item's
+    last record: its rendered block, or a tool call with its result
+    (`ClaudeProjection::fork_point`). Through the final item of a finished
+    turn it is that turn's fork. Otherwise the cut turn keeps its kept items'
+    identities and reads as interrupted, with no completion. An item that is
+    unknown, in another turn, unfinished, or whose records interleave with a
+    later item's is refused with `-32602`; no other boundary is substituted.
+    That includes a live-completed item the CLI has not written yet (about
+    0.5 s behind `item/completed` on CLI 2.1.321).
+    `host/info.claudeItemFork` advertises it. Resume handles every cut kind
+    (CLI 2.1.321): it drops a trailing thinking or narration block from the
+    model's context and adds its own `No response requested.` record, which
+    the projection ignores.
+  - A running turn never moves. A turn fork at or after it is refused, and a
+    whole-thread fork stops before it; an item fork may end inside it. The
+    fork point is read under the source's lifecycle lock, and the fork is
+    refused if the running turn changed meanwhile.
   - `--resume` resurrects non-durable session crons from the `CronCreate`
     records in the transcript (CLI 2.1.282 logs `resume: resurrected N session
     cron task(s)`), so a fork whose copied records still hold one under the

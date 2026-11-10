@@ -20,6 +20,7 @@ from .diagnostics import _journal_read
 from .file_io import file_chunks, finish_thread_io, write_receipt
 from .performance import _native_page_entries
 from .rpc import (
+    GatewayRPCError,
     _drain_ready,
     _event_thread_id,
     _initialize,
@@ -86,18 +87,22 @@ async def cmd_e2e_fork_live(args: argparse.Namespace) -> int:
         _ = await _drain_ready(ws, timeout_s=args.timeout)
         await _initialize(ws, timeout_s=args.timeout)
 
-        async def fork(last_turn_id: str | None) -> dict[str, Any]:
+        async def fork(last_turn_id: str | None, last_item_id: str | None = None, fork_ws=None) -> dict[str, Any]:
+            fork_ws = fork_ws or ws
+            params = {
+                "threadId": first.thread_id,
+                "lastTurnId": last_turn_id,
+                "persistExtendedHistory": True,
+                "excludeTurns": True,
+                "threadSource": "user",
+            }
+            if last_item_id is not None:
+                params["lastItemId"] = last_item_id
             result, elapsed, _byte_count = await _timed_rpc(
-                ws,
+                fork_ws,
                 req_id=next_id(),
                 method="thread/fork",
-                params={
-                    "threadId": first.thread_id,
-                    "lastTurnId": last_turn_id,
-                    "persistExtendedHistory": True,
-                    "excludeTurns": True,
-                    "threadSource": "user",
-                },
+                params=params,
                 timeout_s=args.timeout,
             )
             thread = result.get("thread")
@@ -106,16 +111,17 @@ async def cmd_e2e_fork_live(args: argparse.Namespace) -> int:
             _assert_e2e(fork_id not in ("", first.thread_id), "thread/fork returned no new thread id")
             _assert_e2e(thread.get("forkedFromId") == first.thread_id, "fork did not name its source thread")
             _assert_e2e(thread.get("name") == source_name, f"fork name was {thread.get('name')!r}, expected the source name")
-            await mark_purpose(ws, next_id=next_id, thread_id=fork_id, purpose="probe", timeout_s=args.timeout)
+            await mark_purpose(fork_ws, next_id=next_id, thread_id=fork_id, purpose="probe", timeout_s=args.timeout)
             later, _elapsed, _byte_count = await _timed_rpc(
-                ws, req_id=next_id(), method="thread/read",
+                fork_ws, req_id=next_id(), method="thread/read",
                 params={"threadId": fork_id, "includeTurns": False}, timeout_s=args.timeout,
             )
             _assert_e2e(
                 (later.get("thread") or {}).get("forkedFromId") == first.thread_id,
                 "a later thread/read did not name the fork's source thread",
             )
-            report("fork", f"thread={fork_id} through={last_turn_id or 'latest'} elapsed={elapsed:.2f}s")
+            through = f"{last_turn_id}/{last_item_id}" if last_item_id else last_turn_id or "latest"
+            report("fork", f"thread={fork_id} through={through} elapsed={elapsed:.2f}s")
             return thread
 
         first = await _run_probe_turn(
@@ -274,8 +280,156 @@ async def cmd_e2e_fork_live(args: argparse.Namespace) -> int:
                         steering.cancel()
                         await asyncio.gather(steering, return_exceptions=True)
 
+        if args.provider == "claude":
+            await _claude_item_forks(
+                cfg, ws, args, next_id=next_id, report=report, fork=fork, source=first.thread_id,
+                source_turns=expected_turns, run_id=run_id,
+            )
+
     print(f"OK live {args.provider} fork e2e passed source={first.thread_id} fork={fork_id} whole={whole_id}")
     return 0
+
+
+async def _turn_statuses(ws, *, next_id, thread_id: str, timeout_s: float) -> list[tuple[str, str]]:
+    result, _elapsed, _byte_count = await _timed_rpc(
+        ws, req_id=next_id(), method="thread/turns/list",
+        params={"threadId": thread_id, "limit": 10, "sortDirection": "asc", "itemsView": "notLoaded"},
+        timeout_s=timeout_s,
+    )
+    return [(_norm_turn_id(turn["id"]), turn["status"]) for turn in _native_page_entries(result, limit=10)]
+
+
+async def _turn_items(ws, *, next_id, thread_id: str, turn_id: str, timeout_s: float) -> list[dict[str, Any]]:
+    page, _elapsed, _byte_count = await _timed_rpc(
+        ws, req_id=next_id(), method="thread/items/list",
+        params={"threadId": thread_id, "turnId": turn_id, "limit": 50, "sortDirection": "asc"},
+        timeout_s=timeout_s,
+    )
+    _assert_e2e(page.get("nextCursor") is None, "item fork fixture exceeded bounded item probe budget")
+    return [entry["item"] for entry in _native_page_entries(page, limit=50)]
+
+
+async def _claude_item_forks(cfg, ws, args, *, next_id, report, fork, source: str, source_turns: list[str], run_id: str) -> None:
+    info, _elapsed, _byte_count = await _timed_rpc(ws, req_id=next_id(), method="host/info", params={}, timeout_s=args.timeout)
+    _assert_e2e(info.get("claudeItemFork") is True, "host/info does not advertise claudeItemFork")
+
+    def marker(name: str) -> str:
+        return f"RCFORK-{run_id}-{name}"
+
+    def steps(word: str, before: str, command: str, after: str) -> str:
+        return (f"Do these steps in order. First write a short message containing exactly {word} {marker(before)}. "
+                f"Then run the shell command `{command}` with the Bash tool. "
+                f"Then write a short message containing exactly {word} {marker(after)}. "
+                "Do not mention either marker anywhere else.")
+
+    async def assert_cut(fork_id: str, turn_id: str, source_items: list[dict[str, Any]], item_id: str) -> None:
+        kept = [item["id"] for item in source_items]
+        kept = kept[:kept.index(item_id) + 1]
+        cut = [item["id"] for item in await _turn_items(ws, next_id=next_id, thread_id=fork_id, turn_id=turn_id,
+                                                        timeout_s=args.timeout)]
+        _assert_e2e(cut == kept, f"the cut turn kept {cut}, expected the source items {kept}")
+        statuses = await _turn_statuses(ws, next_id=next_id, thread_id=fork_id, timeout_s=args.timeout)
+        _assert_e2e(statuses[-1] == (_norm_turn_id(turn_id), "interrupted"), f"the cut turn reads {statuses[-1]}")
+
+    async def last_words_probe(thread_id: str, said: str, unsaid: str) -> None:
+        if args.skip_model_probe:
+            return
+        tools: list[str] = []
+
+        def observe(message):
+            item = message.get("params", {}).get("item", {})
+            if message.get("method") == "item/started" and item.get("type") == "commandExecution":
+                tools.append(item.get("id", ""))
+
+        probe = await _run_probe_turn(
+            ws, next_id=next_id,
+            prompt="Without using tools, quote exactly the last message you wrote before this one, and nothing else.",
+            resume=thread_id, provider="claude", model=args.model, cwd=args.cwd,
+            approval_policy=args.approval_policy, sandbox=args.sandbox,
+            network_access=not args.no_network_access, timeout_s=args.timeout, on_event=observe,
+        )
+        _assert_e2e(probe.status == "completed", f"item fork probe turn ended as {probe.status!r}")
+        _assert_e2e(not tools, f"the item fork picked its old task up again: {tools}")
+        _assert_e2e(marker(said) in probe.assistant and marker(unsaid) not in probe.assistant,
+                    f"the item fork's last words were not {marker(said)}: {probe.assistant!r}")
+        report("item fork model context", f"thread={thread_id} assistant={probe.assistant!r}")
+
+    finished = await _run_probe_turn(
+        ws, next_id=next_id, prompt=steps("STEP", "C", "true", "D"), resume=source, provider="claude",
+        model=None, cwd=args.cwd, approval_policy=args.approval_policy, sandbox=args.sandbox,
+        network_access=not args.no_network_access, timeout_s=args.timeout,
+    )
+    _assert_e2e(finished.status == "completed", f"multi-step source turn ended as {finished.status!r}")
+    items = await _turn_items(ws, next_id=next_id, thread_id=source, turn_id=finished.turn_id, timeout_s=args.timeout)
+    step = next((index for index, item in enumerate(items)
+                 if item.get("type") == "agentMessage" and marker("C") in (item.get("text") or "")), None)
+    _assert_e2e(step is not None and step + 1 < len(items),
+                f"the multi-step turn has no settled message before its end: {[item.get('type') for item in items]}")
+    finished_fork = str((await fork(finished.turn_id, items[step]["id"]))["id"])
+    fork_turns, _fork_text = await _fork_probe_history(ws, next_id=next_id, thread_id=finished_fork, timeout_s=args.timeout)
+    expected = [*source_turns, _norm_turn_id(finished.turn_id)]
+    _assert_e2e(fork_turns == expected, f"finished item fork turns were {fork_turns}, expected {expected}")
+    await assert_cut(finished_fork, finished.turn_id, items, items[step]["id"])
+    report("finished item fork history", f"thread={finished_fork} item={items[step]['id']} turns={len(fork_turns)}")
+    await last_words_probe(finished_fork, said="C", unsaid="D")
+
+    live_item: dict[str, str] = {}
+    tool_started = asyncio.Event()
+
+    def observe_live(message):
+        params = message.get("params", {})
+        item = params.get("item", {})
+        if (message.get("method") == "item/completed" and item.get("type") == "agentMessage"
+                and marker("E") in (item.get("text") or "")):
+            live_item.update(turn=params["turnId"], item=item["id"])
+        if message.get("method") == "item/started" and item.get("type") == "commandExecution" and live_item:
+            tool_started.set()
+
+    async with await _ws_connect(cfg) as fork_ws:
+        await _drain_ready(fork_ws, timeout_s=args.timeout)
+        await _initialize(fork_ws, timeout_s=args.timeout)
+
+        async def fork_while_running() -> tuple[str, list[tuple[str, str]], float]:
+            await tool_started.wait()
+            started = time.monotonic()
+            while True:
+                try:
+                    forked = str((await fork(live_item["turn"], live_item["item"], fork_ws=fork_ws))["id"])
+                    waited = time.monotonic() - started
+                    break
+                except GatewayRPCError as error:
+                    if (error.code != -32602 or "is not in the transcript" not in str(error)
+                            or time.monotonic() - started > 5):
+                        raise
+                    await asyncio.sleep(0.25)
+            source_state = await _turn_statuses(fork_ws, next_id=next_id, thread_id=source, timeout_s=args.timeout)
+            return forked, source_state, waited
+
+        forking = asyncio.create_task(fork_while_running())
+        try:
+            live = await _run_probe_turn(
+                ws, next_id=next_id, prompt=steps("LIVE", "E", "sleep 20", "F"), resume=source, provider="claude",
+                model=None, cwd=args.cwd, approval_policy=args.approval_policy, sandbox=args.sandbox,
+                network_access=not args.no_network_access, timeout_s=args.timeout, on_event=observe_live,
+            )
+            _assert_e2e(tool_started.is_set(), "the running source turn never reached its shell command")
+            running_fork, source_while_forking, flush_wait = await forking
+        finally:
+            forking.cancel()
+            await asyncio.gather(forking, return_exceptions=True)
+    _assert_e2e(source_while_forking[-1] == (_norm_turn_id(live.turn_id), "inProgress"),
+                f"the source turn was not running while it was forked: {source_while_forking[-1]}")
+    _assert_e2e(live.status == "completed", f"the forked source turn ended as {live.status!r}")
+    live_items = await _turn_items(ws, next_id=next_id, thread_id=source, turn_id=live.turn_id, timeout_s=args.timeout)
+    _assert_e2e(any(item.get("type") == "agentMessage" and marker("F") in (item.get("text") or "") for item in live_items),
+                "the source turn did not finish after its fork")
+    fork_turns, _fork_text = await _fork_probe_history(ws, next_id=next_id, thread_id=running_fork, timeout_s=args.timeout)
+    expected = [*source_turns, _norm_turn_id(finished.turn_id), _norm_turn_id(live.turn_id)]
+    _assert_e2e(fork_turns == expected, f"running item fork turns were {fork_turns}, expected {expected}")
+    await assert_cut(running_fork, live.turn_id, live_items, live_item["item"])
+    report("running item fork history",
+           f"thread={running_fork} item={live_item['item']} turns={len(fork_turns)} transcript_wait={flush_wait:.2f}s")
+    await last_words_probe(running_fork, said="E", unsaid="F")
 
 
 async def cmd_e2e_questions_live(args: argparse.Namespace) -> int:
