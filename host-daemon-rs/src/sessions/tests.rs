@@ -3083,6 +3083,44 @@ fn sessions_conversations_preserve_origin_facts_through_replacement() -> Result<
 }
 
 #[test]
+fn sessions_native_titles_resume_after_complete_lines_and_replay_a_rewrite() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let path = f.origins[0].local_home.join("session_index.jsonl");
+    write(
+        &path,
+        &[json!({"id":"codex-root","thread_name":"First title"})],
+    );
+    let db = f.store.writer()?;
+    let current = || {
+        db.query_row(
+            "SELECT title FROM session WHERE thread_id='codex-root'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+    };
+    super::metadata::titles(&db, &f.origins)?;
+    assert_eq!(current()?, "First title");
+    let mut file = OpenOptions::new().append(true).open(&path)?;
+    write!(
+        file,
+        "{{\"id\":\"codex-root\",\"thread_name\":\"Append title\""
+    )?;
+    super::metadata::titles(&db, &f.origins)?;
+    assert_eq!(current()?, "First title");
+    writeln!(file, "}}")?;
+    super::metadata::titles(&db, &f.origins)?;
+    assert_eq!(current()?, "Append title");
+    write(
+        &path,
+        &[json!({"id":"codex-root","thread_name":"Replacement title"})],
+    );
+    super::metadata::titles(&db, &f.origins)?;
+    assert_eq!(current()?, "Replacement title");
+    Ok(())
+}
+
+#[test]
 #[ignore]
 fn sessions_rebuild_search_corpus() -> Result<()> {
     let manifest = PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_ORIGINS")?);

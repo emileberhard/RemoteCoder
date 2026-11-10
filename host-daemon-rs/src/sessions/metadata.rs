@@ -5,7 +5,7 @@ use anyhow::{Result, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek};
 
 pub(crate) type Parents = HashMap<ConversationIdentity, Option<AgentAddress>>;
 
@@ -53,31 +53,65 @@ pub(crate) fn parents(db: &Connection, origins: &[Origin], parents: &Parents) ->
     Ok(unresolved)
 }
 
+#[derive(Serialize, Deserialize)]
+struct TitleCheckpoint {
+    identity: String,
+    bytes: u64,
+    hash: String,
+}
+
 pub(crate) fn titles(db: &Connection, origins: &[Origin]) -> Result<()> {
     for origin in origins.iter().filter(|o| o.provider == "codex") {
         let path = origin.local_home.join("session_index.jsonl");
-        let Some(identity) = super::ingest::file_identity(&path)? else {
-            continue;
+        let mut file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
         };
+        let revision = file.metadata()?;
+        ensure!(
+            revision.is_file() && revision.len() <= 16 << 20,
+            "capacity: native title index exceeds 16 MiB"
+        );
+        let identity = super::ingest::identity(&revision);
         let cache_key = titles_key(origin);
-        if db
+        let prior = db
             .query_row("SELECT value FROM meta WHERE key=?1", [&cache_key], |r| {
                 r.get::<_, String>(0)
             })
             .optional()?
-            .as_deref()
-            == Some(&identity)
+            .and_then(|value| serde_json::from_str::<TitleCheckpoint>(&value).ok());
+        if prior
+            .as_ref()
+            .is_some_and(|prior| prior.identity == identity)
         {
             continue;
         }
-        let file = std::fs::File::open(&path)?;
-        ensure!(
-            file.metadata()?.len() <= 16 << 20,
-            "capacity: native title index exceeds 16 MiB"
-        );
-        let mut titles = HashMap::new();
-        for line in BufReader::new(file).lines() {
-            let value: serde_json::Value = match serde_json::from_str(&line?) {
+
+        let mut hash = blake3::Hasher::new();
+        let mut offset = 0;
+        if let Some(prior) = prior.filter(|prior| prior.bytes > 0 && prior.bytes < revision.len()) {
+            let length = std::io::copy(&mut (&mut file).take(prior.bytes), &mut hash)?;
+            if length == prior.bytes && hash.finalize().to_hex().as_str() == prior.hash {
+                offset = prior.bytes;
+            } else {
+                file.rewind()?;
+                hash.reset();
+            }
+        }
+
+        let mut reader = BufReader::new(file.take(revision.len() - offset));
+        let mut line = Vec::new();
+        let mut updates = HashMap::new();
+        loop {
+            line.clear();
+            let count = reader.read_until(b'\n', &mut line)?;
+            if count == 0 || !line.ends_with(b"\n") {
+                break;
+            }
+            offset += count as u64;
+            hash.update(&line);
+            let value: serde_json::Value = match serde_json::from_slice(&line) {
                 Ok(value) => value,
                 Err(_) => continue,
             };
@@ -85,20 +119,25 @@ pub(crate) fn titles(db: &Connection, origins: &[Origin]) -> Result<()> {
                 value["id"].as_str(),
                 value["thread_name"].as_str().filter(|t| !t.is_empty()),
             ) {
-                titles.insert(id.to_owned(), title.to_owned());
+                updates.insert(id.to_owned(), title.to_owned());
             }
         }
+        let checkpoint = TitleCheckpoint {
+            identity,
+            bytes: offset,
+            hash: hash.finalize().to_hex().to_string(),
+        };
         let tx = db.unchecked_transaction()?;
         {
             let mut update =
                 tx.prepare("UPDATE session SET title=?2 WHERE session_key=?1 AND title IS NOT ?2")?;
-            for (thread, title) in titles {
+            for (thread, title) in updates {
                 update.execute(params![super::session_key(origin, &thread), title])?;
             }
         }
         tx.execute(
             "INSERT OR REPLACE INTO meta VALUES(?1,?2)",
-            params![cache_key, identity],
+            params![cache_key, serde_json::to_string(&checkpoint)?],
         )?;
         tx.commit()?;
     }
