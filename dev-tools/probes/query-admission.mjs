@@ -48,7 +48,7 @@ try {
     } }));
     assert(!(await lab.within(initialized, 10000, "Initialize did not finish")).error);
     ws.send(JSON.stringify({ method: "initialized", params: {} }));
-    const cancelled = new Set(["burst-1", "burst-9", "burst-19"]);
+    const cancellationTargets = new Set(["burst-1", "burst-9", "burst-19"]);
     const started = performance.now();
     for (let id = 0; id < 20; id++) {
         ws.send(JSON.stringify({
@@ -57,13 +57,15 @@ try {
                 : { threadId: "claude_e1741c43-3d9a-4448-9f4a-3c7e5906e852" },
         }));
     }
-    for (const id of cancelled) {
+    for (const id of cancellationTargets) {
         ws.send(JSON.stringify({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } }));
     }
     await lab.within(completed, 20000, "Burst did not finish");
+    let cancelled = 0;
     for (const [id, response] of responses) {
         assert.notEqual(response.error?.data?.kind, "capacity", `${id} rejected on burst admission`);
-        if (cancelled.has(id)) {
+        if (cancellationTargets.has(id) && response.error) {
+            cancelled += 1;
             assert.equal(response.error?.code, -32800);
             assert.equal(response.error?.message, "Request cancelled");
             assert.deepEqual(response.error?.data, { kind: "requestCancelled", retryable: false });
@@ -80,7 +82,8 @@ try {
     assert(!messageError, messageError?.message);
     console.log(JSON.stringify({
         passed: true, readyCapability: ready.params.capabilities.cancelRequest,
-        requests: responses.size, cancelled: cancelled.size, capacityErrors: 0, elapsedMs,
+        requests: responses.size, cancelled,
+        completedBeforeCancel: cancellationTargets.size - cancelled, capacityErrors: 0, elapsedMs,
         root: lab.root,
     }));
 } catch (error) {

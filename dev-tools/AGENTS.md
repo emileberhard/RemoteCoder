@@ -30,10 +30,13 @@ it as evidence.
 
 `just gateway-e2e-query-admission-isolated /absolute/gateway/binary` runs
 `probes/query-admission.mjs` against its own gateway, Codex daemon, private state
-and stub launcher. It checks a burst of owned reads, exact cancellations, the
-advertised capability and a usable connection afterwards. It stops its own
+and stub launcher. It checks a burst of owned reads, one terminal response per
+request, typed cancellations when they win, the advertised capability and a
+usable connection afterwards. It counts requests that finish before cancellation. It stops its own
 processes and removes the private root on success; failure retains the root as
 evidence. It never connects to an installed gateway or starts an agent turn.
+On Linux, a short disk-backed `TMPDIR` keeps probe state and Unix sockets off
+a tmpfs that cannot satisfy the catalog disk reserve.
 
 ## Conversation search probe
 
