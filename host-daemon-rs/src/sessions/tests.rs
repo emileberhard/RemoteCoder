@@ -3038,3 +3038,55 @@ fn sessions_meaning_resolves_exact_native_id_and_folds_roots() -> Result<()> {
     assert!(result["conversations"][1]["title"].is_null());
     Ok(())
 }
+
+#[test]
+fn sessions_ingest_resumes_a_committed_inventory_checkpoint() -> Result<()> {
+    let f = fixture();
+    write(
+        &f.codex,
+        &[
+            codex_meta("codex-root", None),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"before checkpoint"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"after checkpoint"}}),
+        ],
+    );
+    let stop = AtomicBool::new(false);
+    let boundaries = std::cell::Cell::new(0);
+    let mut accepted_revision = None;
+    ingest::scan_serving(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(std::slice::from_ref(&f.codex)),
+        &stop,
+        &|| {
+            boundaries.set(boundaries.get() + 1);
+            boundaries.get() == 3
+        },
+        &mut |db| {
+            accepted_revision = Some(db.query_row(
+                "SELECT revision FROM item WHERE text='before checkpoint'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )?);
+            let future: i64 = db.query_row(
+                "SELECT count(*) FROM item WHERE text='after checkpoint'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(future, 0);
+            stop.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        },
+    )?;
+    let accepted_revision = accepted_revision.expect("inventory checkpoint was committed");
+    scan(&f);
+    let db = f.store.reader()?;
+    let (first, second): (i64, i64) = db.query_row(
+        "SELECT (SELECT revision FROM item WHERE text='before checkpoint'),(SELECT revision FROM item WHERE text='after checkpoint')",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert_eq!(first, accepted_revision);
+    assert!(second > first);
+    Ok(())
+}

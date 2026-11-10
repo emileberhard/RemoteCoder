@@ -60,6 +60,16 @@ impl Mailbox {
             .map_err(anyhow::Error::msg)
     }
 
+    fn inventory_waiting(&self) -> bool {
+        !self
+            .wake
+            .0
+            .lock()
+            .expect("Session worker wake poisoned")
+            .1
+            .is_empty()
+    }
+
     fn requested(&self) -> bool {
         let pending = self.wake.0.lock().expect("Session worker wake poisoned");
         !pending.1.is_empty() || pending.2.is_some()
@@ -323,7 +333,7 @@ impl Worker {
                             endpoint.serve(&mut db, &origins, &mut discovery);
                             hot.observe(&db, &origins)?;
                         }
-                        let outcome = ingest::scan_serving(&store, &origins, scope, &flag, &mut |db| {
+                        let outcome = ingest::scan_serving(&store, &origins, scope, &flag, &|| endpoint.inventory_waiting(), &mut |db| {
                             if endpoint.requested() {
                                 endpoint.serve(db, &origins, &mut discovery);
                                 hot.observe(db, &origins)?;
@@ -689,6 +699,7 @@ mod tests {
                     std::slice::from_ref(writer_origin),
                     ingest::Scope::Full,
                     &writer_mailbox.stop,
+                    &|| false,
                     &mut |db| {
                         if first {
                             first = false;

@@ -18,7 +18,10 @@ the map. Directory revisions and unresolved header paths are each capped at
 reconciles rebuild that discovery map and ingest missing headers before content.
 Identity reads use the same parser with an 8 MiB/128-record budget. Partial
 identities remain unavailable. A file created during an unusually long atomic
-source save can hit the explicit five-second inventory deadline; its rows never
+source record or evidence check can hit the explicit five-second inventory deadline.
+New sources and verified appends checkpoint at a complete record when inventory
+waits, serve its headers, and resume from the persisted prefix. A changed-prefix
+replacement rolls back before serving inventory and retries atomically. Rows never
 become a false empty result. Source-save durations are reported as aggregate
 longestSourceSeconds and sourcesOverFiveSeconds by ingestion.
 
