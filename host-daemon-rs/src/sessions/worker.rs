@@ -13,12 +13,12 @@ const RECONCILE: Duration = Duration::from_secs(600);
 const PENDING_PATHS: usize = 512;
 
 #[derive(Default)]
-struct Pending(
-    Vec<BTreeSet<PathBuf>>,
-    Vec<InventoryRequest>,
-    Option<super::metadata::Parents>,
-    Option<MirrorRequest>,
-);
+struct Pending {
+    paths: Vec<BTreeSet<PathBuf>>,
+    inventory: Vec<InventoryRequest>,
+    parents: Option<super::metadata::Parents>,
+    mirror: Option<MirrorRequest>,
+}
 
 struct InventoryRequest {
     deadline: Instant,
@@ -49,10 +49,10 @@ impl Mailbox {
                 "unavailable: session worker stopped"
             );
             anyhow::ensure!(
-                pending.3.is_none(),
+                pending.mirror.is_none(),
                 "capacity: a mirror projection is already pending"
             );
-            pending.3 = Some(MirrorRequest { projection, reply });
+            pending.mirror = Some(MirrorRequest { projection, reply });
             self.wake.1.notify_one();
         }
         result
@@ -84,7 +84,7 @@ impl Mailbox {
             .wait_timeout_while(
                 pending,
                 deadline.saturating_duration_since(Instant::now()),
-                |pending| pending.1.len() >= 64 && !self.stop.load(Ordering::Acquire),
+                |pending| pending.inventory.len() >= 64 && !self.stop.load(Ordering::Acquire),
             )
             .expect("Session worker wake poisoned");
         anyhow::ensure!(
@@ -92,10 +92,10 @@ impl Mailbox {
             "unavailable: session worker stopped"
         );
         anyhow::ensure!(
-            pending.1.len() < 64 && Instant::now() < deadline,
+            pending.inventory.len() < 64 && Instant::now() < deadline,
             "unavailable: inventory catch-up exceeded five seconds"
         );
-        pending.1.push(InventoryRequest { deadline, reply });
+        pending.inventory.push(InventoryRequest { deadline, reply });
         self.wake.1.notify_all();
         drop(pending);
         result
@@ -110,13 +110,13 @@ impl Mailbox {
             .0
             .lock()
             .expect("Session worker wake poisoned")
-            .1
+            .inventory
             .is_empty()
     }
 
     fn requested(&self) -> bool {
         let pending = self.wake.0.lock().expect("Session worker wake poisoned");
-        !pending.1.is_empty() || pending.2.is_some()
+        !pending.inventory.is_empty() || pending.parents.is_some()
     }
 
     fn reconcile(&self, db: &mut rusqlite::Connection, origins: &[Origin]) -> Result<()> {
@@ -136,8 +136,8 @@ impl Mailbox {
     fn serve(&self, db: &mut rusqlite::Connection, origins: &[Origin]) {
         let requests = {
             let mut pending = self.wake.0.lock().expect("Session worker wake poisoned");
-            let requests = std::mem::take(&mut pending.1);
-            if let Some(parents) = pending.2.take()
+            let requests = std::mem::take(&mut pending.inventory);
+            if let Some(parents) = pending.parents.take()
                 && let Err(error) = super::metadata::parents(db, origins, &parents)
             {
                 tracing::warn!(%error,"Session origin ownership unavailable");
@@ -168,10 +168,10 @@ impl Mailbox {
 
 impl Pending {
     fn include(&mut self, index: usize, root: &Path, path: PathBuf) {
-        if self.0.len() <= index {
-            self.0.resize_with(index + 1, BTreeSet::new);
+        if self.paths.len() <= index {
+            self.paths.resize_with(index + 1, BTreeSet::new);
         }
-        let paths = &mut self.0[index];
+        let paths = &mut self.paths[index];
         if path.ancestors().any(|parent| paths.contains(parent)) {
             return;
         }
@@ -222,10 +222,10 @@ impl Pending {
                 if origin.provider == "codex"
                     && path == &origin.local_home.join("session_index.jsonl")
                 {
-                    if self.0.len() <= i {
-                        self.0.resize_with(i + 1, BTreeSet::new);
+                    if self.paths.len() <= i {
+                        self.paths.resize_with(i + 1, BTreeSet::new);
                     }
-                    self.0[i].insert(path.clone());
+                    self.paths[i].insert(path.clone());
                 } else if path.starts_with(&root) {
                     self.include(i, &root, path.clone());
                 } else if root.starts_with(path)
@@ -243,13 +243,13 @@ impl Pending {
     }
 
     fn is_empty(&self) -> bool {
-        self.0.iter().all(BTreeSet::is_empty)
-            && self.1.is_empty()
-            && self.2.is_none()
-            && self.3.is_none()
+        self.paths.iter().all(BTreeSet::is_empty)
+            && self.inventory.is_empty()
+            && self.parents.is_none()
+            && self.mirror.is_none()
     }
     fn take(&mut self) -> Vec<BTreeSet<PathBuf>> {
-        std::mem::take(&mut self.0)
+        std::mem::take(&mut self.paths)
     }
 }
 
@@ -303,7 +303,11 @@ fn watch(
 
 impl Worker {
     pub(crate) fn parents(&self, parents: super::metadata::Parents) {
-        self.wake.0.lock().expect("Session worker wake poisoned").2 = Some(parents);
+        self.wake
+            .0
+            .lock()
+            .expect("Session worker wake poisoned")
+            .parents = Some(parents);
         self.wake.1.notify_one();
     }
 
@@ -366,8 +370,8 @@ impl Worker {
                         break;
                     }
                     let full = Instant::now() >= next_reconcile;
-                    let parents = pending.2.take();
-                    let mirror = pending.3.take();
+                    let parents = pending.parents.take();
+                    let mirror = pending.mirror.take();
                     let batches = pending.take();
                     drop(pending);
                     let mut paths: Vec<_> = batches.into_iter().flatten().collect();
@@ -478,13 +482,13 @@ impl Worker {
                                 next_reconcile = Instant::now() + retry_delay;
                             }
                             let failure = format!("{error:#}");
-                            for request in std::mem::take(&mut pending.1) {
+                            for request in std::mem::take(&mut pending.inventory) {
                                 let _ = request.reply.try_send(Err(failure.clone()));
                             }
                             let _pending = signal
                                 .1
                                 .wait_timeout_while(pending, retry_delay, |pending| {
-                                    pending.1.is_empty() && !flag.load(Ordering::Acquire)
+                                    pending.inventory.is_empty() && !flag.load(Ordering::Acquire)
                                 })
                                 .expect("Session worker wake poisoned");
                             retry_delay = (retry_delay * 2).min(RECONCILE);
@@ -506,8 +510,8 @@ impl Worker {
     fn request_stop(&self) {
         let mut pending = self.wake.0.lock().expect("Session worker wake poisoned");
         self.stop.store(true, Ordering::Release);
-        let requests = std::mem::take(&mut pending.1);
-        pending.3.take();
+        let requests = std::mem::take(&mut pending.inventory);
+        pending.mirror.take();
         self.wake.1.notify_all();
         drop(pending);
         for request in requests {
@@ -639,17 +643,17 @@ mod tests {
             );
         }
         assert_eq!(
-            pending.0[0],
+            pending.paths[0],
             BTreeSet::from([origin.path().join("subtree")])
         );
-        assert_eq!(pending.0[1], BTreeSet::from([other.path()]));
+        assert_eq!(pending.paths[1], BTreeSet::from([other.path()]));
         pending.event(
             &origins,
             Ok(Event::new(EventKind::Other)
                 .add_path(origin.local_home.clone())
                 .set_flag(notify::event::Flag::Rescan)),
         );
-        assert_eq!(pending.0[0], BTreeSet::from([origin.path()]));
+        assert_eq!(pending.paths[0], BTreeSet::from([origin.path()]));
         let paths: Vec<_> = pending.take().into_iter().flatten().collect();
         assert_eq!(paths.len(), 2);
         assert!(pending.is_empty());
@@ -849,10 +853,10 @@ mod tests {
             let (pending, _) = wake
                 .1
                 .wait_timeout_while(pending, Duration::from_secs(5), |pending| {
-                    pending.1.len() != CALLERS
+                    pending.inventory.len() != CALLERS
                 })
                 .unwrap();
-            assert_eq!(pending.1.len(), CALLERS);
+            assert_eq!(pending.inventory.len(), CALLERS);
             drop(pending);
             release_tx.send(())?;
             for reader in readers {
