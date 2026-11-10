@@ -2784,6 +2784,63 @@ fn sessions_conversations_refold_all_descendants_when_ancestor_arrives() -> Resu
 }
 
 #[test]
+fn sessions_conversations_share_document_and_hit_kinds() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let key = super::session_key(&f.origins[0], "codex-root");
+    {
+        let db = f.store.writer()?;
+        conversation_item(&db, &key, 900, "reasoningfixture", "reasoning", None);
+        conversation_item(
+            &db,
+            &key,
+            901,
+            "reasoningfixture toolonlyfixture",
+            "tool_result",
+            None,
+        );
+        conversation_item(
+            &db,
+            &key,
+            902,
+            "reasoningfixture systemonlyfixture",
+            "system",
+            None,
+        );
+    }
+    let result = conversation_search(&f.store, "reasoningfixture", 30, Default::default());
+    assert_eq!(result.conversations[0].hit_count, 1);
+    assert_eq!(result.conversations[0].hits[0].kind, "reasoning");
+    assert!(
+        conversation_search(&f.store, "toolonlyfixture", 30, Default::default())
+            .conversations
+            .is_empty()
+    );
+    assert_eq!(
+        search(&f.store, "toolonlyfixture")["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    {
+        let db = f.store.writer()?;
+        db.execute(
+            "UPDATE item SET kind='assistant' WHERE item_key='fixture-item-901'",
+            [],
+        )?;
+        db.execute(
+            "UPDATE item SET kind='tool_result' WHERE item_key='fixture-item-900'",
+            [],
+        )?;
+    }
+    let result = conversation_search(&f.store, "reasoningfixture", 30, Default::default());
+    assert_eq!(result.conversations[0].hit_count, 1);
+    assert_eq!(result.conversations[0].hits[0].kind, "assistant");
+    Ok(())
+}
+
+#[test]
 fn sessions_conversations_bound_hits_and_exclude_folder_only_matches() {
     let f = fixture();
     scan(&f);

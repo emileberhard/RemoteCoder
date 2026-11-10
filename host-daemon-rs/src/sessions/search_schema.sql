@@ -3,21 +3,36 @@ CREATE TABLE search_member (session_key TEXT PRIMARY KEY, root_key TEXT NOT NULL
 CREATE INDEX search_root ON search_member(root_key,session_key);
 CREATE TABLE search_dirty (session_key TEXT PRIMARY KEY);
 CREATE TABLE search_item (id INTEGER PRIMARY KEY, scope TEXT NOT NULL);
-CREATE VIEW search_item_content AS SELECT i.rowid,i.text,m.scope FROM item i JOIN search_item m ON m.id=i.rowid;
+CREATE VIEW searchable_item AS
+ SELECT i.rowid, i.session_key, i.text, i.text_bytes, i.seq, 's'||s.source_id AS scope,
+        CASE i.kind WHEN 'user' THEN 'typed' ELSE 'other' END AS document_column
+ FROM item i JOIN session s USING(session_key)
+ WHERE i.kind IN ('user','assistant','reasoning') AND i.text_bytes>0;
+CREATE VIEW search_item_content AS
+ SELECT i.rowid,i.text,m.scope FROM item i JOIN search_item m ON m.id=i.rowid;
 CREATE VIRTUAL TABLE conversation_fts USING fts5(title,typed,other,cwd,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 2',prefix='2 3 4');
 CREATE VIRTUAL TABLE item_word_fts USING fts5(text,scope,content='search_item_content',content_rowid='rowid',tokenize='unicode61 remove_diacritics 2',prefix='2 3 4');
-CREATE TRIGGER search_item_insert AFTER INSERT ON item BEGIN
- INSERT INTO search_item VALUES(new.rowid,(SELECT 's'||source_id FROM session WHERE session_key=new.session_key));
+CREATE TRIGGER search_item_insert AFTER INSERT ON item
+WHEN EXISTS(SELECT 1 FROM searchable_item WHERE rowid=new.rowid) BEGIN
+ INSERT INTO search_item SELECT rowid,scope FROM searchable_item WHERE rowid=new.rowid;
  INSERT INTO item_word_fts(rowid,text,scope) SELECT new.rowid,new.text,scope FROM search_item WHERE id=new.rowid;
  INSERT INTO search_dirty SELECT new.session_key WHERE NOT EXISTS(SELECT 1 FROM search_dirty WHERE session_key=new.session_key);
 END;
-CREATE TRIGGER search_item_delete BEFORE DELETE ON item BEGIN
+CREATE TRIGGER search_item_delete BEFORE DELETE ON item
+WHEN EXISTS(SELECT 1 FROM search_item WHERE id=old.rowid) BEGIN
  INSERT INTO item_word_fts(item_word_fts,rowid,text,scope) SELECT 'delete',old.rowid,old.text,scope FROM search_item WHERE id=old.rowid;
  DELETE FROM search_item WHERE id=old.rowid;
  INSERT INTO search_dirty SELECT old.session_key WHERE NOT EXISTS(SELECT 1 FROM search_dirty WHERE session_key=old.session_key);
 END;
-CREATE TRIGGER search_item_update BEFORE UPDATE OF text ON item BEGIN
+CREATE TRIGGER search_item_update_before BEFORE UPDATE OF text,kind,text_bytes ON item
+WHEN EXISTS(SELECT 1 FROM search_item WHERE id=old.rowid) BEGIN
  INSERT INTO item_word_fts(item_word_fts,rowid,text,scope) SELECT 'delete',old.rowid,old.text,scope FROM search_item WHERE id=old.rowid;
+ DELETE FROM search_item WHERE id=old.rowid;
+ INSERT INTO search_dirty SELECT old.session_key WHERE NOT EXISTS(SELECT 1 FROM search_dirty WHERE session_key=old.session_key);
+END;
+CREATE TRIGGER search_item_update_after AFTER UPDATE OF text,kind,text_bytes ON item
+WHEN EXISTS(SELECT 1 FROM searchable_item WHERE rowid=new.rowid) BEGIN
+ INSERT INTO search_item SELECT rowid,scope FROM searchable_item WHERE rowid=new.rowid;
  INSERT INTO item_word_fts(rowid,text,scope) SELECT new.rowid,new.text,scope FROM search_item WHERE id=new.rowid;
  INSERT INTO search_dirty SELECT new.session_key WHERE NOT EXISTS(SELECT 1 FROM search_dirty WHERE session_key=new.session_key);
 END;

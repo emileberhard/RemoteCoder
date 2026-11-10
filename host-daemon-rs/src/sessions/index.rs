@@ -2,7 +2,7 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{BTreeSet, HashSet};
 
-const VERSION: &str = "1";
+const VERSION: &str = "2";
 
 pub(super) fn open(db: &Connection) -> Result<()> {
     let version: Option<String> = db
@@ -20,6 +20,8 @@ pub(super) fn open(db: &Connection) -> Result<()> {
         "search_item_insert",
         "search_item_delete",
         "search_item_update",
+        "search_item_update_before",
+        "search_item_update_after",
         "search_session_insert",
         "search_session_update",
         "search_session_delete",
@@ -27,7 +29,7 @@ pub(super) fn open(db: &Connection) -> Result<()> {
     ] {
         tx.execute_batch(&format!("DROP TRIGGER IF EXISTS {trigger}"))?;
     }
-    tx.execute_batch("DROP VIEW IF EXISTS search_item_content; DROP TABLE IF EXISTS item_word_fts; DROP TABLE IF EXISTS conversation_fts; DROP TABLE IF EXISTS search_item; DROP TABLE IF EXISTS search_dirty; DROP TABLE IF EXISTS search_member; DROP TABLE IF EXISTS search_document;")?;
+    tx.execute_batch("DROP VIEW IF EXISTS search_item_content; DROP VIEW IF EXISTS searchable_item; DROP TABLE IF EXISTS item_word_fts; DROP TABLE IF EXISTS conversation_fts; DROP TABLE IF EXISTS search_item; DROP TABLE IF EXISTS search_dirty; DROP TABLE IF EXISTS search_member; DROP TABLE IF EXISTS search_document;")?;
     tx.execute_batch(include_str!("search_schema.sql"))?;
     tx.execute(
         "INSERT OR REPLACE INTO meta VALUES('search_version',?1)",
@@ -123,12 +125,12 @@ fn rebuild(db: &Connection, root: &str) -> Result<()> {
     };
     let mut typed = String::new();
     let mut other = String::new();
-    let mut statement = db.prepare("SELECT i.rowid,i.text,i.kind,'s'||s.source_id, m.id IS NOT NULL FROM search_member sm JOIN session s ON s.session_key=sm.session_key JOIN item i ON i.session_key=s.session_key LEFT JOIN search_item m ON m.id=i.rowid WHERE sm.root_key=?1 ORDER BY i.rowid")?;
+    let mut statement = db.prepare("SELECT i.rowid,i.text,i.document_column,i.scope,m.id IS NOT NULL FROM search_member sm JOIN searchable_item i ON i.session_key=sm.session_key LEFT JOIN search_item m ON m.id=i.rowid WHERE sm.root_key=?1 ORDER BY i.rowid")?;
     let mut rows = statement.query([root])?;
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
         let text: Option<String> = row.get(1)?;
-        let kind: String = row.get(2)?;
+        let column: String = row.get(2)?;
         let scope: String = row.get(3)?;
         if !row.get::<_, bool>(4)? {
             db.execute("INSERT INTO search_item VALUES(?1,?2)", params![id, scope])?;
@@ -138,17 +140,13 @@ fn rebuild(db: &Connection, root: &str) -> Result<()> {
             )?;
         }
         if let Some(text) = text {
-            match kind.as_str() {
-                "user" => {
-                    typed.push_str(&crate::prompt_summary::prompt_summary(&text));
-                    typed.push('\n');
-                }
-                "assistant" | "reasoning" => {
-                    other.push_str(&text);
-                    other.push('\n');
-                }
-                _ => {}
-            }
+            let (target, text) = if column == "typed" {
+                (&mut typed, crate::prompt_summary::prompt_summary(&text))
+            } else {
+                (&mut other, std::borrow::Cow::Borrowed(text.as_str()))
+            };
+            target.push_str(&text);
+            target.push('\n');
         }
     }
     db.execute(

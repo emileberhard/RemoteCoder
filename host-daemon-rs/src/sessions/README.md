@@ -211,8 +211,9 @@ excluded. Native ancestry and persisted delegated parents fold through at most
 Ambiguous delegated ownership and cycles leave the session unfolded.
 Explicit promotion overrides native ancestry.
 
-At most 128 ranked document candidates are fetched. A scoped item word index
-covers at most 128 member sessions and finds 64 newest hits per term per
+At most 128 ranked document candidates are fetched. The scoped item word index
+uses the same user, assistant and reasoning kinds as the document. It covers
+at most 128 member sessions and finds 64 newest hits per term per
 candidate, with lookaheads setting `truncated`; it reads
 metadata for ranking and fetches snippets only for the best three hits. Hits
 prefer distinct-term coverage, user/assistant text, then recency. `hitCount`
