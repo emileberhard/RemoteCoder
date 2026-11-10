@@ -1179,6 +1179,13 @@ struct ConversationState: Sendable {
         return historyTurn(turn.id, in: window) != nil
     }
 
+    func editBase(ofHistoryTurn id: String) -> MessageEditBase? {
+        guard let window, window.isLoaded,
+              let index = window.turns.firstIndex(where: { $0.id == id || resolvedTurnID($0.id) == id }) else { return nil }
+        if index > 0 { return .afterTurn(resolvedTurnID(window.turns[index - 1].id)) }
+        return window.older == nil ? .threadStart : nil
+    }
+
     private func historyTurn(_ id: String, in window: HistoryWindow) -> HistoryWindow.Turn? {
         window.turn(id) ?? window.turns.first { resolvedTurnID($0.id) == id }
     }

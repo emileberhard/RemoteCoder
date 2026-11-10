@@ -11,6 +11,7 @@ struct ConversationSnapshot: Sendable {
     let items: [ChatStreamItem]
     let lastTurnCompletedAt: Int64?
     var forkableMessageIDs: Set<UUID> = []
+    var editBases: [UUID: MessageEditBase] = [:]
     var questionPrompts: [String: QuestionPrompt] = [:]
     var questionCoverage: QuestionHostSnapshot.Coverage = .unavailable
     /// Derived from the host replica and local delivery receipts, never a viewport.
@@ -19,6 +20,11 @@ struct ConversationSnapshot: Sendable {
     var visualReplies = HTMLVisualReplyIndex.unknown
     var canPrefetchOlder = false
     var presentationRows = TranscriptPresentationRows(rowIDs: [])
+}
+
+enum MessageEditBase: Hashable, Sendable {
+    case threadStart
+    case afterTurn(String)
 }
 
 enum ConversationProjection {
@@ -45,10 +51,17 @@ enum ConversationProjection {
             let messages: [ChatMessage]
             let timelines: [JobTimeline]
             let forkableMessageID: UUID?
+            let editCandidate: EditCandidate?
+            let isFinished: Bool
             let hasQuestions: Bool
             let userContentIDs: Set<String>
             let presentationRowIDs: Set<String>
             let visualPlacements: [String: VisualPlacement]
+        }
+
+        fileprivate struct EditCandidate: Sendable {
+            let messageID: UUID
+            let base: MessageEditBase
         }
 
         fileprivate struct VisualPlacement: Sendable {
@@ -145,6 +158,7 @@ enum ConversationProjection {
         var messages: [ChatMessage] = []
         var timelines: [JobTimeline] = []
         var forkableMessageIDs = Set<UUID>()
+        var editCandidates: [Memo.EditCandidate] = []
         var presentationRowIDs = Set<String>()
         var prompts = state.questionPrompts
         let pendingQuestion = prompts.values.filter(\.isPending).min { ($0.record?.ordinal ?? 0) < ($1.record?.ordinal ?? 0) }
@@ -191,6 +205,12 @@ enum ConversationProjection {
             messages.append(contentsOf: entry.messages)
             timelines.append(contentsOf: entry.timelines)
             if let id = entry.forkableMessageID { forkableMessageIDs.insert(id) }
+            if let candidate = entry.editCandidate { editCandidates.append(candidate) }
+        }
+        var editBases: [UUID: MessageEditBase] = [:]
+        for candidate in editCandidates {
+            if case .afterTurn(let previous) = candidate.base, entries[previous]?.isFinished != true { continue }
+            editBases[candidate.messageID] = candidate.base
         }
         let presentationRows = memo.presentationRows.rowIDs == presentationRowIDs
             ? memo.presentationRows : TranscriptPresentationRows(rowIDs: presentationRowIDs)
@@ -205,7 +225,7 @@ enum ConversationProjection {
         return ConversationSnapshot(conversationID: state.conversationID, ownerID: state.ownerID, threadID: state.threadID,
                                     revision: state.revision, messages: messages, timelines: timelines, items: rows,
                                     lastTurnCompletedAt: state.lastTurnCompletedAt,
-                                    forkableMessageIDs: forkableMessageIDs, questionPrompts: prompts, questionCoverage: state.questions?.coverage ?? .unavailable, pendingQuestion: pendingQuestion, compaction: state.compaction,
+                                    forkableMessageIDs: forkableMessageIDs, editBases: editBases, questionPrompts: prompts, questionCoverage: state.questions?.coverage ?? .unavailable, pendingQuestion: pendingQuestion, compaction: state.compaction,
                                     visualReplies: HTMLVisualReplyIndex(messages: messages, includesNewest: state.hasVerifiedNewestHistory),
                                     canPrefetchOlder: state.window.map { $0.olderEdge != nil && $0.hasRoomToPrefetch } ?? false,
                                     presentationRows: presentationRows)
@@ -217,6 +237,7 @@ enum ConversationProjection {
         var messages: [ChatMessage] = []
         var timelines: [JobTimeline] = []
         var forkableMessageID: UUID?
+        var editCandidate: Memo.EditCandidate?
         var hasQuestions = false
         let ids = orderedVisibleIDs(in: turn, state: state)
         var latestPublication: [String: String] = [:]
@@ -279,6 +300,10 @@ enum ConversationProjection {
                 var boundaryDate = message.date
                 if message.role == .user {
                     userCount += 1
+                    if userCount == 1, !message.wasSteered, !record.isLocal, message.canonicalTurnID != nil,
+                       message.restorableComposerContent != nil, let base = state.editBase(ofHistoryTurn: turnID) {
+                        editCandidate = Memo.EditCandidate(messageID: message.id, base: base)
+                    }
                     if message.wasSteered { message.delivery = .steered }
                     else if record.isLocal, let input = deliveries[message.id] {
                         message.delivery = input.isQueued ? queueDelivery(input.status) : sendDelivery(input.status)
@@ -367,8 +392,11 @@ enum ConversationProjection {
         let presentationRowIDs = Set(rows.map(\.id)).union(timelines.flatMap {
             $0.events.map { ChatStreamItem.activityRowID(eventID: $0.id) }
         })
+        let isFinished = !ConversationState.isLocalTurnID(turnID) && turn.terminal && !turn.isActive
+            && turn.terminalStatus.map { $0 != .inProgress } == true
         return Memo.Entry(stamp: stamp, rows: rows, messages: messages, timelines: timelines,
-                          forkableMessageID: forkableMessageID, hasQuestions: hasQuestions,
+                          forkableMessageID: forkableMessageID, editCandidate: editCandidate, isFinished: isFinished,
+                          hasQuestions: hasQuestions,
                           userContentIDs: Set(ids.filter { id in
                               if case .userMessage = turn.items[id]?.value { true } else { false }
                           }), presentationRowIDs: presentationRowIDs, visualPlacements: visualPlacements)

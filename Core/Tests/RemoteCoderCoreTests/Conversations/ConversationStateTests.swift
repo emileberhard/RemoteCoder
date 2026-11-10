@@ -1072,6 +1072,7 @@ extension ConversationStateTests {
         #expect(cached.messages == fresh.messages, step, sourceLocation: sourceLocation)
         #expect(cached.timelines == fresh.timelines, step, sourceLocation: sourceLocation)
         #expect(cached.forkableMessageIDs == fresh.forkableMessageIDs, step, sourceLocation: sourceLocation)
+        #expect(cached.editBases == fresh.editBases, step, sourceLocation: sourceLocation)
         #expect(cached.questionPrompts == fresh.questionPrompts, step, sourceLocation: sourceLocation)
         #expect(cached.pendingQuestion == fresh.pendingQuestion, step, sourceLocation: sourceLocation)
         #expect(cached.questionCoverage == fresh.questionCoverage, step, sourceLocation: sourceLocation)

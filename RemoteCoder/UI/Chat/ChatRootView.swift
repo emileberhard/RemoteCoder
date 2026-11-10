@@ -597,7 +597,8 @@ private struct ChatScreen: View {
     private var chatTranscript: some View {
         ConversationTranscriptView(screen: screen, workspace: workspace, focus: $inputFocused,
                                    onDismissComposerFocus: dismissComposerFocus, showsAgents: $showsAgents,
-                                   onOpenAgent: { _ = selectConversation($0) }, onReviewChanges: reviewChanges)
+                                   onOpenAgent: { _ = selectConversation($0) }, onReviewChanges: reviewChanges,
+                                   onEditAsFork: editAsFork)
             #if os(macOS)
             .safeAreaInset(edge: .top, spacing: 0) {
                 if find.isPresented { TranscriptFindBar(find: find, screen: screen) }
@@ -934,6 +935,13 @@ private struct ChatScreen: View {
         #else
         false
         #endif
+    }
+
+    private func editAsFork(_ message: ChatMessage) {
+        Task {
+            guard let address = await screen.prepareEditAsFork(message) else { return }
+            openUnsentDraft(address)
+        }
     }
 
     private func openUnsentDraft(_ address: UnsentDraftAddress) {

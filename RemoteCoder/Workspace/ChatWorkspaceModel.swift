@@ -1623,7 +1623,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     func modelOptions(for screen: ChatScreenModel) -> [ModelOption] {
-        guard screen.activeSessionID == nil else { return screen.selectedModel.map(screen.pickerModelOptions(for:)) ?? [] }
+        guard screen.activeSessionID == nil, screen.shownDraftForkSource == nil else {
+            return screen.selectedModel.map(screen.pickerModelOptions(for:)) ?? []
+        }
         let options = newChatModelOptions(preferredHostID: screen.hostID)
         guard let selected = screen.selectedModel, !options.contains(where: { $0.id == selected.id }) else { return options }
         return options + [selected]

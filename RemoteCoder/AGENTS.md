@@ -754,6 +754,20 @@ entrypoint linked above.
   (hidden on the current start point). The server cutoff includes the whole turn,
   so user bubbles, intermediate replies, active turns and pages with newer items
   must not offer it.
+- An earlier user bubble offers **Edit as Fork** only when the projection proves
+  its edit base (`ConversationSnapshot.editBases`, carried in `TranscriptRowInputs`):
+  a sent, non-steer turn head that is loaded and fully restorable
+  (`restorableComposerContent`), and either the thread's first message with the
+  start of history loaded or after a loaded, canonical, finished turn. It opens a
+  new unsent draft holding that text whose `NewChatSetup.forkPoint` names the
+  source thread and that previous turn; the first message gets a plain new chat
+  with the same folder and settings. Nothing forks on tap: the send passes
+  `TurnDispatcher.ThreadTarget.fork`, which calls `thread/fork` through that turn
+  and starts the turn on the fork. A fork draft's folder and provider are fixed.
+  A failed or refused fork leaves the row Not sent and the draft keeps its fork
+  point, so the next send forks again; it never falls back to `thread/start` and
+  is never retried automatically. `ChatScreenModel.shownDraftForkSource` exposes
+  the source of the shown fork draft.
 - `ConversationCheckpointStore` persists canonical checkpoints with revision and
   generation guards. Derived timelines are not persisted. The legacy timeline
   reader keeps old local activity for migration and rollback, but all new

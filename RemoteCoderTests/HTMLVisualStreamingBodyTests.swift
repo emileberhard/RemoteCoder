@@ -95,7 +95,7 @@ private struct MixedReplyView: View {
     let fixture: MixedReplyFixture
 
     var body: some View {
-        ChatBubble(message: fixture.message, renderedMessages: fixture.rendered, onFork: nil, onCountChanges: nil, deliveryActions: nil)
+        ChatBubble(message: fixture.message, renderedMessages: fixture.rendered, onFork: nil, onEditAsFork: nil, onCountChanges: nil, deliveryActions: nil)
             .environment(\.markdownBlockBodyCounter, fixture.counter)
             .environment(\.htmlVisualCaptureAllowed, fixture.captureAllowed)
             .frame(width: 320)

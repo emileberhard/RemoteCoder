@@ -80,7 +80,7 @@ struct StopContinuationTests {
         let message = ChatMessage(role: .user, text: "Hello")
         _ = try await session.submitDurably(message, input: "Hello")
         fixture.dispatcher.startTurn(.init(draft: draft, conversationID: conversationID,
-            userMessageID: message.id, input: "Hello", interactionMode: .text, settings: settings), sessionID: nil)
+            userMessageID: message.id, input: "Hello", interactionMode: .text, settings: settings), in: .start)
         await fixture.dispatcher.drain()
         let start = try await fixture.socket.request("thread/start")
         #expect(start.params?.objectValue?["acceptProviderFallback"] == .bool(true))
@@ -489,6 +489,7 @@ actor StopSocket {
     private var waiters: [(String, Int, AsyncStream<[CodexAppServerV2.JSONRPC.Request]>.Continuation)] = []
     private var queued: [CodexAppServerV2.QueuedSubmission] = []
     private var deletes = true
+    private var forks = true
 
     init() throws {
         let parameters = NWParameters.tcp
@@ -556,6 +557,11 @@ actor StopSocket {
                     if let startModel { result["model"] = .string(startModel) }
                     if let startEffort { result["reasoningEffort"] = .string(startEffort.rawValue) }
                     try await reply(request, result: .object(result))
+                case "thread/fork" where forks:
+                    try await reply(request, result: .object(["thread": try json(#require(startedThread)),
+                        "model": .string("gpt-6.1-sol"), "modelProvider": .string("openai"), "cwd": .string("/repo")]))
+                case "thread/fork":
+                    try await refuse(request)
                 case "thread/resume":
                     try await reply(request, result: .object(["thread": try json(CodexAppServerV2.Thread.historyFixture())]))
                 case "thread/queue/list":
@@ -581,6 +587,7 @@ actor StopSocket {
     func count(_ method: String) -> Int { received.filter { $0.method == method }.count }
     func setQueue(_ entries: [CodexAppServerV2.QueuedSubmission]) { queued = entries }
     func setDeletes(_ deletes: Bool) { self.deletes = deletes }
+    func setForks(_ forks: Bool) { self.forks = forks }
     func requests(_ method: String, count: Int) async throws -> [CodexAppServerV2.JSONRPC.Request] {
         if self.count(method) >= count { return received.filter { $0.method == method } }
         let pair = AsyncStream<[CodexAppServerV2.JSONRPC.Request]>.makeStream()

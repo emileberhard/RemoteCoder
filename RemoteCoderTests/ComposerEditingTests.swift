@@ -302,7 +302,7 @@ struct ComposerEditingTests {
         var selectedText: String?
         var menuButtons: [UUID: MenuTestButtonAction] = [:]
         let controller = UIHostingController(rootView: VStack(alignment: .leading) {
-            ChatBubbleMenu(message: message, rendered: rendered, onFork: nil, onCountChanges: nil, deliveryActions: nil,
+            ChatBubbleMenu(message: message, rendered: rendered, onFork: nil, onEditAsFork: nil, onCountChanges: nil, deliveryActions: nil,
                 onSelectText: { selectedText = $0 })
         }.buttonStyle(MenuTestButtonStyle { id, action in menuButtons[id] = action }))
         hosted.show(controller)

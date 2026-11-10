@@ -43,6 +43,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         Set(messages.map(\.id)).union(preparingRenderWindows.values.flatMap { $0 })
     }
     private(set) var forkableMessageIDs: Set<UUID> = []
+    private(set) var editBases: [UUID: MessageEditBase] = [:]
     var isComposerFocused = false
     private(set) var composerSends = 0
     @ObservationIgnored private var currentStreamItems: [ChatStreamItem] = []
@@ -311,6 +312,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         pendingTranscriptRequest = nil
         messages = []
         forkableMessageIDs = []
+        editBases = [:]
         streamItems = []
         canPrefetchOlderHistory = false
         pendingQuestion = nil
@@ -328,6 +330,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
               renderedMessages.hasOpeningRendered(presentation.messages) else { return }
         messages = presentation.messages
         forkableMessageIDs = presentation.forkableMessageIDs
+        editBases = presentation.editBases
         streamItems = presentation.items
         htmlVisualReplies.update(.unknown, threadID: threadID)
         renderedMessages.ensureRendered(presentation.messages)
@@ -394,6 +397,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         showsRecentPresentation = false
         messages = snapshot.messages
         forkableMessageIDs = snapshot.forkableMessageIDs
+        editBases = snapshot.editBases
         streamItems = snapshot.items
         htmlVisualReplies.update(snapshot.visualReplies, threadID: snapshot.threadID)
         canPrefetchOlderHistory = snapshot.canPrefetchOlder
@@ -897,6 +901,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let feedback = target.feedbackForCurrentConversation()
         let conversationID = currentConversationID
         let sessionID = activeSessionID
+        let threadTarget: TurnDispatcher.ThreadTarget = sessionID.map { .existing($0) }
+            ?? draft.newChat?.forkPoint.map { .fork($0) } ?? .start
         // A send that lands in an already-running turn is a steer, not a new turn.
         let steering = sessionID.flatMap { target.turns.turn(forThread: $0) }.map { turn in
             let context = SteerContext.capture(in: streamItems, turnID: turn.turnID) { message in
@@ -947,7 +953,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         if let steering {
             target.dispatcher.steer(submission, activeTurn: steering.turn, context: steering.context)
         } else {
-            target.dispatcher.startTurn(submission, sessionID: sessionID)
+            target.dispatcher.startTurn(submission, in: threadTarget)
         }
         return userMessage.id
     }
@@ -1175,6 +1181,30 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         }
     }
 
+    func prepareEditAsFork(_ message: ChatMessage) async -> UnsentDraftAddress? {
+        guard target.acceptsWork, let base = editBases[message.id], let threadID = activeSessionID,
+              let content = message.restorableComposerContent else { return nil }
+        let forkPoint: NewChatSetup.ForkPoint? = switch base {
+        case .threadStart: nil
+        case .afterTurn(let turnID): NewChatSetup.ForkPoint(threadID: threadID, lastTurnID: turnID)
+        }
+        let setup = NewChatSetup(workingDirectory: workingDirectory, modelID: selectedModel?.id,
+                                 reasoning: reasoningSelection, fastMode: fastModeSelection, forkPoint: forkPoint)
+        let address = UnsentDraftAddress(target: executionTarget, draftID: UUID())
+        guard let draft = await drafts.draft(for: .newChat(address.draftID)), target.acceptsWork else { return nil }
+        drafts.setNewChatSetup(setup, in: draft)
+        drafts.setContent(content, in: draft)
+        return address
+    }
+
+    private var draftForkPoint: NewChatSetup.ForkPoint? {
+        activeSessionID == nil ? currentDraft?.newChat?.forkPoint : nil
+    }
+
+    var shownDraftForkSource: ConversationAddress? {
+        draftForkPoint.map { ConversationAddress(hostID: hostID, threadID: $0.threadID) }
+    }
+
     var newChatDestination: ComposerDraftStore.Destination { .newChat(newChatDraftID) }
 
     var shownNewChatDraft: UUID? {
@@ -1189,7 +1219,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     func startNewConversation() {
         let shown = drafts.cachedDraft(for: newChatDestination)
-        let isOccupied = shown.map(drafts.hasContent) ?? drafts.unsentDrafts.contains { $0.id == newChatDraftID }
+        let isOccupied = shown.map { drafts.hasContent($0) || $0.newChat?.forkPoint != nil }
+            ?? drafts.unsentDrafts.contains { $0.id == newChatDraftID }
         if isOccupied || target.voice.isRecording || target.voice.isTranscribing {
             newChatDraftID = UUID()
         }
@@ -1209,7 +1240,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func suggestWorkingDirectory(_ path: String) {
-        guard shownNewChatDraft != nil, !showsUnsentContent else { return }
+        guard shownNewChatDraft != nil, !showsUnsentContent, draftForkPoint == nil else { return }
         updateWorkingDirectory(path)
         recordNewChatSetup()
     }
@@ -1237,7 +1268,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let modelID: String? = if let selectedModel { selectedModel.id }
             else if case .unavailable(let modelID, _) = newChatModelSource { modelID } else { nil }
         return NewChatSetup(workingDirectory: workingDirectory, modelID: modelID, reasoning: reasoningSelection,
-                            fastMode: fastModeSelection)
+                            fastMode: fastModeSelection, forkPoint: currentDraft?.newChat?.forkPoint)
     }
 
     private func chooseNewChatSetup() {
@@ -1500,7 +1531,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let currentPath = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines)
         let didChangeDirectory = currentPath != selectedPath
 
-        if didChangeDirectory, shownNewChatDraft == nil {
+        if didChangeDirectory, shownNewChatDraft == nil || draftForkPoint != nil {
             startNewConversation()
         }
         updateWorkingDirectory(selectedPath)
@@ -1951,7 +1982,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     private func applyModel(_ option: ModelOption, for threadID: String?, source: SettingsChangeSource) -> Bool {
         guard let current = pickerSettings(for: threadID),
-              threadID.map({ AgentProvider.provider(forThreadID: $0) == option.provider }) ?? true else { return false }
+              (threadID ?? draftForkPoint?.threadID).map({ AgentProvider.provider(forThreadID: $0) == option.provider }) ?? true
+        else { return false }
         let reasoning = visibleReasoning(pickerSelection.rememberedReasoning(for: option) ?? current.reasoning, for: option)
         applyPickerSettings(model: option, reasoning: reasoning,
             fastModeState: current.fastModeState.changingModel(from: current.model, to: option),

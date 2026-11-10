@@ -61,6 +61,16 @@ final class TurnDispatcher {
         let settings: Settings
     }
 
+    enum ThreadTarget: Equatable {
+        case existing(String)
+        case start
+        case fork(NewChatSetup.ForkPoint)
+
+        var threadID: String? {
+            if case .existing(let id) = self { id } else { nil }
+        }
+    }
+
     struct FollowUp {
         let conversationID: UUID
         let draft: ComposerDraft
@@ -207,7 +217,7 @@ final class TurnDispatcher {
                 }
                 startTurn(Submission(draft: followUp.draft, conversationID: followUp.conversationID,
                     userMessageID: steers.message.id, input: steers.input, interactionMode: .text,
-                    settings: followUp.settings), sessionID: key.threadID)
+                    settings: followUp.settings), in: .existing(key.threadID))
             } else if await host?.queueSupport(threadID: key.threadID) == true {
                 guard !isClosed, !Task.isCancelled, stoppedTurns[key]?.id == stopped.id else { return }
                 startQueued(.first, conversationID: followUp.conversationID, threadID: key.threadID, settings: followUp.settings)
@@ -259,7 +269,7 @@ final class TurnDispatcher {
                 if case .turnNotRunning = (error as? GatewayRPCFailure)?.kind,
                    stoppedTurns[key] == nil, !isClosed, !Task.isCancelled {
                     host.retireGatewayJob(threadID: activeTurn.threadID, turnID: activeTurn.turnID, jobID: activeTurn.jobID)
-                    startTurn(submission, sessionID: activeTurn.threadID)
+                    startTurn(submission, in: .existing(activeTurn.threadID))
                 } else {
                     if !(error is CancellationError) { feedback(.error) }
                     let failure = Self.inputDeliveryFailure(error)
@@ -438,8 +448,9 @@ final class TurnDispatcher {
         }
     }
 
-    func startTurn(_ submission: Submission, sessionID: String?) {
+    func startTurn(_ submission: Submission, in target: ThreadTarget) {
         guard let host, !isClosed else { return }
+        let sessionID = target.threadID
         let feedback = host.feedbackForCurrentConversation()
         let conversationID = submission.conversationID
         let userMessageID = submission.userMessageID
@@ -460,9 +471,13 @@ final class TurnDispatcher {
                 try await gateway.verifyDispatchAllowed(to: sessionID)
                 try Task.checkCancellation()
                 guard !isClosed else { return }
-                // An existing thread already belongs to a provider; only a new
-                // one takes its provider from the selected model.
-                let provider = sessionID.map(AgentProvider.provider(forThreadID:)) ?? settings.model.provider
+                // An existing or forked thread already belongs to a provider; only
+                // a new one takes its provider from the selected model.
+                let provider = switch target {
+                case .existing(let threadID): AgentProvider.provider(forThreadID: threadID)
+                case .fork(let point): AgentProvider.provider(forThreadID: point.threadID)
+                case .start: settings.model.provider
+                }
                 let cwd = settings.workingDirectory
                 // Claude runs the CLI in the working directory and has no
                 // fallback the way Codex does, so an unset one must fail here
@@ -470,17 +485,27 @@ final class TurnDispatcher {
                 if provider == .claude, cwd?.isEmpty != false {
                     throw AgentProviderError.workingDirectoryRequired(provider)
                 }
+                if case .fork = target, settings.model.provider != provider {
+                    throw AgentProviderError.forkRequiresProvider(provider)
+                }
 
                 guard !isClosed else { return }
-                let thread = try await gateway.startOrResumeThread(
-                    threadID: sessionID,
-                    model: settings.model.id,
-                    cwd: cwd,
-                    serviceTier: settings.serviceTier,
-                    provider: provider,
-                    effort: settings.reasoning.effort?.rawValue
-                )
-                let settings = sessionID == nil ? settings.admitted(to: thread) : settings
+                let thread: CodexAppServerV2.Thread
+                if case .fork(let point) = target {
+                    thread = try await gateway.forkThread(threadID: point.threadID, lastTurnID: point.lastTurnID,
+                                                          serviceTier: settings.serviceTier).thread
+                    if provider == .claude { await metadata.sync() }
+                } else {
+                    thread = try await gateway.startOrResumeThread(
+                        threadID: sessionID,
+                        model: settings.model.id,
+                        cwd: cwd,
+                        serviceTier: settings.serviceTier,
+                        provider: provider,
+                        effort: settings.reasoning.effort?.rawValue
+                    )
+                }
+                let settings = target == .start ? settings.admitted(to: thread) : settings
                 let threadID = thread.id
                 guard !isClosed else { return }
                 await drafts.bind(submission.draft, to: threadID)

@@ -812,7 +812,8 @@ shown draft when it is empty and otherwise moves to a fresh key, so a long
 dictation never blocks another prompt; changing the folder moves the shown
 draft rather than starting another. A blank unsent draft is never stored: the
 save deletes its record. Each draft keeps its edit time and its `NewChatSetup`
-(folder, model, reasoning and Fast). The screen records it explicitly: when the
+(folder, model, reasoning and Fast, and for Edit as Fork the source thread
+and turn to fork after, which the store never changes once set). The screen records it explicitly: when the
 user picks a folder, model, reasoning or Fast, when a moved draft adopts its
 settings, and while a blank draft follows the defaults. Opening a draft applies
 its setup without writing it back, and a defaults change in Settings skips
@@ -827,7 +828,9 @@ dictates, and edits that arrive after the deletion are dropped rather than
 saved again. `LaunchRestore` records the shown draft
 like a conversation, and the primary window reopens it on launch. Once its
 message is durably submitted, the draft follows the local conversation and
-then its server thread and drops its setup. A send clears the composer at
+then its server thread and drops its setup. A fork point stays until the
+thread exists, so the next send after a failed fork forks again rather than
+starting an empty thread. A send clears the composer at
 once, and text typed afterwards stays in the draft even if selection changes
 during the send. Until the transcript durably holds the message, draft saves
 store it ahead of that later text, so a crash loses neither; a failed save
@@ -1385,7 +1388,7 @@ retains its explicit ID. On iOS, `TranscriptLayout` shares measurements between
 sizing and placement, retaining at most two proposed widths. `updateCache`
 clears its measurements when the layout or any subview changes, including
 streaming renders, folding, image loading and zoom. On Mac,
-`TranscriptRowInputs` gates native root replacement, including fork availability,
+`TranscriptRowInputs` gates native root replacement, including fork and Edit as Fork availability,
 history-edge status and queued-message Send Now availability. The row factory
 runs only on admission or changed inputs/environment; retained roots hold concrete
 row content rather than a builder capturing a historical transcript snapshot.
@@ -1930,7 +1933,10 @@ threads changes, only newly added threads get a question read; the rest follow
 remain enabled.
 
 Forking a bubble uses its canonical turn identity and never reads the full
-thread or falls back to a different fork boundary. A fork's origin comes from
+thread or falls back to a different fork boundary. Edit as Fork forks through
+the canonical id of the turn before the edited message, taken from the loaded
+history window's order; an unloaded, aliased, unfinished or unknown previous
+turn offers no edit. A fork's origin comes from
 `forkedFromId` on the `thread/read` the app already makes when it opens a
 conversation (and on fork responses); list rows never carry it, so the header
 cache retains a known origin across list refreshes and an absent one stays

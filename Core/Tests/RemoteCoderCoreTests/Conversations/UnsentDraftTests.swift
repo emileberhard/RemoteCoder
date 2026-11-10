@@ -147,6 +147,40 @@ struct UnsentDraftTests {
         #expect(try storedDestinations(in: directory) == [ComposerDraftStore.Destination.thread("thread").key])
     }
 
+    @Test func aForkPointSurvivesReopeningAndSendingButNotBindingOrAnotherSetup() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ComposerDraftStore(directory: directory)
+        let id = UUID()
+        let draft = try #require(await store.draft(for: .newChat(id)))
+        store.setText("Edited prompt", in: draft)
+        let point = NewChatSetup.ForkPoint(threadID: "source", lastTurnID: "turn-1")
+        let forked = NewChatSetup(workingDirectory: "/repo", modelID: "gpt-6-sol", reasoning: .automatic, fastMode: nil,
+                                  forkPoint: point)
+        store.setNewChatSetup(forked, in: draft)
+        store.setNewChatSetup(setup(folder: "/elsewhere"), in: draft)
+        #expect(draft.newChat == forked)
+        let rechosen = NewChatSetup(workingDirectory: "/repo", modelID: "gpt-6-astra", reasoning: .effort(.high), fastMode: nil,
+                                    forkPoint: point)
+        store.setNewChatSetup(rechosen, in: draft)
+        #expect(await store.flush())
+
+        let reopened = try #require(await ComposerDraftStore(directory: directory).draft(for: .newChat(id)))
+        #expect(reopened.newChat == rechosen)
+
+        store.submitted(try #require(store.beginSending(draft)), conversationID: draft.id)
+        #expect(draft.newChat?.forkPoint == point)
+        await store.bind(draft, to: "fork")
+        #expect(draft.newChat == nil)
+    }
+
+    @Test func aSetupSavedBeforeForkPointsDecodesWithoutOne() throws {
+        let saved = #"{"workingDirectory":"/repo","modelID":"gpt-6-sol","reasoning":"effort-high","fastMode":true}"#
+        let setup = try JSONDecoder().decode(NewChatSetup.self, from: Data(saved.utf8))
+        #expect(setup == NewChatSetup(workingDirectory: "/repo", modelID: "gpt-6-sol", reasoning: .effort(.high), fastMode: true,
+                                      forkPoint: nil))
+    }
+
     @Test func lateWritesToADiscardedDraftNeitherReviveItNorBlockLaterSaves() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -222,12 +256,12 @@ struct UnsentDraftTests {
 
     private func setup(folder: String, model: String? = nil, reasoning: ReasoningSelection = .automatic,
                        fast: Bool? = nil) -> NewChatSetup {
-        NewChatSetup(workingDirectory: folder, modelID: model, reasoning: reasoning, fastMode: fast)
+        NewChatSetup(workingDirectory: folder, modelID: model, reasoning: reasoning, fastMode: fast, forkPoint: nil)
     }
 
     private func summary(_ title: String, folder: String?, model: String?, at date: Date?) -> UnsentDraftSummary {
         UnsentDraftSummary(id: UUID(), title: title,
-                           setup: NewChatSetup(workingDirectory: folder, modelID: model, reasoning: .automatic, fastMode: nil),
+                           setup: NewChatSetup(workingDirectory: folder, modelID: model, reasoning: .automatic, fastMode: nil, forkPoint: nil),
                            modifiedAt: date)
     }
 
