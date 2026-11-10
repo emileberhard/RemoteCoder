@@ -88,7 +88,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         case lifecycle, metadataStatus, metadataAction, inventoryRefresh, scheduledActivityRead
         case conversationActivity, historyAutoRefresh, historyInvalidation(String), warmConversations
         case routeMove, codexModelCacheLoad, codexModelRefresh, takeOver, marksSync, historyHeaderRecovery, historyRetry
-        case titleRegeneration(String), titleRename(String)
+        case titleRegeneration(String), titleRename(String), createdThreadHistory(String)
     }
     /// Turn dispatch is unstructured on purpose — a send must outlive the view
     /// that started it — so the model owns the handles and cancels them when its
@@ -1719,6 +1719,13 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     func reconcileInputDelivery(threadID: String) async {
         guard acceptsWork else { return }
         await transcriptRecovery.reconcileInputDelivery(sessionID: threadID)
+    }
+
+    func readHistory(ofCreatedThread threadID: String) {
+        guard acceptsWork else { return }
+        ownedTasks.start(.createdThreadHistory(threadID)) { [weak self] in
+            _ = await self?.transcriptRecovery.reconcile(sessionID: threadID, source: "created-thread")
+        }
     }
 
     private func handleGatewayTurnCompleted(

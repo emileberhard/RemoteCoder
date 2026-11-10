@@ -300,8 +300,10 @@ enum ConversationProjection {
                 var boundaryDate = message.date
                 if message.role == .user {
                     userCount += 1
-                    if userCount == 1, !message.wasSteered, !record.isLocal, message.canonicalTurnID != nil,
-                       message.restorableComposerContent != nil, let base = state.editBase(ofHistoryTurn: turnID) {
+                    let wasSent = !record.isLocal
+                        || deliveries[message.id].map { $0.status == .accepted || $0.status == .confirmed } ?? true
+                    if userCount == 1, !message.wasSteered, wasSent, message.canonicalTurnID != nil,
+                       message.restorableComposerContent != nil, let base = state.editBase(ofTurn: turnID) {
                         editCandidate = Memo.EditCandidate(messageID: message.id, base: base)
                     }
                     if message.wasSteered { message.delivery = .steered }

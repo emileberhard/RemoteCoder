@@ -371,6 +371,7 @@ final class StopFixture: TurnDispatchHost {
     var selectionCurrent = false
     var claudeQueue: Bool? = false
     var admittedSettings: TurnDispatcher.Settings?
+    var createdThreadReads: [String] = []
     var isRetired = false
     var refreshed = false
     var refreshWaiter: CheckedContinuation<Void, Never>?
@@ -463,6 +464,7 @@ final class StopFixture: TurnDispatchHost {
     func retireGatewayJob(threadID: String, turnID: String?, jobID: String) {}
     func startActivityRefresh() { refreshed = true; refreshWaiter?.resume(); refreshWaiter = nil }
     func reconcileInputDelivery(threadID: String) async {}
+    func readHistory(ofCreatedThread threadID: String) { createdThreadReads.append(threadID) }
     func threadStarted(_ thread: CodexAppServerV2.Thread, session: ConversationSession, settingsRevision: UInt64,
                        requestedServiceTier: CodexAppServerV2.ServiceTierOverride?, admittedSettings: TurnDispatcher.Settings?) async { self.admittedSettings = admittedSettings }
     func selectionIsCurrent(revision: UInt64, threadID: String) -> Bool { selectionCurrent }

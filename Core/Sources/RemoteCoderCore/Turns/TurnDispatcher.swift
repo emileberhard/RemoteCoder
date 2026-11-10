@@ -11,6 +11,7 @@ protocol TurnDispatchHost: AnyObject {
     func retireGatewayJob(threadID: String, turnID: String?, jobID: String)
     func startActivityRefresh()
     func reconcileInputDelivery(threadID: String) async
+    func readHistory(ofCreatedThread threadID: String)
     func threadStarted(_ thread: CodexAppServerV2.Thread, session: ConversationSession, settingsRevision: UInt64,
                        requestedServiceTier: CodexAppServerV2.ServiceTierOverride?, admittedSettings: TurnDispatcher.Settings?) async
     func selectionIsCurrent(revision: UInt64, threadID: String) -> Bool
@@ -544,6 +545,7 @@ final class TurnDispatcher {
                 }
 
                 await session.accepted(userMessageID, turnID: turnID)
+                if sessionID == nil { host.readHistory(ofCreatedThread: threadID) }
                 logger.notice("turn accepted thread=\(threadID) new=\(sessionID == nil) elapsed=\(String(describing: started.duration(to: .now)))")
                 if sessionID == nil, host.selectionIsCurrent(revision: settings.selectionRevision, threadID: threadID) {
                     await metadata.upsert(sessionID: threadID, modelID: settings.model.id,

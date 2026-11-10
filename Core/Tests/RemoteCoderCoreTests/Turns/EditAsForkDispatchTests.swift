@@ -24,6 +24,7 @@ struct EditAsForkDispatchTests {
         #expect(turn.params?.objectValue?["threadId"]?.stringValue == "forked")
         #expect(turn.params?.objectValue?["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue == "Edited")
         #expect(edit.draft.destination == ComposerDraftStore.Destination.thread("forked").key)
+        #expect(fixture.createdThreadReads == ["forked"])
         let after = await fixture.session.snapshot()
         #expect(after.threadID == source.threadID)
         #expect(after.messages == source.messages)
@@ -43,6 +44,7 @@ struct EditAsForkDispatchTests {
         #expect(row?.delivery == .notSent)
         #expect(await fixture.socket.count("thread/start") == 0)
         #expect(await fixture.socket.count("turn/start") == 0)
+        #expect(fixture.createdThreadReads.isEmpty)
         let kept = try #require(edit.draft.newChat?.forkPoint)
         #expect(kept == point)
 

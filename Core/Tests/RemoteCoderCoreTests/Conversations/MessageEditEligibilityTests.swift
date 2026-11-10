@@ -47,7 +47,24 @@ struct MessageEditEligibilityTests: ConversationHistoryFixtures {
         #expect(snapshot.editBases[try message("image", in: snapshot)] == nil)
     }
 
+    @Test func liveTurnsAfterTheLoadedTailForkAfterTheTurnBeforeThem() throws {
+        var state = merged([("t1", .completed, exchange("first"))], older: nil)
+        try live("t2", exchange("live"), ordinal: 10, in: &state)
+        let local = ChatMessage(role: .user, text: "local")
+        state.submit(local, input: "local")
+        #expect(ConversationProjection.project(state).editBases[local.id] == nil)
+        state.accepted(local.id, turnID: "t3")
+
+        let snapshot = ConversationProjection.project(state)
+        #expect(snapshot.editBases[try message("live", in: snapshot)] == .afterTurn("t1"))
+        #expect(snapshot.editBases[local.id] == .afterTurn("t2"))
+    }
+
     private func project(_ turns: [Turn], older: String?, summaries: Set<String>? = nil) -> ConversationSnapshot {
+        ConversationProjection.project(merged(turns, older: older, summaries: summaries))
+    }
+
+    private func merged(_ turns: [Turn], older: String?, summaries: Set<String>? = nil) -> ConversationState {
         var ordinal: Int64 = 0
         let wire = turns.flatMap { turn in
             turn.items.map { item in
@@ -58,8 +75,24 @@ struct MessageEditEligibilityTests: ConversationHistoryFixtures {
         }
         let known = turns.filter { summaries?.contains($0.id) ?? true }
         var state = ConversationState(conversationID: UUID(), threadID: "thread")
-        state.merge(.fixture(wire: wire.reversed(), turns: known.reversed().map { summary($0.id, status: $0.status) }, older: older))
-        return ConversationProjection.project(state)
+        state.merge(.fixture(wire: wire.reversed(), turns: known.reversed().map { summary($0.id, status: $0.status) },
+                             older: older))
+        return state
+    }
+
+    private func live(_ turnID: String, _ items: [CodexAppServerV2.ThreadItem], ordinal: Int,
+                      in state: inout ConversationState) throws {
+        state.apply(try lifecycle("turn/started", turnID: turnID, status: "inProgress"))
+        for (offset, item) in items.enumerated() {
+            state.apply(try GatewayEventFixture.item("item/completed", item: item, threadID: "thread", turnID: turnID,
+                                                     ordinal: ordinal + offset, startedAtMs: 1000, completedAtMs: 2000))
+        }
+        state.apply(try lifecycle("turn/completed", turnID: turnID, status: "completed"))
+    }
+
+    private func lifecycle(_ method: String, turnID: String, status: String) throws -> TurnScopedGatewayEvent {
+        try GatewayEventFixture.turn(.object(["threadId": .string("thread"),
+            "turn": .object(["id": .string(turnID), "status": .string(status)])]), method: method)
     }
 
     private func exchange(_ text: String) -> [CodexAppServerV2.ThreadItem] {

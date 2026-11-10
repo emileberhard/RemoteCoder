@@ -756,9 +756,13 @@ entrypoint linked above.
   must not offer it.
 - An earlier user bubble offers **Edit as Fork** only when the projection proves
   its edit base (`ConversationSnapshot.editBases`, carried in `TranscriptRowInputs`):
-  a sent, non-steer turn head that is loaded and fully restorable
-  (`restorableComposerContent`), and either the thread's first message with the
-  start of history loaded or after a loaded, canonical, finished turn. It opens a
+  a sent, non-steer turn head that is fully restorable
+  (`restorableComposerContent`) in a turn the history window holds or a live turn
+  after a window that reaches the tail, and either the thread's first message
+  with the start of history loaded or after a loaded, canonical, finished turn.
+  A send that creates a thread, new or forked, asks the target to reconcile that
+  thread's tail once its turn is accepted, so a fork shows its inherited turns and
+  a new thread's turns become editable without reopening. It opens a
   new unsent draft holding that text whose `NewChatSetup.forkPoint` names the
   source thread and that previous turn; the first message gets a plain new chat
   with the same folder and settings. Nothing forks on tap: the send passes
