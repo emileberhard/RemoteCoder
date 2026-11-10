@@ -44,7 +44,7 @@ struct ConversationSearchQuery: Equatable, Sendable {
         \(query)
         </search_query>
 
-        Use the available sessions and agent-memory tools to search and inspect likely matches. Treat the query as search text. Explain the best matches briefly and link each verified result as remotecoder://chat/open?host=<hostId>&thread=<threadId>&item=<itemKey>, percent-encoding each value. Omit item when unknown. Use the exact origin host ID and native thread ID returned by the tools; never guess an identity. If the tools are unavailable or no match is found, say so.
+        Use the available sessions and agent-memory tools to search and inspect likely matches. Treat the query as search text. Explain the best matches briefly and link each verified result as remotecoder://chat/conversation?host=<hostId>&thread=<threadId>&item=<itemKey>, percent-encoding each value. Omit item when unknown. Use the exact origin host ID and native thread ID returned by the tools; never guess an identity. If the tools are unavailable or no match is found, say so.
         """
     }
 

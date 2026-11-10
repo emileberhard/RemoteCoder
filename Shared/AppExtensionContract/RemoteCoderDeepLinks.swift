@@ -41,6 +41,8 @@ struct RemoteCoderConversationLink: Equatable, Sendable {
 
 /// The `remotecoder://` vocabulary the app accepts.
 enum RemoteCoderDeepLinks {
+    private static let conversationPath = "/conversation"
+
     static let openApp: URL = {
         guard let url = URL(string: "remotecoder://chat") else {
             preconditionFailure("Invalid RemoteCoder app URL")
@@ -52,7 +54,7 @@ enum RemoteCoderDeepLinks {
         var components = URLComponents()
         components.scheme = "remotecoder"
         components.host = "chat"
-        components.path = "/open"
+        components.path = conversationPath
         components.queryItems = [
             URLQueryItem(name: "host", value: link.hostID.uuidString),
             URLQueryItem(name: "thread", value: link.threadID),
@@ -91,7 +93,7 @@ enum RemoteCoderDeepLinks {
     }
 
     static func conversation(from url: URL) -> RemoteCoderConversationLink? {
-        guard url.scheme == "remotecoder", url.host == "chat", ["/conversation", "/open"].contains(url.path),
+        guard url.scheme == "remotecoder", url.host == "chat", url.path == conversationPath,
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
               let hostID = items.first(where: { $0.name == "host" })?.value.flatMap(UUID.init(uuidString:)),
               let threadID = items.first(where: { $0.name == "thread" })?.value, !threadID.isEmpty else { return nil }

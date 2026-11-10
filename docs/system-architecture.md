@@ -3101,7 +3101,7 @@ focus or issuing a competing jump.
 
 Ask an agent starts an ordinary new chat with the query and asks for verified
 links. `ChatRootView` accepts
-`remotecoder://chat/open?host=<hostId>&thread=<threadId>&item=<itemKey>` through
+`remotecoder://chat/conversation?host=<hostId>&thread=<threadId>&item=<itemKey>` through
 `ExternalEventRouter`. The optional `item` uses the same locate path. The
 configured host must resolve uniquely. A new window claims its matching item
 once from the router's existing pending event.

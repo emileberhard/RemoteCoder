@@ -11,7 +11,6 @@ struct RemoteCoderDeepLinksTests {
         let url = RemoteCoderDeepLinks.url(for: link)
         #expect(RemoteCoderDeepLinks.conversation(from: url) == link)
         var components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
-        components.path = "/conversation"
         components.queryItems?.append(URLQueryItem(name: "account", value: accountID.uuidString))
         #expect(RemoteCoderDeepLinks.conversation(from: try #require(components.url)) == link)
     }
@@ -20,10 +19,13 @@ struct RemoteCoderDeepLinksTests {
         let itemKey = "host:claude:home:thread@item:1/2 & 3"
         let link = RemoteCoderConversationLink(hostID: hostID, threadID: "thread/1 a", itemKey: itemKey)
         let url = RemoteCoderDeepLinks.url(for: link)
-        #expect(url.path == "/open")
+        #expect(url.path == "/conversation")
         #expect(ExternalEvent(url: url) == .open(.conversation(.init(hostID: hostID, threadID: link.threadID)),
             opening: .init(itemKey: itemKey, findTerm: nil)))
         var components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        components.path = "/open"
+        #expect(ExternalEvent(url: try #require(components.url)) == nil)
+        components.path = url.path
         components.queryItems?.append(URLQueryItem(name: "host", value: UUID().uuidString))
         #expect(ExternalEvent(url: try #require(components.url)) == nil)
     }

@@ -22,7 +22,6 @@ struct ChatRootView: View {
     @State private var openingEvent: ChatOpeningEvent?
     @State private var eventPreparation: (id: UUID, task: Task<Void, Never>)?
     @State private var eventError: String?
-    @State private var deepLinkRead: Task<Void, Never>?
     @State private var eventPresenter = ChatScreenEvents()
     @State private var window: ChatWindowModel?
     @State private var composerSafeAreaOverlap: CGFloat = 0
@@ -100,8 +99,6 @@ struct ChatRootView: View {
             }
         }
         .onDisappear {
-            deepLinkRead?.cancel()
-            deepLinkRead = nil
             eventPreparation?.task.cancel()
             eventPreparation = nil
             eventPresenter.clear()
@@ -129,22 +126,17 @@ struct ChatRootView: View {
         }
         .onChange(of: workspace.settings.hosts) { _, _ in workspace.reconcileHosts() }
         .onOpenURL { url in
-            deepLinkRead?.cancel()
-            deepLinkRead = Task {
-                let event = await Self.decodeDeepLink(url)
-                guard !Task.isCancelled else { return }
-                deepLinkRead = nil
-                guard let event else { return }
-                if case .open(.conversation(let address), let opening) = event {
-                    guard let hostID = workspace.hostIDForConversationLink(address.hostID) else {
-                        eventError = "This link doesn't name a unique configured host."
-                        return
-                    }
-                    let resolved = ConversationAddress(hostID: hostID, threadID: address.threadID)
-                    workspace.events.receive(.open(.conversation(resolved), opening: opening))
-                } else {
-                    workspace.events.receive(event)
+            guard let event = ExternalEvent(url: url) else { return }
+            logger.notice("Received deep link")
+            if case .open(.conversation(let address), let opening) = event {
+                guard let hostID = workspace.hostIDForConversationLink(address.hostID) else {
+                    eventError = "This link doesn't name a unique configured host."
+                    return
                 }
+                let resolved = ConversationAddress(hostID: hostID, threadID: address.threadID)
+                workspace.events.receive(.open(.conversation(resolved), opening: opening))
+            } else {
+                workspace.events.receive(event)
             }
         }
         #if os(iOS)
@@ -152,11 +144,6 @@ struct ChatRootView: View {
             workspace.events.receive(.lockedCameraCaptures)
         }
         #endif
-    }
-
-    @concurrent
-    nonisolated private static func decodeDeepLink(_ url: URL) async -> ExternalEvent? {
-        ExternalEvent(url: url)
     }
 
     private func registerWithEventRouter(_ window: ChatWindowModel) {
