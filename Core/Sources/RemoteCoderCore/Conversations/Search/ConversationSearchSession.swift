@@ -96,18 +96,13 @@ final class ConversationSearchSession {
         }
         if !isActive { isActive = true }
         results.status = ConversationSearchStatus(isSearching: true)
-        startSearch(typed, clock: clock)
-    }
-
-    private func startSearch<C: Clock>(_ typed: String, clock: C) where C.Duration == Duration {
         let generation = generation
-        let started = clock.now
+        let clock = clock
         search = Task { [weak self] in
-            do { try await clock.sleep(until: started.advanced(by: Self.debounce), tolerance: nil) }
+            do { try await clock.sleep(for: Self.debounce) }
             catch { return }
             guard let self, self.isCurrent(generation) else { return }
-            await Self.collect(typed, hosts: self.hosts(), generation: generation,
-                clock: clock, meaningDeadline: started.advanced(by: Self.meaningDebounce)) { [weak self] update in
+            await Self.collect(typed, hosts: self.hosts(), generation: generation, clock: clock) { [weak self] update in
                 guard let self, self.isCurrent(generation) else { return false }
                 self.publish(update)
                 return true
@@ -138,11 +133,10 @@ final class ConversationSearchSession {
     }
 
     @concurrent
-    private static func collect<C: Clock>(
+    private static func collect(
         _ typed: String, hosts: [ConversationSearchHost], generation: UInt64,
-        clock: C, meaningDeadline: C.Instant,
-        publish: @MainActor @Sendable (ConversationSearchProgress.Publication) -> Bool
-    ) async where C.Duration == Duration {
+        clock: any Clock<Duration>, publish: @MainActor @Sendable (ConversationSearchProgress.Publication) -> Bool
+    ) async {
         guard let query = ConversationSearchQuery(typed) else {
             _ = await publish(.clear)
             return
@@ -171,7 +165,7 @@ final class ConversationSearchSession {
                     let meaningRequest = progress.expect(.meaning, from: host)
                     group.addTask {
                         await request(meaningRequest) {
-                            try await clock.sleep(until: meaningDeadline, tolerance: nil)
+                            try await clock.sleep(for: meaningDebounce - debounce)
                             try Task.checkCancellation()
                             return try await meaning(meaningParams)
                         } candidates: {

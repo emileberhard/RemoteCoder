@@ -267,7 +267,7 @@ struct ConversationSearchSessionTests {
         meaning.answer("alpha", with: [meaningHit("stale")])
         #expect(await waitUntil { clock.sleeperCount == 1 })
         clock.advance(by: ConversationSearchSession.debounce)
-        try #require(await waitUntil { requests.pendingQueries == ["beta"] })
+        try #require(await waitUntil { requests.pendingQueries == ["beta"] && clock.sleeperCount == 2 })
         clock.advance(by: .milliseconds(400))
         try #require(await waitUntil { meaning.queries == ["beta"] })
         requests.answer(mini, with: [hit("current", on: mini)])
