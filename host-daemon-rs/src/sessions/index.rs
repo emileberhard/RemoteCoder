@@ -1,6 +1,6 @@
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, params};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 const VERSION: &str = "1";
 
@@ -39,6 +39,7 @@ pub(super) fn open(db: &Connection) -> Result<()> {
 
 pub(crate) fn root(db: &Connection, key: &str) -> Result<String> {
     let mut current = key.to_owned();
+    let mut nearest_present = current.clone();
     let mut visited = HashSet::new();
     for _ in 0..16 {
         if !visited.insert(current.clone()) {
@@ -46,9 +47,9 @@ pub(crate) fn root(db: &Connection, key: &str) -> Result<String> {
         }
         let parent: Option<Option<String>> = db.query_row("SELECT CASE WHEN delegated_parent_known THEN delegated_parent_session_key ELSE parent_session_key END FROM session s JOIN source src USING(source_id) WHERE session_key=?1 AND src.present=1", [&current], |r| r.get(0)).optional()?;
         match parent {
-            None => return Ok(key.to_owned()),
+            None => return Ok(nearest_present),
             Some(None) => return Ok(current),
-            Some(Some(parent)) => current = parent,
+            Some(Some(parent)) => nearest_present = std::mem::replace(&mut current, parent),
         }
     }
     Ok(key.to_owned())
@@ -60,24 +61,27 @@ pub(crate) fn rebuild_one(db: &mut Connection) -> Result<bool> {
         return Ok(false);
     };
     let tx = db.transaction()?;
-    let prior: Option<String> = tx
-        .query_row(
-            "SELECT root_key FROM search_member WHERE session_key=?1",
-            [&key],
-            |r| r.get(0),
-        )
-        .optional()?;
     let root = root(&tx, &key)?;
     let descendants: Vec<String> = tx.prepare("WITH RECURSIVE children(key) AS (VALUES(?1) UNION SELECT s.session_key FROM session s JOIN children c ON (s.delegated_parent_known=0 AND s.parent_session_key=c.key) OR (s.delegated_parent_known=1 AND s.delegated_parent_session_key=c.key)) SELECT key FROM children")?.query_map([&root], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-    for member in &descendants {
-        let effective = self::root(&tx, member)?;
-        if effective != root {
-            continue;
+    let mut previous_roots = BTreeSet::new();
+    {
+        let mut previous = tx.prepare("SELECT root_key FROM search_member WHERE session_key=?1")?;
+        for member in &descendants {
+            if self::root(&tx, member)? != root {
+                continue;
+            }
+            if let Some(prior) = previous
+                .query_row([member], |r| r.get::<_, String>(0))
+                .optional()?
+                .filter(|prior| prior != &root)
+            {
+                previous_roots.insert(prior);
+            }
+            tx.execute("INSERT INTO search_member VALUES(?1,?2) ON CONFLICT(session_key) DO UPDATE SET root_key=excluded.root_key", params![member,root])?;
+            tx.execute("DELETE FROM search_dirty WHERE session_key=?1", [member])?;
         }
-        tx.execute("INSERT INTO search_member VALUES(?1,?2) ON CONFLICT(session_key) DO UPDATE SET root_key=excluded.root_key", params![member,effective])?;
-        tx.execute("DELETE FROM search_dirty WHERE session_key=?1", [member])?;
     }
-    if let Some(prior) = prior.filter(|prior| prior != &root) {
+    for prior in previous_roots {
         rebuild(&tx, &prior)?;
     }
     rebuild(&tx, &root)?;

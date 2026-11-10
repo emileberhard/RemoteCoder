@@ -2708,6 +2708,67 @@ fn sessions_conversations_match_across_messages_fold_and_rank_titles() {
 }
 
 #[test]
+fn sessions_conversations_refold_all_descendants_when_ancestor_arrives() -> Result<()> {
+    for b_first in [false, true] {
+        let f = fixture();
+        let origin = &f.origins[0];
+        let a = f.codex.with_file_name("a.jsonl");
+        let b = f.codex.with_file_name("b.jsonl");
+        let c = f.codex.with_file_name("c.jsonl");
+        let key = |id| super::session_key(origin, id);
+        let stop = AtomicBool::new(false);
+        let mut b_header = codex_meta("b", Some("a"));
+        if b_first {
+            b_header["timestamp"] = json!("2026-10-29T10:00:00Z");
+        }
+        write(
+            &b,
+            &[
+                b_header,
+                json!({"type":"event_msg","payload":{"type":"user_message","message":"ancestry chain middle"}}),
+            ],
+        );
+        write(
+            &c,
+            &[
+                codex_meta("c", Some("b")),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":"ancestry chain leaf"}}),
+            ],
+        );
+        ingest::scan_scope(
+            &f.store,
+            &f.origins,
+            ingest::Scope::Changed(&[b.clone(), c]),
+            &stop,
+        )?;
+        let grouped = conversation_search(&f.store, "ancestry", 30, Default::default());
+        assert_eq!(grouped.conversations.len(), 1);
+        assert_eq!(grouped.conversations[0].session_key, key("b"));
+        assert_eq!(grouped.conversations[0].hit_count, 2);
+        f.store
+            .writer()?
+            .execute("INSERT INTO search_dirty VALUES(?1)", [key("b")])?;
+        let mut a_header = codex_meta("a", None);
+        a_header["timestamp"] = json!("2026-10-28T10:00:00Z");
+        write(&a, &[a_header]);
+        ingest::scan_scope(&f.store, &f.origins, ingest::Scope::Changed(&[a]), &stop)?;
+        let db = f.store.reader()?;
+        let documents: Vec<String> = db
+            .prepare("SELECT session_key FROM search_document WHERE session_key IN (?1,?2,?3)")?
+            .query_map(rusqlite::params![key("a"), key("b"), key("c")], |r| {
+                r.get(0)
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        assert_eq!(documents, [key("a")]);
+        let grouped = conversation_search(&f.store, "ancestry", 30, Default::default());
+        assert_eq!(grouped.conversations.len(), 1);
+        assert_eq!(grouped.conversations[0].session_key, key("a"));
+        assert_eq!(grouped.conversations[0].hit_count, 2);
+    }
+    Ok(())
+}
+
+#[test]
 fn sessions_conversations_bound_hits_and_exclude_folder_only_matches() {
     let f = fixture();
     scan(&f);
