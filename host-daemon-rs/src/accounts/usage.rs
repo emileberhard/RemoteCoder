@@ -120,6 +120,7 @@ fn codex_windows(windows: &mut Vec<UsageWindow>, bucket_id: &str, bucket: &Value
             } else {
                 Some(bucket_id.to_owned())
             },
+            observed_at: None,
         });
     }
     Ok(())

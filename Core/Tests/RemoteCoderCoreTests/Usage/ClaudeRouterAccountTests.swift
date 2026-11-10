@@ -43,11 +43,12 @@ struct ClaudeRouterAccountTests {
         let windows = [AccountUsageWindow(id: "weekly", label: "Weekly", durationMinutes: 10080,
             usedPercent: 50, resetsAt: 604800, model: nil),
             AccountUsageWindow(id: "fable-weekly", label: "Fable weekly", durationMinutes: 10080,
-                usedPercent: 100, resetsAt: 604800, model: "fable")]
+                usedPercent: 100, resetsAt: 604800, model: "fable", observedAt: 7000)]
         let sample = account(id: "one", observed: 9000, windows: windows)
         let rows = sample.usageRows(now: Date(timeIntervalSince1970: 9000))
         #expect(rows.map(\.title) == ["Weekly", "Fable weekly"])
         #expect(rows.map(\.kind) == [.weekly, .other])
+        #expect(rows.map(\.isStale) == [false, true])
         #expect(sample.menuTitle(now: Date(timeIntervalSince1970: 9000)) == "one@example.com · 5h — · Week 50%")
         #expect(sample.planTitle == "Max")
         let data = Data(#"""

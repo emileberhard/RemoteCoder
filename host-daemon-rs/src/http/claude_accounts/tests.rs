@@ -50,15 +50,24 @@ fn maps_claude_accounts_without_inventing_missing_observations() {
     assert_eq!(fable.duration_minutes, Some(10080));
     assert_eq!(fable.used_percent, 100.0);
     assert_eq!(fable.resets_at, Some(1791561600.0));
+    assert_eq!(fable.observed_at, Some(observed));
+    assert!(account.windows[0].observed_at.is_none());
     assert!(directory.accounts[1].shared);
     assert!(directory.accounts[1].windows.is_empty());
     assert!(directory.accounts[1].observed_at.is_none());
     let mut invalid = payload();
     invalid["accounts"][0]["usage"]["five_hour"]["utilization"] = json!(-0.1);
     assert!(map_directory(invalid).is_err());
-    let mut invalid = payload();
-    invalid["accounts"][0]["usage"]["model_limits"][0]["model"] = json!("");
-    assert!(map_directory(invalid).is_err());
+    for malformed in [
+        json!([{}]),
+        json!([{"model":"","group":"weekly","utilization":1,
+        "resets_at":"2026-10-09T16:00:00Z","observed_at":"2026-10-06T07:00:00Z"}]),
+    ] {
+        let mut inventory = payload();
+        inventory["accounts"][0]["usage"]["model_limits"] = malformed;
+        let directory = map_directory(inventory).unwrap();
+        assert_eq!(directory.accounts[0].windows.len(), 2);
+    }
     for (field, value) in [
         ("automatic", json!("absent")),
         ("preference", json!("ca4d1cbc-865c-4136-a13c-bd004f229c93")),
@@ -183,7 +192,7 @@ fn malformed_resets_degrade_only_the_affected_claude_observation() {
         inventory["accounts"][2]["resets"] =
             json!({"state":"known","available":0,"offers":[],"error":null});
         let wire = serde_json::to_value(map_directory(inventory).unwrap()).unwrap();
-        assert_eq!(wire["accounts"][0]["windows"].as_array().unwrap().len(), 2);
+        assert_eq!(wire["accounts"][0]["windows"].as_array().unwrap().len(), 3);
         assert_eq!(
             wire["accounts"][0]["resets"],
             json!({"state":"unavailable","available":null,"offers":null,"observedAt":null,"error":"upstream_unavailable"})

@@ -103,8 +103,10 @@ Five-hour and seven-day observations map to 300-minute and 10,080-minute usage
 windows; utilization becomes used percentage, capped at 100. Each router
 `model_limits` entry, such as Fable's weekly allowance, becomes a window with
 its `model`, labeled by model and group ("Fable weekly"); session and weekly
-groups get the matching duration. Missing windows remain absent, and unknown
-model limits add none. A model window is shown with its own label and never
+groups get the matching duration and the entry's own `observedAt`, so a model
+row turns stale on its own when the router's usage reads stop. Missing windows
+remain absent; unknown or malformed model limits add none and never fail the
+directory. A model window is shown with its own label and never
 counts as the account's 5-hour or weekly limit. The router's observed plan
 tier (such as `max_20x`) replaces the configured plan in the label ("Max 20x"). The app derives staleness from `observedAt`: no observation or
 one older than 15 minutes is stale, including while a displayed sample ages.

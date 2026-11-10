@@ -102,7 +102,7 @@ struct RouterUsage {
     observed_at: String,
     five_hour: Option<RouterWindow>,
     weekly: Option<RouterWindow>,
-    model_limits: Option<Vec<RouterModelWindow>>,
+    model_limits: Option<Value>,
 }
 #[derive(Deserialize)]
 struct RouterWindow {
@@ -113,6 +113,7 @@ struct RouterWindow {
 struct RouterModelWindow {
     model: String,
     group: String,
+    observed_at: String,
     #[serde(flatten)]
     window: RouterWindow,
 }
@@ -196,22 +197,12 @@ fn map_directory(value: Value) -> Result<Directory> {
                     )?);
                 }
             }
-            for limit in usage.model_limits.into_iter().flatten() {
-                ensure!(valid_id(&limit.model), "Invalid Claude model limit");
-                let mut label = limit.model.clone();
-                label[..1].make_ascii_uppercase();
-                let duration = match limit.group.as_str() {
-                    "session" => Some(300),
-                    "weekly" => Some(10080),
-                    _ => None,
-                };
-                windows.push(usage_window(
-                    format!("{}-{}", limit.model, limit.group),
-                    format!("{label} {}", limit.group),
-                    duration,
-                    Some(limit.model),
-                    &limit.window,
-                )?);
+            match model_windows(usage.model_limits) {
+                Ok(model_windows) => windows.extend(model_windows),
+                Err(_) => tracing::warn!(
+                    account = %account.id,
+                    "Claude model limits are unmappable; leaving them unknown"
+                ),
             }
         }
         accounts.push(Account {
@@ -271,7 +262,35 @@ fn usage_window(
         used_percent: (window.utilization * 100.0).min(100.0),
         resets_at: Some(timestamp(&window.resets_at)?),
         model,
+        observed_at: None,
     })
+}
+fn model_windows(limits: Option<Value>) -> Result<Vec<UsageWindow>> {
+    let Some(limits) = limits else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value::<Vec<RouterModelWindow>>(limits)?
+        .into_iter()
+        .map(|limit| {
+            ensure!(valid_id(&limit.model), "Invalid Claude model limit");
+            let mut label = limit.model.clone();
+            label[..1].make_ascii_uppercase();
+            let duration = match limit.group.as_str() {
+                "session" => Some(300),
+                "weekly" => Some(10080),
+                _ => None,
+            };
+            let mut window = usage_window(
+                format!("{}-{}", limit.model, limit.group),
+                format!("{label} {}", limit.group),
+                duration,
+                Some(limit.model),
+                &limit.window,
+            )?;
+            window.observed_at = Some(timestamp(&limit.observed_at)?);
+            Ok(window)
+        })
+        .collect()
 }
 fn map_copilot(account: CopilotAccount) -> Result<Copilot> {
     let budget = account

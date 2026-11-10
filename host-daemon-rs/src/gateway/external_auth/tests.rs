@@ -570,6 +570,7 @@ async fn a_failed_host_quota_read_keeps_only_the_verified_accounts_recent_usage(
                 used_percent: 66.0,
                 resets_at: None,
                 model: None,
+                observed_at: None,
             }],
             resets: crate::accounts::resets::from_router(Some(
                 json!({"state":"known","available":5,"offers":null,"error":null}),
