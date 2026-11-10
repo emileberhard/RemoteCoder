@@ -39,3 +39,14 @@ extension GatewayClient: QuestionRemote {
         return response
     }
 }
+
+extension GatewayClient {
+    func searchConversations(_ params: ConversationSearchParams) async throws -> ConversationSearchResponse {
+        let data = try await callRaw(method: "sessions/conversations/search", params: encodeToJSONValue(params),
+                                     timeout: .seconds(5))
+        let response = try await GatewayFrameDecoder.decodeResult(ConversationSearchResponse.self, from: data,
+            dateDecodingStrategy: ConversationSearchResponse.dateDecoding)
+        guard response.schemaVersion == ConversationSearchResponse.schemaVersion else { throw ClientError.invalidMessage }
+        return response
+    }
+}
