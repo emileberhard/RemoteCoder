@@ -1678,7 +1678,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     var forkOrigin: ForkOrigin? {
-        guard let threadID = openThreadID else { return nil }
+        guard let threadID = openThreadID else { return shownDraftForkSource.map(forkOrigin(of:)) }
         let current = activeConversation?.id == threadID ? activeConversation : nil
         guard let source = target.conversationList.header(id: threadID)?.forkedFromThreadID ?? current?.forkedFromThreadID
         else { return nil }
