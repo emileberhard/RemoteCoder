@@ -1868,22 +1868,24 @@ private extension ChatTargetModel {
     var conversationSearchHost: ConversationSearchHost {
         let directories = directories
         let gateway = gatewayClient
+        let meaning: ConversationSearchHost.Search<ConversationMeaningResponse> = { params in
+            guard let information = await directories.resolveInformation() else {
+                throw GatewayClient.ClientError.notConnected
+            }
+            guard information.conversationSearchByMeaning == true else { return .unsupported }
+            return .results(try await gateway.searchConversationsByMeaning(params))
+        }
+        let supportsMeaning = directories.information.map { $0.conversationSearchByMeaning == true }
         return ConversationSearchHost(
             id: hostID, name: hostDisplayName, gatewayID: host.gatewayID,
             headers: conversationList.threads, marks: conversationList.marks,
-            availability: gatewayConnectivity.route == nil ? .unreachable : .connected { params in
+            availability: gatewayConnectivity.route == nil ? .unreachable : .connected(keyword: { params in
                 guard let information = await directories.resolveInformation() else {
                     throw GatewayClient.ClientError.notConnected
                 }
                 guard information.conversationSearch == true else { return .unsupported }
                 return .results(try await gateway.searchConversations(params))
-            }, meaning: { params in
-                guard let information = await directories.resolveInformation() else {
-                    throw GatewayClient.ClientError.notConnected
-                }
-                guard information.conversationSearchByMeaning == true else { return .unsupported }
-                return .results(try await gateway.searchConversationsByMeaning(params))
-            }
+            }, meaning: supportsMeaning == false ? nil : meaning)
         )
     }
 

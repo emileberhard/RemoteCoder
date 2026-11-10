@@ -3069,10 +3069,12 @@ sidebar field through `ChatCommand`. The ⌘K palette stays separate.
 
 After a 200 ms debounce, the session prepares the query and local title matches
 off the main actor. The keyword request uses at most eight distinct terms and
-512 UTF-8 bytes. A host whose `host/info` advertises `conversationSearchByMeaning`
-gets a parallel request with up to 512 UTF-8 bytes of the original phrasing and
-a limit of 20. Preparation, card mapping and merging run off the main actor.
-A superseded generation cancels its requests and cannot publish a late answer.
+512 UTF-8 bytes. After 600 ms without another keystroke, hosts whose
+`host/info` advertises `conversationSearchByMeaning` start their meaning requests
+with up to 512 UTF-8 bytes of the original phrasing and a limit of 20.
+`ConversationSearchProgress` applies answers and the first-paint deadline as
+value transitions off the main actor, alongside query and card preparation.
+A superseded generation cancels its delays and requests and cannot publish a late answer.
 The window retains the query and results when the drawer closes and cancels
 its search when it detaches.
 
