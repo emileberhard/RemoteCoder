@@ -45,6 +45,10 @@ impl Inner {
 }
 
 impl JobStore {
+    pub(crate) async fn catalog_parents(&self) -> Result<crate::sessions::metadata::Parents> {
+        self.access(|inner| Ok(inner.parents.clone())).await
+    }
+
     pub(crate) async fn admit_native(&self, job: JobRecord) -> Result<JobRecord> {
         self.access(move |inner| {
             if let Some(existing) = inner.jobs.get(&job.job_id) {

@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT OR IGNORE INTO meta VALUES ('epoch', lower(hex(randomblob(16))));
 INSERT OR IGNORE INTO meta VALUES ('floor', '0');
+INSERT OR IGNORE INTO meta VALUES ('catalog_ready', '0');
 CREATE TABLE IF NOT EXISTS source (
  source_id INTEGER PRIMARY KEY, origin_host TEXT NOT NULL, provider TEXT NOT NULL,
  provider_home TEXT NOT NULL, path TEXT NOT NULL, local_path TEXT NOT NULL,
@@ -13,9 +14,13 @@ CREATE TABLE IF NOT EXISTS session (
  session_key TEXT PRIMARY KEY, origin_host TEXT NOT NULL, provider TEXT NOT NULL,
  provider_home TEXT NOT NULL, thread_id TEXT NOT NULL, thread_id_reversed BLOB NOT NULL, cwd TEXT, title TEXT,
  started_at TEXT, last_at TEXT, parent_session_key TEXT,
+ delegated_parent_known INTEGER NOT NULL DEFAULT 0 CHECK(delegated_parent_known IN (0,1)),
+ delegated_parent_session_key TEXT,
  source_id INTEGER NOT NULL UNIQUE REFERENCES source);
 CREATE INDEX IF NOT EXISTS session_thread ON session(thread_id,origin_host);
 CREATE INDEX IF NOT EXISTS session_thread_suffix ON session(origin_host,thread_id_reversed);
+CREATE INDEX IF NOT EXISTS session_parent ON session(parent_session_key) WHERE delegated_parent_known=0;
+CREATE INDEX IF NOT EXISTS session_delegated_parent ON session(delegated_parent_session_key) WHERE delegated_parent_known=1;
 CREATE TABLE IF NOT EXISTS turn (
  session_key TEXT NOT NULL REFERENCES session ON DELETE CASCADE, turn_id TEXT NOT NULL,
  seq INTEGER NOT NULL, started_at TEXT, ended_at TEXT, status TEXT, model TEXT,
@@ -64,6 +69,10 @@ CREATE TABLE IF NOT EXISTS dependency (
 CREATE TABLE IF NOT EXISTS change (
  seq INTEGER PRIMARY KEY AUTOINCREMENT, origin_host TEXT NOT NULL, evidence_path TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS change_evidence ON change(origin_host,seq);
+CREATE TRIGGER IF NOT EXISTS feed_session_metadata AFTER UPDATE OF title,delegated_parent_known,delegated_parent_session_key ON session
+WHEN old.title IS NOT new.title OR old.delegated_parent_known IS NOT new.delegated_parent_known OR old.delegated_parent_session_key IS NOT new.delegated_parent_session_key BEGIN
+ INSERT INTO change(origin_host,evidence_path) SELECT new.origin_host,path FROM source WHERE source_id=new.source_id;
+END;
 CREATE TABLE IF NOT EXISTS coverage (
  origin_host TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('local','mirror')),
  indexed_through TEXT, complete_through TEXT, stale_reason TEXT,

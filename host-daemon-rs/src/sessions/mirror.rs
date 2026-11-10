@@ -109,7 +109,7 @@ pub(crate) fn list(store: &Store, host: &str, after: Option<String>) -> Result<V
         "unavailable: provider roots are unavailable; mirror presence is unknown"
     );
     Ok(
-        json!({"schemaVersion":1,"files":page,"cursor":next,"through":through,"complete":complete,"changeCursor":change_cursor,"coverage":super::query::coverage(&db)?}),
+        json!({"schemaVersion":1,"sessionMetadata":super::metadata::page(&db,host,&page)?,"files":page,"cursor":next,"through":through,"complete":complete,"changeCursor":change_cursor,"coverage":super::query::coverage(&db)?}),
     )
 }
 
@@ -232,7 +232,9 @@ pub(crate) fn delta(
         head
     };
     let (through,complete):(Option<String>,bool)=tx.query_row("SELECT indexed_through,stale_reason IS NULL AND complete_through IS NOT NULL FROM coverage WHERE origin_host=?1",[host],|r|Ok((r.get(0)?,r.get(1)?)))?;
-    Ok(json!({"files":files,"cursor":cursor,"hasMore":more,"through":through,"complete":complete}))
+    Ok(
+        json!({"sessionMetadata":super::metadata::page(&tx,host,&files)?,"files":files,"cursor":cursor,"hasMore":more,"through":through,"complete":complete}),
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -379,6 +381,7 @@ async fn sync_owned(
         saved.as_ref().map(|(cursor, _, _)| cursor.clone())
     };
     let mut snapshot_cursor = None;
+    let mut metadata = BTreeMap::new();
     let mut changed = std::collections::BTreeSet::new();
     let storage = &store.storage;
     let mut origins = BTreeMap::new();
@@ -436,6 +439,17 @@ async fn sync_owned(
             }
         } else {
             complete = false;
+        }
+        if let Some(values) = page.get("sessionMetadata") {
+            let values: Vec<super::metadata::SessionMetadata> =
+                serde_json::from_value(values.clone())?;
+            ensure!(
+                metadata.len() + values.len() <= 100_000,
+                "capacity: mirror metadata exceeds 100000 sessions"
+            );
+            for value in values {
+                metadata.insert(value.session_key.clone(), value);
+            }
         }
         let entries: Vec<Entry> = serde_json::from_value(page["files"].clone())?;
         for entry in entries {
@@ -638,6 +652,13 @@ async fn sync_owned(
     } else {
         saved.as_ref().is_some_and(|(_, _, projected)| *projected)
     };
+    {
+        let mut db = store.writer()?;
+        let tx = db.transaction()?;
+        super::metadata::apply(&tx, host, &metadata.into_values().collect::<Vec<_>>())?;
+        tx.commit()?;
+        while !stop.is_cancelled() && super::index::rebuild_one(&mut db)? {}
+    }
     let projected =
         projected && complete && (full || saved.as_ref().is_some_and(|(_, _, prior)| *prior));
     let cursor =

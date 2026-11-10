@@ -531,9 +531,13 @@ blocks startup or provider journal retirement.
   correlated to its request (`src/rpc/upstream_errors.rs`), pinned by a test to
   the fork commit in `docs/codex/compatibility.json`.
 - `sessions/conversations/search` is a local-catalog Query-lifetime read,
-  advertised by `host/info.conversationSearch`. It groups bounded trigram windows
-  into root conversations, folds native and persisted delegated children and
-  returns ranked excerpts. Its one-second deadline includes FIFO and admission;
+  advertised by `host/info.conversationSearch`. Independently versioned word
+  indexes match all terms across root conversation documents, with final-term
+  prefixes and diacritic folding. The worker persists origin titles and delegated
+  parents, mirrors them in optional page metadata, and rebuilds derived indexes
+  from catalog rows. Requests never scan every header, read the job store or
+  fetch full message text to rank. Native and persisted delegated children fold
+  into roots with ranked excerpts. Its one-second deadline includes FIFO and admission;
   completed stages survive timeout with `truncated`, and no completed stage uses
   typed `requestTimedOut`. A request-owned drop guard signals the SQLite progress
   handler on cancellation, disconnect or deadline. Two dedicated reader permits

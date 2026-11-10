@@ -2591,6 +2591,16 @@ fn conversation_search(
     limit: usize,
     parents: std::collections::HashMap<String, Option<String>>,
 ) -> super::conversations::Response {
+    {
+        let db = store.writer().unwrap();
+        for (key, parent) in parents {
+            db.execute("UPDATE session SET delegated_parent_known=1,delegated_parent_session_key=?2 WHERE session_key=?1",rusqlite::params![key,parent]).unwrap();
+        }
+    }
+    {
+        let mut db = store.writer().unwrap();
+        while super::index::rebuild_one(&mut db).unwrap() {}
+    }
     let control = super::store::ReadControl::new(Instant::now() + super::conversations::DEADLINE);
     let mut db = store.reader().unwrap();
     db.interrupt_on(control.clone()).unwrap();
@@ -2601,7 +2611,6 @@ fn conversation_search(
             limit,
         },
         &control,
-        |_| parents,
         &Default::default(),
     )
     .unwrap()
@@ -2619,202 +2628,164 @@ fn conversation_item(
 }
 
 #[test]
-fn sessions_conversations_rank_coverage_title_hits_and_native_children() {
+fn sessions_conversations_match_across_messages_fold_and_rank_titles() {
     let f = fixture();
-    scan(&f);
+    let outcome = scan(&f);
+    let failures: Vec<(String, Option<String>)> = f
+        .store
+        .reader()
+        .unwrap()
+        .prepare("SELECT path,failure FROM source")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(outcome["parseFailures"], 0, "{failures:?}");
     let root = super::session_key(&f.origins[0], "codex-root");
     let child = super::session_key(&f.origins[0], "codex-child");
     let other = super::session_key(&f.origins[1], "claude_root");
     {
         let db = f.store.writer().unwrap();
         db.execute("DELETE FROM item", []).unwrap();
-        db.execute("UPDATE session SET title=NULL,cwd=NULL,last_at=NULL", [])
+        db.execute("UPDATE session SET title=NULL,cwd=NULL", [])
             .unwrap();
-        conversation_item(&db, &child, 0, "flicker", "assistant", None);
-        conversation_item(
-            &db,
-            &root,
-            3,
-            "drawer",
-            "assistant",
-            Some("2026-11-05T10:00:00Z"),
-        );
-        conversation_item(
-            &db,
-            &other,
-            4,
-            "drawer",
-            "user",
-            Some("2026-11-06T10:00:00Z"),
-        );
+        conversation_item(&db, &root, 0, "drawer", "user", None);
+        conversation_item(&db, &child, 1, "flickering Malmö ui", "assistant", None);
+        conversation_item(&db, &other, 2, "drawer unrelated", "assistant", None);
     }
-    let split = conversation_search(&f.store, "drawer flicker", 30, Default::default());
-    assert_eq!(split.conversations[0].session_key, root);
-    assert_eq!(split.conversations[0].hit_count, 2);
-    {
-        let db = f.store.writer().unwrap();
-        conversation_item(
-            &db,
-            &root,
-            1,
-            "drawer flicker",
-            "tool_result",
-            Some("2026-11-04T10:00:00Z"),
-        );
-        conversation_item(
-            &db,
-            &root,
-            2,
-            "drawer flicker",
-            "user",
-            Some("2026-11-03T10:00:00Z"),
-        );
-    }
-    let found = conversation_search(&f.store, "drawer flicker", 30, Default::default());
-    assert!(!found.truncated);
-    assert_eq!(found.conversations.len(), 2);
-    let best = &found.conversations[0];
-    assert_eq!(best.session_key, root);
-    assert!(!best.title_match);
-    assert_eq!(best.hit_count, 4);
-    assert_eq!(
-        best.hits
+    let result = conversation_search(&f.store, "drawer flick", 30, Default::default());
+    assert_eq!(result.conversations.len(), 1);
+    assert_eq!(result.conversations[0].session_key, root);
+    assert_eq!(result.conversations[0].hit_count, 2);
+    assert!(
+        result.conversations[0]
+            .hits
             .iter()
-            .map(|h| h.item_key.as_str())
-            .collect::<Vec<_>>(),
-        ["fixture-item-2", "fixture-item-1", "fixture-item-3"]
+            .any(|h| h.agent_thread_id.as_deref() == Some("codex-child"))
     );
-    assert_eq!(best.last_at, None);
-    assert_eq!(best.cwd, None);
+    for term in ["malmo", "ui"] {
+        assert_eq!(
+            conversation_search(&f.store, term, 30, Default::default()).conversations[0]
+                .session_key,
+            root
+        );
+    }
     {
         let db = f.store.writer().unwrap();
         db.execute(
-            "UPDATE session SET title='Drawer Flicker' WHERE session_key=?1",
+            "UPDATE session SET title='Drawer flickering' WHERE session_key=?1",
             [&other],
         )
         .unwrap();
     }
-    let found = conversation_search(&f.store, "drawer flicker", 1, Default::default());
-    assert_eq!(found.conversations.len(), 1);
-    assert_eq!(found.conversations[0].session_key, other);
-    assert!(found.conversations[0].title_match);
-    let folded = conversation_search(&f.store, "flicker", 30, Default::default());
+    let result = conversation_search(&f.store, "drawer flick", 1, Default::default());
+    assert_eq!(result.conversations.len(), 1);
+    assert_eq!(result.conversations[0].session_key, other);
+    assert!(result.conversations[0].title_match);
+    let promoted = conversation_search(&f.store, "flick", 30, [(child.clone(), None)].into());
     assert!(
-        folded
+        promoted
             .conversations
             .iter()
-            .find(|conversation| conversation.session_key == root)
-            .unwrap()
-            .hits
-            .iter()
-            .any(|hit| hit.agent_thread_id.as_deref() == Some("codex-child") && hit.at.is_none())
-    );
-    {
-        let db = f.store.writer().unwrap();
-        db.execute("UPDATE source SET present=0 WHERE source_id=(SELECT source_id FROM session WHERE session_key=?1)", [&root]).unwrap();
-    }
-    assert!(
-        conversation_search(&f.store, "flicker", 30, Default::default())
-            .conversations
-            .iter()
-            .all(|c| c.session_key != root && c.session_key != child)
+            .any(|c| c.session_key == child && c.hits.iter().all(|h| h.agent_thread_id.is_none()))
     );
 }
 
 #[test]
-fn sessions_conversations_window_is_per_term_and_counts_unique_items() {
+fn sessions_conversations_bound_hits_and_exclude_folder_only_matches() {
     let f = fixture();
     scan(&f);
-    let old = super::session_key(&f.origins[0], "codex-root");
-    let recent = super::session_key(&f.origins[1], "claude_root");
+    let root = super::session_key(&f.origins[0], "codex-root");
     {
         let db = f.store.writer().unwrap();
         db.execute("DELETE FROM item", []).unwrap();
-        db.execute("UPDATE session SET title=NULL,cwd=NULL", [])
+        db.execute("UPDATE session SET title=NULL,cwd='/needle'", [])
             .unwrap();
-        conversation_item(&db, &old, 0, "ordinary rareidentifier", "assistant", None);
-        for id in 1..=super::conversations::TERM_WINDOW {
-            conversation_item(&db, &recent, id, "ordinary", "user", None);
+        for id in 0..=super::conversations::TERM_WINDOW {
+            conversation_item(&db, &root, id, "needle", "assistant", None);
         }
     }
-    let found = conversation_search(&f.store, "ordinary", 50, Default::default());
-    assert!(found.truncated);
-    assert_eq!(found.conversations.len(), 1);
-    assert_eq!(found.conversations[0].session_key, recent);
+    let result = conversation_search(&f.store, "needle", 30, Default::default());
+    assert!(result.truncated);
+    assert_eq!(result.conversations.len(), 1);
     assert_eq!(
-        found.conversations[0].hit_count,
+        result.conversations[0].hit_count,
         super::conversations::TERM_WINDOW
     );
-    assert_eq!(found.conversations[0].hits.len(), 3);
-    let found = conversation_search(&f.store, "ordinary rareidentifier", 50, Default::default());
-    assert!(found.truncated);
-    assert_eq!(found.conversations[0].session_key, old);
-    assert_eq!(found.conversations[0].hit_count, 1);
+    assert_eq!(result.conversations[0].hits.len(), 3);
+    assert!(
+        conversation_search(&f.store, "absent needle", 30, Default::default())
+            .conversations
+            .is_empty()
+    );
 }
 
 #[test]
-fn sessions_conversations_fold_delegated_chains_and_leave_unknown_owners() {
+fn sessions_conversations_rebuild_indexes_from_rows_and_report_pending_work() {
     let f = fixture();
     scan(&f);
     let root = super::session_key(&f.origins[0], "codex-root");
-    let delegated = super::session_key(&f.origins[1], "claude_root");
-    let native = super::session_key(&f.origins[1], "claude:root:child");
     {
         let db = f.store.writer().unwrap();
-        db.execute("DELETE FROM item", []).unwrap();
-        db.execute("UPDATE session SET title=NULL,cwd=NULL", [])
-            .unwrap();
-        conversation_item(&db, &native, 0, "needleflicker", "assistant", None);
+        conversation_item(&db, &root, 999, "PreciseIdentifier", "assistant", None);
     }
-    let parents = std::collections::HashMap::from([(delegated.clone(), Some(root.clone()))]);
-    let found = conversation_search(&f.store, "needleflicker", 30, parents);
-    assert_eq!(found.conversations[0].session_key, root);
-    assert_eq!(
-        found.conversations[0].hits[0].agent_thread_id.as_deref(),
-        Some("claude:root:child")
-    );
-    assert_eq!(
-        conversation_search(&f.store, "needleflicker", 30, Default::default()).conversations[0]
-            .session_key,
-        delegated
-    );
-}
-
-#[test]
-fn sessions_conversations_short_terms_only_search_metadata_and_unicode_excerpts_are_bounded() {
-    let f = fixture();
-    scan(&f);
-    let root = super::session_key(&f.origins[0], "codex-root");
-    let other = super::session_key(&f.origins[1], "claude_root");
-    {
-        let db = f.store.writer().unwrap();
-        db.execute("DELETE FROM item", []).unwrap();
-        db.execute("UPDATE session SET title=NULL,cwd=NULL", [])
-            .unwrap();
-        db.execute(
-            "UPDATE session SET title='UI ÅÄ',cwd='/ÅÄ/ui' WHERE session_key=?1",
-            [&root],
+    let request = super::conversations::Request {
+        query: "PreciseIdentifier".into(),
+        limit: 30,
+    };
+    let control = super::store::ReadControl::new(Instant::now() + super::conversations::DEADLINE);
+    assert!(
+        super::conversations::search(
+            &f.store.reader().unwrap(),
+            &request,
+            &control,
+            &Default::default()
         )
-        .unwrap();
-        conversation_item(&db, &other, 0, "ui åä", "user", None);
-        conversation_item(
-            &db,
-            &root,
-            1,
-            &format!("{}ÅNGER{}", "🦀".repeat(300), "å".repeat(300)),
-            "assistant",
-            None,
-        );
+        .unwrap()
+        .truncated
+    );
+    assert_eq!(
+        conversation_search(&f.store, "PreciseIdentifier", 30, Default::default()).conversations[0]
+            .session_key,
+        root
+    );
+    {
+        let db = f.store.writer().unwrap();
+        db.execute("UPDATE meta SET value='old' WHERE key='search_version'", [])
+            .unwrap();
+        super::index::open(&db).unwrap();
     }
-    let found = conversation_search(&f.store, "ui åä UI", 30, Default::default());
-    assert_eq!(found.conversations.len(), 1);
-    assert!(found.conversations[0].title_match);
-    assert_eq!(found.conversations[0].hit_count, 0);
-    let found = conversation_search(&f.store, "ånger", 30, Default::default());
-    let excerpt = &found.conversations[0].hits[0].excerpt;
-    assert!(excerpt.contains("ÅNGER"));
-    assert!(excerpt.chars().count() <= 240);
-    assert!(excerpt.starts_with('…') && excerpt.ends_with('…'));
+    assert_eq!(
+        conversation_search(&f.store, "PreciseIdentifier", 30, Default::default()).conversations[0]
+            .session_key,
+        root
+    );
+}
+
+#[test]
+fn sessions_conversations_timeout_preserves_completed_results() {
+    let f = fixture();
+    scan(&f);
+    let control = super::store::ReadControl::new(Instant::now());
+    let completed = Arc::new(std::sync::Mutex::new(Some(
+        super::conversations::Response {
+            schema_version: 1,
+            truncated: false,
+            conversations: vec![],
+        },
+    )));
+    let result = super::conversations::search(
+        &f.store.reader().unwrap(),
+        &super::conversations::Request {
+            query: "drawer".into(),
+            limit: 30,
+        },
+        &control,
+        &completed,
+    )
+    .unwrap();
+    assert!(result.truncated);
 }
 
 #[test]
@@ -2892,95 +2863,116 @@ async fn sessions_conversations_cancellation_interrupts_sql_and_releases_reader_
 }
 
 #[test]
-fn sessions_conversations_deadline_preserves_only_completed_stages() {
+fn sessions_conversations_ingest_typed_prompts_and_steers_only() -> Result<()> {
     let f = fixture();
-    scan(&f);
-    {
-        let db = f.store.writer().unwrap();
-        db.execute(
-            "UPDATE session SET title='drawer flicker' WHERE thread_id='codex-root'",
-            [],
-        )
-        .unwrap();
+    let mut file = OpenOptions::new().append(true).open(&f.codex)?;
+    for record in [
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"typed steering sentinel"}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"<agent_message id=\"x\">injected agent</agent_message>"}}),
+        json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions"}]}}),
+    ] {
+        writeln!(file, "{record}")?;
     }
-    let control = super::store::ReadControl::new(Instant::now() + super::conversations::DEADLINE);
-    let guard = control.cancel_on_drop();
-    let mut db = f.store.reader().unwrap();
-    db.interrupt_on(control.clone()).unwrap();
-    let found = super::conversations::search(
-        &db,
-        &super::conversations::Request {
-            query: "drawer flicker".into(),
-            limit: 30,
-        },
-        &control,
-        |_| {
-            drop(guard);
-            Default::default()
-        },
-        &Default::default(),
-    )
-    .unwrap();
-    assert!(found.truncated);
-    assert_eq!(found.conversations.len(), 1);
-    assert_eq!(found.conversations[0].hit_count, 0);
-    assert!(found.conversations[0].title_match);
-    let control = super::store::ReadControl::new(Instant::now());
-    db.interrupt_on(control.clone()).unwrap();
-    assert!(
-        super::conversations::search(
-            &db,
-            &super::conversations::Request {
-                query: "drawer".into(),
-                limit: 30
-            },
-            &control,
-            |_| Default::default(),
-            &Default::default()
-        )
-        .is_err()
+    let mut file = OpenOptions::new().append(true).open(&f.claude)?;
+    for record in [
+        json!({"type":"user","uuid":"compaction","isCompactSummary":true,"message":{"content":"compaction summary sentinel"}}),
+        json!({"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","source_uuid":"queued","prompt":"queued steering sentinel"}}),
+        json!({"type":"user","uuid":"agent","message":{"content":"<agent_message id=\"x\">injected agent</agent_message>"}}),
+    ] {
+        writeln!(file, "{record}")?;
+    }
+    assert_eq!(scan(&f)["parseFailures"], 0);
+    let texts: Vec<String> = f
+        .store
+        .reader()?
+        .prepare("SELECT text FROM item WHERE kind='user' AND text<>'' ORDER BY text")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(
+        texts,
+        [
+            "Inspect fixture",
+            "Native child",
+            "queued steering sentinel",
+            "typed steering sentinel"
+        ]
     );
+    Ok(())
 }
 
-#[test]
-fn sessions_conversations_require_a_full_title_match_or_a_message_hit() {
+#[tokio::test]
+async fn sessions_conversations_mirror_origin_metadata_without_entry_changes() -> Result<()> {
     let f = fixture();
     scan(&f);
     let root = super::session_key(&f.origins[0], "codex-root");
-    let other = super::session_key(&f.origins[1], "claude_root");
-    {
-        let db = f.store.writer().unwrap();
-        db.execute("DELETE FROM item", []).unwrap();
-        db.execute("UPDATE session SET title=NULL,cwd=NULL", [])
-            .unwrap();
-        db.execute(
-            "UPDATE session SET title='Needle Extra' WHERE session_key=?1",
-            [&root],
-        )
-        .unwrap();
-        db.execute(
-            "UPDATE session SET title='Needle',cwd='/Extra/folderword' WHERE session_key=?1",
-            [&other],
-        )
-        .unwrap();
-    }
-    let found = conversation_search(&f.store, "needle extra", 30, Default::default());
-    assert_eq!(found.conversations.len(), 1);
-    assert_eq!(found.conversations[0].session_key, root);
-    assert!(found.conversations[0].title_match);
-    assert!(found.conversations[0].hits.is_empty());
-    assert!(
-        conversation_search(&f.store, "folderword", 30, Default::default())
-            .conversations
-            .is_empty()
+    let child = super::session_key(&f.origins[0], "codex-child");
+    let directory = tempfile::tempdir()?;
+    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let call = mirror_peer(&f, Default::default(), Default::default());
+    sync_mirror(&target, call.clone()).await?;
+    f.store.writer()?.execute("UPDATE session SET title='Native Codex title',delegated_parent_known=1,delegated_parent_session_key=?2 WHERE session_key=?1",rusqlite::params![child,root])?;
+    let page = mirror::list(&f.store, "fixture", None)?;
+    let _: Vec<mirror::Entry> = serde_json::from_value(page["files"].clone())?;
+    sync_mirror(&target, call).await?;
+    let metadata:(String,bool,String)=target.reader()?.query_row("SELECT title,delegated_parent_known,delegated_parent_session_key FROM session WHERE session_key=?1",[child],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    assert_eq!(metadata, ("Native Codex title".into(), true, root));
+    Ok(())
+}
+
+#[test]
+#[ignore]
+fn sessions_rebuild_search_corpus() -> Result<()> {
+    let manifest = PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_ORIGINS")?);
+    let origins: Vec<Origin> = serde_json::from_slice(&std::fs::read(&manifest)?)?;
+    let root = manifest.parent().unwrap();
+    anyhow::ensure!(
+        origins.iter().all(|o| o.local_home.starts_with(root)),
+        "measurement requires copied inputs beside the manifest"
     );
+    let path = PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_DB")?);
+    anyhow::ensure!(
+        path.starts_with(root),
+        "measurement database must be beside the manifest"
+    );
+    let store = Store::open(path)?;
+    let started = Instant::now();
+    let outcome = ingest::scan(&store, &origins, &AtomicBool::new(false))?;
+    {
+        let db = store.writer()?;
+        super::metadata::titles(&db, &origins)?;
+    }
+    {
+        let mut db = store.writer()?;
+        while super::index::rebuild_one(&mut db)? {}
+        db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+    }
+    let report = json!({"seconds":started.elapsed().as_secs_f64(),"outcome":outcome,"databaseBytes":store.path.metadata()?.len()});
+    std::fs::write(
+        std::env::var("RC_SESSIONS_MEASURE_REPORT")?,
+        serde_json::to_vec_pretty(&report)?,
+    )?;
+    println!("{report}");
+    Ok(())
+}
+
+#[test]
+fn sessions_conversations_excerpt_keeps_the_match_on_character_boundaries() {
+    let f = fixture();
+    scan(&f);
+    let key = super::session_key(&f.origins[0], "codex-root");
     {
         let db = f.store.writer().unwrap();
-        conversation_item(&db, &other, 0, "extra", "assistant", None);
+        conversation_item(
+            &db,
+            &key,
+            444,
+            &format!("{} Malmö {}", "🦀".repeat(300), "å".repeat(300)),
+            "assistant",
+            None,
+        );
     }
-    let found = conversation_search(&f.store, "needle extra", 30, Default::default());
-    assert_eq!(found.conversations.len(), 2);
-    assert_eq!(found.conversations[1].session_key, other);
-    assert!(!found.conversations[1].title_match);
-    assert_eq!(found.conversations[1].hit_count, 1);
+    let result = conversation_search(&f.store, "malmo", 1, Default::default());
+    let excerpt = &result.conversations[0].hits[0].excerpt;
+    assert!(excerpt.contains("Malmö"));
+    assert!(excerpt.chars().count() <= 240);
 }

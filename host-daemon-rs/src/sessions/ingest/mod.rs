@@ -262,9 +262,11 @@ pub(super) fn scan_serving(
     }
     if matches!(scope, Scope::Full) {
         sources.sort_by_cached_key(|(_, path)| {
-            std::fs::metadata(path)
-                .and_then(|metadata| metadata.modified())
-                .ok()
+            std::cmp::Reverse(
+                std::fs::metadata(path)
+                    .and_then(|metadata| metadata.modified())
+                    .ok(),
+            )
         });
     }
     for batch in sources.chunks(32) {
@@ -310,6 +312,13 @@ pub(super) fn scan_serving(
             let elapsed = started.elapsed().as_secs_f64();
             longest_source = longest_source.max(elapsed);
             slow_sources += usize::from(elapsed > 5.0);
+            super::index::rebuild_one(&mut db)?;
+            between(&mut db)?;
+        }
+    }
+    {
+        let mut db = store.writer()?;
+        while !stop.load(Ordering::Acquire) && super::index::rebuild_one(&mut db)? {
             between(&mut db)?;
         }
     }
@@ -317,6 +326,9 @@ pub(super) fn scan_serving(
         return Ok(serde_json::json!({"ingested":0,"parseFailures":0}));
     }
     let db = store.writer()?;
+    if matches!(scope, Scope::Full) {
+        db.execute("UPDATE meta SET value='1' WHERE key='catalog_ready'", [])?;
+    }
     for host in changed_hosts {
         let local = origins
             .iter()

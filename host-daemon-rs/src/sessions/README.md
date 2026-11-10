@@ -136,7 +136,7 @@ allocating text or base64 values, with SQLITE_LIMIT_LENGTH on the query connecti
 only; ingestion and other SQLite users have no process-wide heap limit.
 
 Search returns newest-ingested items first with a descending rowid cursor.
-Background rebuilds ingest sources oldest-first by mtime; appended records enter
+Background rebuilds ingest sources newest-first by mtime; appended records enter
 at the head of search naturally. Ordering uses FTS rowid directly and stops at
 the page limit without sorting all matches. Timestamps remain exact predicates:
 item timestamps and ingestion order are not interchangeable. A date window with
@@ -173,55 +173,77 @@ read of this host's catalog, including every mirrored origin. It never contacts
 cluster members. `host/info.conversationSearch` advertises support. The existing
 `sessions/search` retains its literal, pageable, newest-ingested-item contract.
 The debug CLI is `remote-coder-codex-gateway sessions conversations QUERY --limit 30`;
-`--database PATH` and `--local` read that catalog directly, with native ancestry
-only when delegated ownership is unavailable.
+`--database PATH` and `--local` read that catalog directly.
 
-The trimmed query must contain 1–512 UTF-8 bytes. Whitespace-separated terms are
-case-insensitive, deduplicated and limited to eight distinct terms. `limit` is
-required and accepts 1–50 conversations. Unknown fields are invalid params.
-Titles and folders match any term for coverage; a returned conversation must
-have every term in its title or at least one message hit. Folder-only and partial
-title-only candidates are excluded. Messages use literal trigram matching only
-for terms of at least three Unicode characters, preserving the existing index's
-case and diacritic behavior. Short terms never match message text.
+The trimmed query accepts 1–512 UTF-8 bytes and at most eight deduplicated,
+case-insensitive whitespace-separated terms. `limit` is required and accepts
+1–50 conversations. Unknown fields are invalid params. All terms must be covered
+by the conversation across its title, folder and messages; the final term is a
+word prefix. SQLite unicode61 folds case and Latin diacritics, including Malmö
+for `malmo`. Two- and three-character prefixes have dedicated indexes.
+
+Conversation documents contain separately weighted title, typed-user,
+assistant/reasoning and folder columns. Title and typed text receive weights
+8 and 4; assistant/reasoning receives 1 and the folder contributes coverage only.
+BM25 document score ranks first, followed by recency and canonical key. Tool
+calls, tool output and injected context stay outside conversation documents;
+the existing trigram index retains literal access to that evidence. A result
+requires an all-terms title match or a message hit, so folder-only matches do
+not occupy the list. Ranking never fetches full message text.
 
 Schema-version-1 responses contain `truncated` and ranked `conversations`. Each
-conversation carries the root `sessionKey`, origin `hostId`, `provider`,
+conversation carries its root `sessionKey`, origin `hostId`, `provider`,
 `threadId`, nullable `title`, `cwd` and `lastAt`, `titleMatch`, `hitCount`, and up
-to three `hits`. Each hit contains its exact `itemKey`, catalog `kind`, nullable
-`at`, an excerpt of at most 240 Unicode characters centered on its first match,
-and nullable `agentThreadId` for a folded child. Unknown dates and metadata stay
-null. Deleted catalog sources are excluded. Native `parent_session_key` links
-and the existing persisted `JobStore::parent_tags` index fold children through
-at most 16 links; missing, ambiguous, cyclic or unavailable ownership leaves the
-session unfolded. Delegated ownership is looked up only for this host's
-conversations, with a single bounded batch and at most 50 ms; no ancestry
-registry or provider history calls are added. Current persisted parent tags override
-native provenance, including promotion to a standalone conversation.
+to three `hits`. A hit contains its exact `itemKey`, catalog `kind`, nullable
+`at`, an excerpt of at most 240 Unicode characters, and nullable `agentThreadId`
+for a folded child. Unknown dates and metadata stay null. Deleted sources are
+excluded. Native ancestry and persisted delegated parents fold through at most
+16 links; missing, ambiguous or cyclic ancestry leaves a session unfolded.
+Explicit promotion overrides native ancestry.
 
-Conversation order is distinct-term coverage across metadata and window hits,
-then all-terms-in-title, then newest hit timestamp (falling back to `lastAt`).
-Hits prefer more distinct message terms, then user/assistant text, then recency.
-Item keys deduplicate hits found in multiple term windows. Ties use canonical
-keys for stable results.
+At most 128 ranked document candidates are fetched. A scoped item word index
+finds at most 64 newest hits per term per candidate, plus a lookahead; it reads
+metadata for ranking and fetches snippets only for the best three hits. Hits
+prefer distinct-term coverage, user/assistant text, then recency. `hitCount`
+counts unique items inside these bounded windows. Candidate or hit-window
+lookahead sets `truncated`; limiting the final conversation list alone does not.
+Two dedicated reader permits isolate typing from the 16 inventory/mirror readers.
+The one-second deadline includes FIFO, admission and execution. Completed
+snapshots survive timeout with `truncated: true`; no completed stage yields
+instead typed `requestTimedOut`. A request-owned drop guard signals cancellation,
+disconnect and deadline to the same SQLite progress handler, checked every
+1,000 VM instructions, releasing the blocking reader's permit promptly.
 
-Two dedicated reader permits isolate typing from the 16 inventory/mirror
-readers. A request reads at most 10,000 newest session headers and 512 newest
-FTS item rows per eligible term, each with one lookahead: at most 14,105 fetched
-rows. FTS rowid order stops before any whole-match-set join or sort. Header and
-per-term stages publish completed ranked snapshots. The one-second deadline
-includes connection FIFO, admission and execution; it returns the last completed
-snapshot with `truncated: true`, or typed `requestTimedOut` if none completed.
-Hitting a candidate cap also sets `truncated`; limiting the final conversation
-list alone does not. A request-owned drop guard sets the reader's cancellation
-flag; the existing SQLite progress handler checks that flag and the deadline
-every 1,000 VM instructions. Cancel, disconnect and deadline therefore stop
-blocking SQLite work through the same path and release its reader permit.
+## Projection and search-index rebuilds
 
-The initial bounds were measured on an APFS clone of a 7,310-session, 18 GB
-catalog: the first complete header read took 302 ms; common-word windows of
-64/128/256/512 items took 23/9/12/75 ms and covered 9/11/12/17 conversations.
-A subsequent 512-row full-text read took 3 ms for 4.3 MB of text. The header cap
-retains the module's 10,000-row ceiling; 512 balances candidate diversity against
-eight-term latency. Deadline and cap truncation remain explicit as the catalog
-grows. No schema or index rebuild is required.
+Schema 7 is the single transcript rebuild for typed-user classification and
+origin-owned facts. Codex typed prompts and steers come from native
+`event_msg/user_message` records; model-facing user-role response items are
+system context. Claude uses the history projection's injected-record and queued
+prompt owners. Compaction summaries, task notifications and agent-message
+envelopes never become user items. `prompt_summary` prepares typed text for the
+document while catalog text remains literal for the existing search endpoint.
+
+The origin records Codex names from its native append-only session index and
+current delegated parents from `JobStore`'s authoritative parent tags. The ingest
+worker applies these facts outside request lifetimes. Searches never consult the
+job store. Optional `sessionMetadata` fields on mirror page envelopes carry the
+facts with transcript evidence. Entry shapes and mirror schemaVersion remain
+unchanged: older receivers ignore the envelope field and newer receivers accept
+pages without it. Fact changes enter the existing evidence feed, including when
+raw transcript bytes have not changed.
+
+`search_schema.sql` owns independently versioned derived indexes. A search-version
+mismatch drops only those indexes and rebuilds them from catalog rows, without
+re-reading transcripts. The worker handles newest conversations first and
+coalesces affected roots in a persistent dirty queue. Canonical item changes
+maintain the scoped word index transactionally. A source save refreshes its root
+document; ancestry changes rebuild the old and new root. Initial catalog work,
+pending derived work and incomplete coverage make search results `truncated`.
+An empty startup catalog therefore never reports a complete empty result.
+
+A copied-catalog MacBook prototype measured the no-tools document index at
+679 MB and 94 seconds, with warm ranking seeks of 0.15–6 ms. The tool-inclusive
+variant required 3.07 GB and 212 seconds and was rejected. These prototype
+measurements exclude the scoped item index and full transcript rebuild; final
+end-to-end measurements belong to the work issue.

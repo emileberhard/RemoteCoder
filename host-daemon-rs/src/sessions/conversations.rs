@@ -1,17 +1,13 @@
-use super::{
-    query::SessionHeader,
-    store::{ReadControl, Reader},
-};
+use super::store::{ReadControl, Reader};
 use anyhow::{Result, ensure};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub(crate) const DEADLINE: Duration = Duration::from_secs(1);
-pub(super) const TERM_WINDOW: usize = 512;
-const HEADER_LIMIT: usize = 10_000;
+pub(super) const TERM_WINDOW: usize = 64;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -74,25 +70,6 @@ pub(crate) struct Hit {
 }
 
 pub(crate) type Completed = Arc<Mutex<Option<Response>>>;
-pub(crate) struct Header {
-    pub session: SessionHeader,
-    pub provider_home: String,
-}
-
-struct Item {
-    session_key: String,
-    hit: Hit,
-    terms: u8,
-}
-
-struct Group<'a> {
-    header: &'a SessionHeader,
-    terms: u8,
-    title_match: bool,
-    newest: Option<&'a str>,
-    items: Vec<&'a Item>,
-}
-
 pub(crate) fn partial(completed: &Completed) -> Option<Response> {
     completed
         .lock()
@@ -104,98 +81,114 @@ pub(crate) fn partial(completed: &Completed) -> Option<Response> {
         })
 }
 
+fn literal(term: &str, prefix: bool) -> String {
+    format!(
+        "\"{}\"{}",
+        term.replace('"', "\"\""),
+        if prefix { "*" } else { "" }
+    )
+}
+
 pub(crate) fn search(
     db: &Reader,
     request: &Request,
     control: &ReadControl,
-    parents: impl FnOnce(&[Header]) -> HashMap<String, Option<String>>,
     completed: &Completed,
 ) -> Result<Response> {
     let terms = request.terms()?;
-    let message_mask = terms.iter().enumerate().fold(0, |bits, (index, term)| {
-        bits | if term.chars().count() >= 3 {
-            1 << index
-        } else {
-            0
-        }
-    });
+    let expressions: Vec<_> = terms
+        .iter()
+        .enumerate()
+        .map(|(n, t)| literal(t, n + 1 == terms.len()))
+        .collect();
+    let expression = expressions.join(" AND ");
     let run = || -> Result<Response> {
-        let mut statement = db.prepare("SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present,s.provider_home FROM session s JOIN source src USING(source_id) ORDER BY s.last_at DESC,s.session_key LIMIT ?1")?;
-        let mut rows = statement.query([HEADER_LIMIT as i64 + 1])?;
-        let mut headers = Vec::new();
-        let mut truncated = false;
-        while let Some(row) = rows.next()? {
-            if headers.len() == HEADER_LIMIT {
-                truncated = true;
-                break;
-            }
-            headers.push(Header {
-                session: super::query::session_header(row)?,
-                provider_home: row.get(10)?,
-            });
-            ensure!(!control.stopped(), "conversation search interrupted");
-        }
-        drop(rows);
-        drop(statement);
-        let delegated = parents(&headers);
-        let headers: HashMap<_, _> = headers
-            .into_iter()
-            .map(|h| (h.session.session_key.clone(), h.session))
-            .collect();
-        let mut items = HashMap::new();
-        let mut response = rank(
-            &headers,
-            &delegated,
-            &items,
-            &terms,
-            request.limit,
-            truncated,
-        );
+        ensure!(!control.stopped(), "conversation search interrupted");
+        let snapshot = db.unchecked_transaction()?;
+        let db = &snapshot;
+        let incomplete: bool = db.query_row("SELECT (SELECT value FROM meta WHERE key='catalog_ready')<>'1' OR EXISTS(SELECT 1 FROM search_dirty) OR EXISTS(SELECT 1 FROM coverage WHERE stale_reason IS NOT NULL OR complete_through IS NULL)", [], |r| r.get(0))?;
+        let mut statement = db.prepare("SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid JOIN session s ON s.session_key=d.session_key JOIN source src USING(source_id) WHERE conversation_fts MATCH ?1 AND src.present=1 ORDER BY bm25(conversation_fts,8,4,1,0),s.last_at DESC,s.session_key LIMIT 129")?;
+        let candidates: Vec<_> = statement
+            .query_map([&expression], super::query::session_header)?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut response = Response {
+            schema_version: 1,
+            truncated: incomplete || candidates.len() > 128,
+            conversations: Vec::new(),
+        };
         *completed
             .lock()
             .expect("conversation search progress poisoned") = Some(response.clone());
-        for term in terms.iter().filter(|t| t.chars().count() >= 3) {
+        for header in candidates.into_iter().take(128) {
             ensure!(!control.stopped(), "conversation search interrupted");
-            let literal = format!("\"{}\"", term.replace('"', "\"\""));
-            let mut statement = db.prepare("SELECT i.item_key,i.session_key,i.kind,i.at,i.text FROM item_fts CROSS JOIN item i ON i.rowid=item_fts.rowid WHERE item_fts MATCH ?1 ORDER BY item_fts.rowid DESC LIMIT ?2")?;
-            let mut rows = statement.query(params![literal, TERM_WINDOW as i64 + 1])?;
-            let mut stage = Vec::new();
-            while let Some(row) = rows.next()? {
-                if stage.len() == TERM_WINDOW {
-                    truncated = true;
-                    break;
+            let title_match: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid WHERE d.session_key=?1 AND conversation_fts MATCH ?2)", params![header.session_key, format!("title:({expression})")], |r| r.get(0))?;
+            let scopes: Vec<String> = db.prepare("SELECT 's'||s.source_id FROM search_member m JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE m.root_key=?1 AND src.present=1")?.query_map([&header.session_key], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let scope = scopes
+                .iter()
+                .map(|s| format!("scope:{s}"))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            let mut hits: HashMap<i64, (u8, String, Option<String>)> = HashMap::new();
+            if !scope.is_empty() {
+                for (n, term) in expressions.iter().enumerate() {
+                    let mut statement = db.prepare("SELECT i.rowid,i.kind,i.at FROM item_word_fts JOIN item i ON i.rowid=item_word_fts.rowid WHERE item_word_fts MATCH ?1 ORDER BY item_word_fts.rowid DESC LIMIT ?2")?;
+                    let stage: Vec<(i64, String, Option<String>)> = statement
+                        .query_map(
+                            params![format!("({scope}) AND text:{term}"), TERM_WINDOW as i64 + 1],
+                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                        )?
+                        .collect::<rusqlite::Result<_>>()?;
+                    response.truncated |= stage.len() > TERM_WINDOW;
+                    for (id, kind, at) in stage.into_iter().take(TERM_WINDOW) {
+                        hits.entry(id).and_modify(|hit| hit.0 |= 1 << n).or_insert((
+                            1 << n,
+                            kind,
+                            at,
+                        ));
+                    }
                 }
-                let text: String = row.get(4)?;
-                let lowered = text.to_lowercase();
-                let matches = mask(&lowered, &terms) & message_mask;
-                let excerpt = excerpt(&text, &lowered, &terms, matches);
-                stage.push(Item {
-                    session_key: row.get(1)?,
-                    terms: matches,
-                    hit: Hit {
-                        item_key: row.get(0)?,
-                        kind: row.get(2)?,
-                        at: row.get(3)?,
-                        excerpt,
-                        agent_thread_id: None,
-                    },
-                });
-                ensure!(!control.stopped(), "conversation search interrupted");
             }
-            for item in stage {
-                items.insert(item.hit.item_key.clone(), item);
+            let hit_count = hits.len();
+            if !title_match && hit_count == 0 {
+                continue;
             }
-            response = rank(
-                &headers,
-                &delegated,
-                &items,
-                &terms,
-                request.limit,
-                truncated,
-            );
+            let mut hits: Vec<_> = hits.into_iter().collect();
+            hits.sort_by(|(a, (am, ak, at)), (b, (bm, bk, bt))| {
+                bm.count_ones()
+                    .cmp(&am.count_ones())
+                    .then_with(|| {
+                        matches!(bk.as_str(), "user" | "assistant")
+                            .cmp(&matches!(ak.as_str(), "user" | "assistant"))
+                    })
+                    .then_with(|| bt.cmp(at))
+                    .then_with(|| b.cmp(a))
+            });
+            let mut excerpts = Vec::new();
+            for (id, _) in hits.into_iter().take(3) {
+                let hit = db.query_row("SELECT i.item_key,i.kind,i.at,s.thread_id,i.session_key,snippet(item_word_fts,0,'\u{e000}','\u{e001}','…',32) FROM item_word_fts JOIN item i ON i.rowid=item_word_fts.rowid JOIN session s USING(session_key) WHERE item_word_fts.rowid=?1 AND item_word_fts MATCH ?2", params![id,format!("text:({})", expressions.join(" OR "))], |r| {
+                    let snippet: String = r.get(5)?;
+                    Ok(Hit { item_key:r.get(0)?, kind:r.get(1)?, at:r.get(2)?, agent_thread_id: if r.get::<_,String>(4)? == header.session_key { None } else { Some(r.get(3)?) }, excerpt:excerpt(&snippet) })
+                })?;
+                excerpts.push(hit);
+            }
+            response.conversations.push(Conversation {
+                session_key: header.session_key,
+                host_id: header.host_id,
+                provider: header.provider,
+                thread_id: header.thread_id,
+                title: header.title,
+                cwd: header.cwd,
+                last_at: header.last_at,
+                title_match,
+                hit_count,
+                hits: excerpts,
+            });
             *completed
                 .lock()
                 .expect("conversation search progress poisoned") = Some(response.clone());
+            if response.conversations.len() == request.limit {
+                break;
+            }
         }
         Ok(response)
     };
@@ -207,180 +200,32 @@ pub(crate) fn search(
     }
 }
 
-fn mask(text: &str, terms: &[String]) -> u8 {
-    terms.iter().enumerate().fold(0, |mask, (index, term)| {
-        mask | if text.contains(term) { 1 << index } else { 0 }
-    })
-}
-
-fn metadata(header: &SessionHeader, terms: &[String]) -> u8 {
-    mask(&header.title.as_deref().unwrap_or("").to_lowercase(), terms)
-        | mask(&header.cwd.as_deref().unwrap_or("").to_lowercase(), terms)
-}
-
-fn root<'a>(
-    key: &'a str,
-    headers: &'a HashMap<String, SessionHeader>,
-    delegated: &'a HashMap<String, Option<String>>,
-) -> &'a str {
-    let mut current = key;
-    let mut visited = HashSet::new();
-    for _ in 0..16 {
-        if !visited.insert(current) {
-            return key;
-        }
-        let Some(header) = headers.get(current) else {
-            return key;
-        };
-        let next = match delegated.get(current) {
-            Some(parent) => parent.as_deref(),
-            None => header.parent_session_key.as_deref(),
-        };
-        match next {
-            Some(parent) if headers.contains_key(parent) => current = parent,
-            Some(_) => return key,
-            None => return current,
-        }
-    }
-    key
-}
-
-fn rank(
-    headers: &HashMap<String, SessionHeader>,
-    delegated: &HashMap<String, Option<String>>,
-    items: &HashMap<String, Item>,
-    terms: &[String],
-    limit: usize,
-    truncated: bool,
-) -> Response {
-    let mut groups: HashMap<&str, Group<'_>> = HashMap::new();
-    let all_terms = ((1u16 << terms.len()) - 1) as u8;
-    for (key, item) in headers
-        .values()
-        .map(|header| (header.session_key.as_str(), None))
-        .chain(
-            items
-                .values()
-                .map(|item| (item.session_key.as_str(), Some(item))),
-        )
-    {
-        let Some(header) = headers.get(key).filter(|h| h.source_present) else {
-            continue;
-        };
-        let covered = metadata(header, terms) | item.map_or(0, |i| i.terms);
-        if covered == 0 {
-            continue;
-        }
-        let key = root(&header.session_key, headers, delegated);
-        let Some(header) = headers.get(key).filter(|h| h.source_present) else {
-            continue;
-        };
-        let entry = groups.entry(key).or_insert_with(|| Group {
-            header,
-            terms: metadata(header, terms),
-            title_match: header
-                .title
-                .as_ref()
-                .is_some_and(|t| mask(&t.to_lowercase(), terms) == all_terms),
-            newest: None,
-            items: Vec::new(),
-        });
-        entry.terms |= covered;
-        if let Some(item) = item {
-            entry.newest = entry.newest.max(item.hit.at.as_deref());
-            entry.items.push(item);
-        }
-    }
-    let mut groups: Vec<_> = groups
-        .into_values()
-        .filter(|group| group.title_match || !group.items.is_empty())
-        .collect();
-    groups.sort_by(|a, b| {
-        b.terms
-            .count_ones()
-            .cmp(&a.terms.count_ones())
-            .then_with(|| b.title_match.cmp(&a.title_match))
-            .then_with(|| {
-                b.newest
-                    .or(b.header.last_at.as_deref())
-                    .cmp(&a.newest.or(a.header.last_at.as_deref()))
-            })
-            .then_with(|| a.header.session_key.cmp(&b.header.session_key))
-    });
-    let conversations = groups
-        .into_iter()
-        .take(limit)
-        .map(|mut group| {
-            group.items.sort_by(|a, b| {
-                b.terms
-                    .count_ones()
-                    .cmp(&a.terms.count_ones())
-                    .then_with(|| text_kind(&b.hit.kind).cmp(&text_kind(&a.hit.kind)))
-                    .then_with(|| b.hit.at.cmp(&a.hit.at))
-                    .then_with(|| a.hit.item_key.cmp(&b.hit.item_key))
-            });
-            Conversation {
-                session_key: group.header.session_key.clone(),
-                host_id: group.header.host_id.clone(),
-                provider: group.header.provider.clone(),
-                thread_id: group.header.thread_id.clone(),
-                title: group.header.title.clone(),
-                cwd: group.header.cwd.clone(),
-                last_at: group.header.last_at.clone(),
-                title_match: group.title_match,
-                hit_count: group.items.len(),
-                hits: group
-                    .items
-                    .into_iter()
-                    .take(3)
-                    .map(|item| {
-                        let mut hit = item.hit.clone();
-                        if item.session_key != group.header.session_key {
-                            hit.agent_thread_id =
-                                headers.get(&item.session_key).map(|h| h.thread_id.clone());
-                        }
-                        hit
-                    })
-                    .collect(),
+fn excerpt(snippet: &str) -> String {
+    let mut text = Vec::new();
+    let mut anchor = None;
+    for ch in snippet.chars() {
+        match ch {
+            '\u{e000}' => {
+                anchor.get_or_insert(text.len());
             }
-        })
-        .collect();
-    Response {
-        schema_version: 1,
-        truncated,
-        conversations,
+            '\u{e001}' => {}
+            ch => text.push(ch),
+        }
     }
-}
-
-fn text_kind(kind: &str) -> bool {
-    matches!(kind, "user" | "assistant")
-}
-
-fn excerpt(text: &str, lowered: &str, terms: &[String], matches: u8) -> String {
-    let first_byte = terms
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| matches & (1 << index) != 0)
-        .filter_map(|(_, term)| lowered.find(term))
-        .min()
-        .unwrap_or(0);
-    let mut bytes = 0;
-    let first = text
-        .chars()
-        .take_while(|character| {
-            bytes += character.to_lowercase().map(char::len_utf8).sum::<usize>();
-            bytes <= first_byte
-        })
-        .count();
-    let length = text.chars().count();
-    let start = first.saturating_sub(119).min(length.saturating_sub(238));
-    let end = (start + 238).min(length);
+    if text.len() <= 240 {
+        return text.into_iter().collect();
+    }
+    let start = anchor
+        .unwrap_or_default()
+        .saturating_sub(119)
+        .min(text.len() - 238);
+    let end = (start + 238).min(text.len());
     let mut result = String::new();
     if start > 0 {
         result.push('…');
     }
-    result.extend(text.chars().skip(start).take(end - start));
-    if end < length {
+    result.extend(text[start..end].iter());
+    if end < text.len() {
         result.push('…');
     }
     result

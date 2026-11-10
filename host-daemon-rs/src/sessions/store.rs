@@ -34,6 +34,7 @@ impl Store {
         let db = store.writer()?;
         db.execute_batch("PRAGMA auto_vacuum=INCREMENTAL; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")?;
         db.execute_batch(include_str!("schema.sql"))?;
+        super::index::open(&db)?;
         db.execute_batch(include_str!("views.sql"))?;
         db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         for (table, identity) in [("source", "file_identity"), ("dependency", "identity")] {

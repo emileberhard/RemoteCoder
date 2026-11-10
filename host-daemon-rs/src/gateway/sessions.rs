@@ -10,7 +10,6 @@ use anyhow::{Context, Result};
 use futures_util::FutureExt;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
 
@@ -90,14 +89,32 @@ impl Gateway {
         let weak = Arc::downgrade(self);
         let stop = runtime.mirror_stop.clone();
         *task = Some(tokio::spawn(async move {
+            let Some(gateway) = weak.upgrade() else {
+                return;
+            };
+            let mut changes = gateway.jobs.changes();
+            if let Ok(store) = gateway.jobs.store().await
+                && let Ok(parents) = store.catalog_parents().await
+                && let Some(runtime) = gateway.session_runtime.get()
+            {
+                runtime.worker.parents(parents);
+            }
+            drop(gateway);
             loop {
                 tokio::select! {
                     _=stop.cancelled()=>break,
-                    _=tokio::time::sleep(std::time::Duration::from_secs(5))=>{}
+                    _=tokio::time::sleep(std::time::Duration::from_secs(5))=>{},
+                    _=changes.changed()=>{}
                 }
                 let Some(gateway) = weak.upgrade() else {
                     break;
                 };
+                if let Ok(store) = gateway.jobs.store().await
+                    && let Ok(parents) = store.catalog_parents().await
+                    && let Some(runtime) = gateway.session_runtime.get()
+                {
+                    runtime.worker.parents(parents);
+                }
                 if let Err(error) = gateway.sync_session_mirror().await {
                     tracing::warn!(%error,"Session mirror is stale");
                 }
@@ -249,48 +266,17 @@ impl Gateway {
                 .acquire_owned()
                 .await
                 .map_err(|error| session_error(error.into()))?;
-            let host = self.host_identity().await.map_err(session_error)?.host_id;
-            let jobs = self.jobs.clone();
-            let handle = tokio::runtime::Handle::current();
             let store = runtime.store.clone();
             let completed = completed.clone();
             tokio::task::spawn_blocking(move || {
                 let _permit = permit;
                 let mut db = store.reader()?;
                 db.interrupt_on(control.clone())?;
-                conversations::search(&db, &request, &control, |headers| {
-                    handle.block_on(async {
-                        let lookup = async {
-                            let identities = headers.iter().filter(|h| h.session.host_id == host).filter_map(|h| {
-                                let provider = match h.session.provider.as_str() {
-                                    "codex" => crate::agents::jobs::model::Provider::Codex,
-                                    "claude" => crate::agents::jobs::model::Provider::Claude,
-                                    _ => return None,
-                                };
-                                let identity = crate::agents::jobs::model::ConversationIdentity {
-                                    provider,
-                                    provider_home: crate::agents::jobs::model::ProviderHome::Known { path: h.provider_home.clone().into() },
-                                    thread_id: h.session.thread_id.clone(),
-                                };
-                                Some((identity, h.session.session_key.clone()))
-                            }).collect::<HashMap<_, _>>();
-                            let tags = jobs.store().await?.parent_tags(identities.keys().cloned().collect()).await?;
-                            let mut addresses = HashMap::new();
-                            for header in headers {
-                                let address = (&header.session.host_id, &header.session.thread_id);
-                                addresses.entry(address).and_modify(|key| *key = None).or_insert(Some(&header.session.session_key));
-                            }
-                            Ok::<_, anyhow::Error>(tags.into_iter().filter_map(|(identity, parent)| {
-                                let root = parent.and_then(|parent| addresses.get(&(&parent.host_id, &parent.thread_id)).and_then(|key| key.as_ref()).map(|key| (*key).clone()));
-                                Some((identities.get(&identity)?.clone(), root))
-                            }).collect())
-                        };
-                        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline.min(std::time::Instant::now() + std::time::Duration::from_millis(50))), lookup)
-                            .await.ok().and_then(Result::ok).unwrap_or_default()
-                    })
-                }, &completed)
-            }).await.map_err(|error| session_error(error.into()))?
-                .map_err(session_error)
+                conversations::search(&db, &request, &control, &completed)
+            })
+            .await
+            .map_err(|error| session_error(error.into()))?
+            .map_err(session_error)
         };
         let response =
             match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), work).await {
@@ -457,7 +443,7 @@ mod tests {
         ] {
             let records = [
                 json!({"type":"session_meta","timestamp":"2026-11-01T10:00:00Z","payload":{"id":id,"cwd":"/fixture","source":{"subagent":{"thread_spawn":{"parent_thread_id":parent}}}}}),
-                json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":message}]}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":message}}),
             ];
             std::fs::write(
                 origin.path().join(format!("{id}.jsonl")),
@@ -530,6 +516,17 @@ mod tests {
         })
         .await
         .unwrap();
+        {
+            let runtime = gateway.session_runtime.get().unwrap();
+            let mut db = runtime.store.writer().unwrap();
+            crate::sessions::metadata::parents(
+                &db,
+                &runtime.origins,
+                &jobs.catalog_parents().await.unwrap(),
+            )
+            .unwrap();
+            while crate::sessions::index::rebuild_one(&mut db).unwrap() {}
+        }
         let grant = crate::auth::installation_credentials::Grant::Operator;
         let response = gateway
             .sessions_rpc(
@@ -550,6 +547,17 @@ mod tests {
         jobs.set_parent_for_test("search-child".into(), None, Recipient::None)
             .await
             .unwrap();
+        {
+            let runtime = gateway.session_runtime.get().unwrap();
+            let mut db = runtime.store.writer().unwrap();
+            crate::sessions::metadata::parents(
+                &db,
+                &runtime.origins,
+                &jobs.catalog_parents().await.unwrap(),
+            )
+            .unwrap();
+            while crate::sessions::index::rebuild_one(&mut db).unwrap() {}
+        }
         let response = gateway
             .sessions_rpc(
                 &grant,

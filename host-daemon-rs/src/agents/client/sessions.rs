@@ -146,7 +146,6 @@ async fn execute(command: &Command, env_file: Option<&Path>) -> Result<Value> {
                         &db,
                         &serde_json::from_value(params)?,
                         &control,
-                        |_| Default::default(),
                         &Default::default(),
                     )?,
                 )?)

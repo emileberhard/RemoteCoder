@@ -3,7 +3,9 @@ pub(crate) mod cluster;
 pub(crate) mod conversations;
 mod discovery;
 mod hot;
+pub(crate) mod index;
 pub(crate) mod ingest;
+pub(crate) mod metadata;
 pub(crate) mod mirror;
 pub(crate) mod query;
 pub(crate) mod storage;
@@ -14,7 +16,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(crate) const SCHEMA_VERSION: u32 = 6;
+pub(crate) const SCHEMA_VERSION: u32 = 7;
 pub(crate) const PAGE_BYTES: usize = 8 << 20;
 pub(crate) const PAGE_ROWS: usize = 10_000;
 pub(crate) const CHANGE_ROWS: i64 = 1_000_000;

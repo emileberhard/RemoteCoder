@@ -211,6 +211,10 @@ pub(crate) fn message(
     ))
 }
 
+pub(crate) fn is_message(text: &str) -> bool {
+    text.trim_start().starts_with("<agent_message ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

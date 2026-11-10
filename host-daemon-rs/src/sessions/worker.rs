@@ -13,7 +13,11 @@ const RECONCILE: Duration = Duration::from_secs(600);
 const PENDING_PATHS: usize = 512;
 
 #[derive(Default)]
-struct Pending(Vec<BTreeSet<PathBuf>>, Vec<InventoryRequest>);
+struct Pending(
+    Vec<BTreeSet<PathBuf>>,
+    Vec<InventoryRequest>,
+    Option<super::metadata::Parents>,
+);
 
 struct InventoryRequest {
     deadline: Instant,
@@ -57,19 +61,19 @@ impl Mailbox {
     }
 
     fn requested(&self) -> bool {
-        !self
-            .wake
-            .0
-            .lock()
-            .expect("Session worker wake poisoned")
-            .1
-            .is_empty()
+        let pending = self.wake.0.lock().expect("Session worker wake poisoned");
+        !pending.1.is_empty() || pending.2.is_some()
     }
 
     fn serve(&self, db: &mut rusqlite::Connection, origins: &[Origin], discovery: &mut Discovery) {
         let requests = {
             let mut pending = self.wake.0.lock().expect("Session worker wake poisoned");
             let requests = std::mem::take(&mut pending.1);
+            if let Some(parents) = pending.2.take()
+                && let Err(error) = super::metadata::parents(db, origins, &parents)
+            {
+                tracing::warn!(%error,"Session origin ownership unavailable");
+            }
             self.wake.1.notify_all();
             requests
         };
@@ -143,7 +147,14 @@ impl Pending {
         for path in &event.paths {
             for (i, origin) in origins.iter().enumerate() {
                 let root = origin.path();
-                if path.starts_with(&root) {
+                if origin.provider == "codex"
+                    && path == &origin.local_home.join("session_index.jsonl")
+                {
+                    if self.0.len() <= i {
+                        self.0.resize_with(i + 1, BTreeSet::new);
+                    }
+                    self.0[i].insert(path.clone());
+                } else if path.starts_with(&root) {
                     self.include(i, &root, path.clone());
                 } else if root.starts_with(path)
                     && (event.need_rescan()
@@ -160,7 +171,7 @@ impl Pending {
     }
 
     fn is_empty(&self) -> bool {
-        self.0.iter().all(BTreeSet::is_empty) && self.1.is_empty()
+        self.0.iter().all(BTreeSet::is_empty) && self.1.is_empty() && self.2.is_none()
     }
     fn take(&mut self) -> Vec<BTreeSet<PathBuf>> {
         std::mem::take(&mut self.0)
@@ -206,10 +217,21 @@ fn watch(
     for root in roots {
         watcher.watch(&root, RecursiveMode::Recursive)?;
     }
+    for origin in origins
+        .iter()
+        .filter(|o| o.provider == "codex" && o.local_home.is_dir())
+    {
+        watcher.watch(&origin.local_home, RecursiveMode::NonRecursive)?;
+    }
     Ok(watcher)
 }
 
 impl Worker {
+    pub(crate) fn parents(&self, parents: super::metadata::Parents) {
+        self.wake.0.lock().expect("Session worker wake poisoned").2 = Some(parents);
+        self.wake.1.notify_one();
+    }
+
     pub fn start(store: Store, mut origins: Vec<Origin>, cap_status: PathBuf) -> Result<Self> {
         let home = crate::config::HostPaths::from_env()?.home().to_owned();
         let mut skills = vec![home.join(".agents/skills")];
@@ -268,6 +290,7 @@ impl Worker {
                         break;
                     }
                     let full = Instant::now() >= next_reconcile;
+                    let parents = pending.2.take();
                     let batches = pending.take();
                     drop(pending);
                     let mut paths: Vec<_> = batches.into_iter().flatten().collect();
@@ -275,6 +298,13 @@ impl Worker {
                         if !hot.is_empty() && Instant::now() >= next_hot {
                             paths.extend(hot.changed()?);
                             next_hot = Instant::now() + Duration::from_secs(1);
+                        }
+                        if let Some(parents) = &parents {
+                            let mut db = store.writer()?;
+                            let tx = db.transaction()?;
+                            super::metadata::parents(&tx, &origins, parents)?;
+                            tx.commit()?;
+                            while !flag.load(Ordering::Acquire) && super::index::rebuild_one(&mut db)? { endpoint.serve(&mut db, &origins, &mut discovery); }
                         }
                         if !full && paths.is_empty() && !endpoint.requested() {
                             return Ok(serde_json::json!({"ingested":0,"parseFailures":0}));
@@ -288,6 +318,7 @@ impl Worker {
                             if let Err(error) = discovery.headers(&mut db, &origins, &flag, None) {
                                 tracing::warn!(%error,"Session inventory has incomplete identities");
                             }
+                            super::metadata::titles(&db, &origins)?;
                             endpoint.serve(&mut db, &origins, &mut discovery);
                             hot.observe(&db, &origins)?;
                         } else if endpoint.requested() {
@@ -302,6 +333,8 @@ impl Worker {
                             }
                             Ok(())
                         })?;
+                        { let db = store.writer()?; super::metadata::titles(&db, &origins)?; }
+                        { let mut db = store.writer()?; while !flag.load(Ordering::Acquire) && super::index::rebuild_one(&mut db)? { endpoint.serve(&mut db, &origins, &mut discovery); } }
                         hot.observe(&*store.reader()?, &origins)?;
                         Ok(outcome)
                     })();

@@ -116,6 +116,26 @@ impl Record<'_> {
                 self.turn(state, at, None)?;
             }
             Some("event_msg") => match p["type"].as_str() {
+                Some("user_message") => {
+                    let text = p["message"].as_str().unwrap_or_default();
+                    self.item(
+                        state,
+                        at,
+                        0,
+                        if crate::providers::claude::timeline::is_injected_user_text(text)
+                            || crate::agents::envelope::is_message(text)
+                        {
+                            "system"
+                        } else {
+                            "user"
+                        },
+                        text.to_owned(),
+                        "/payload/message",
+                        p,
+                        None,
+                        None,
+                    )?;
+                }
                 Some("task_started") => {
                     state.turn = string(&p["turn_id"]);
                     state.turn_seq += 1;
@@ -146,7 +166,7 @@ impl Record<'_> {
                 match kind {
                     "message" => {
                         let role = match p["role"].as_str() {
-                            Some("user") => "user",
+                            Some("user") => "system",
                             Some("assistant") => "assistant",
                             _ => "system",
                         };
@@ -261,11 +281,33 @@ impl Record<'_> {
         }
         self.session(state)?;
         let message = &v["message"];
+        if let Some((prompt, _)) = crate::providers::claude::timeline::queued_user_prompt(v)
+            && !crate::agents::envelope::is_message(&prompt)
+        {
+            self.item(
+                state,
+                at,
+                0,
+                "user",
+                prompt,
+                "/attachment/prompt",
+                &v["attachment"]["prompt"],
+                None,
+                None,
+            )?;
+        }
         if !matches!(v["type"].as_str(), Some("user" | "assistant")) {
             return Ok(());
         }
         state.model = string(&message["model"]).or(state.model.take());
-        if v["type"] == "user" && v["isMeta"] != true && !has_tool_result(&message["content"]) {
+        let typed_user = v["type"] == "user"
+            && !crate::providers::claude::timeline::is_injected_user_record(
+                v,
+                message.get("content"),
+            )
+            && !has_tool_result(&message["content"])
+            && !crate::agents::envelope::is_message(&text(&message["content"]));
+        if typed_user {
             state.turn = v["turnId"]
                 .as_str()
                 .map(str::to_owned)
@@ -331,11 +373,7 @@ impl Record<'_> {
                             at,
                             n,
                             if v["type"] == "user" {
-                                if v["isMeta"] == true {
-                                    "system"
-                                } else {
-                                    "user"
-                                }
+                                if typed_user { "user" } else { "system" }
                             } else {
                                 "assistant"
                             },
@@ -354,7 +392,7 @@ impl Record<'_> {
                 at,
                 0,
                 if v["type"] == "user" {
-                    "user"
+                    if typed_user { "user" } else { "system" }
                 } else {
                     "assistant"
                 },
@@ -509,7 +547,7 @@ pub(super) fn save_session(
     state: &State,
 ) -> Result<()> {
     if let Some(thread) = &state.thread {
-        db.execute("INSERT INTO session(session_key,origin_host,provider,provider_home,thread_id,cwd,title,started_at,last_at,parent_session_key,source_id,thread_id_reversed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(session_key) DO UPDATE SET cwd=excluded.cwd,title=excluded.title,started_at=excluded.started_at,last_at=excluded.last_at,parent_session_key=excluded.parent_session_key WHERE session.source_id=excluded.source_id",params![super::super::session_key(origin,thread),origin.host,origin.provider,origin.provider_home.to_string_lossy(),thread,state.cwd,state.title,state.first,state.last,state.parent.as_ref().map(|p|super::super::session_key(origin,p)),source,thread.bytes().rev().collect::<Vec<_>>()])?;
+        db.execute("INSERT INTO session(session_key,origin_host,provider,provider_home,thread_id,cwd,title,started_at,last_at,parent_session_key,source_id,thread_id_reversed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(session_key) DO UPDATE SET cwd=excluded.cwd,title=CASE WHEN session.provider='codex' THEN coalesce(excluded.title,session.title) ELSE excluded.title END,started_at=excluded.started_at,last_at=excluded.last_at,parent_session_key=excluded.parent_session_key WHERE session.source_id=excluded.source_id",params![super::super::session_key(origin,thread),origin.host,origin.provider,origin.provider_home.to_string_lossy(),thread,state.cwd,state.title,state.first,state.last,state.parent.as_ref().map(|p|super::super::session_key(origin,p)),source,thread.bytes().rev().collect::<Vec<_>>()])?;
     }
     Ok(())
 }
