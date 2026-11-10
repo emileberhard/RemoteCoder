@@ -128,9 +128,11 @@ pub(crate) fn search(
         for header in candidates.into_iter().take(128) {
             ensure!(!control.stopped(), "conversation search interrupted");
             let title_match: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid WHERE d.session_key=?1 AND conversation_fts MATCH ?2)", params![header.session_key, format!("title:({expression})")], |r| r.get(0))?;
-            let scopes: Vec<String> = db.prepare("SELECT 's'||s.source_id FROM search_member m JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE m.root_key=?1 AND src.present=1")?.query_map([&header.session_key], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let scopes: Vec<String> = db.prepare("SELECT 's'||s.source_id FROM search_member m JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE m.root_key=?1 AND src.present=1 ORDER BY s.last_at DESC,s.session_key LIMIT 129")?.query_map([&header.session_key], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            response.truncated |= scopes.len() > 128;
             let scope = scopes
                 .iter()
+                .take(128)
                 .map(|s| format!("scope:{s}"))
                 .collect::<Vec<_>>()
                 .join(" OR ");

@@ -202,7 +202,8 @@ excluded. Native ancestry and persisted delegated parents fold through at most
 Explicit promotion overrides native ancestry.
 
 At most 128 ranked document candidates are fetched. A scoped item word index
-finds at most 64 newest hits per term per candidate, plus a lookahead; it reads
+covers at most 128 member sessions and finds 64 newest hits per term per
+candidate, with lookaheads setting `truncated`; it reads
 metadata for ranking and fetches snippets only for the best three hits. Hits
 prefer distinct-term coverage, user/assistant text, then recency. `hitCount`
 counts unique items inside these bounded windows. Candidate or hit-window
