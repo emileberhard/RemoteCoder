@@ -129,7 +129,7 @@ pub(crate) struct Reader {
 
 impl Reader {
     pub(crate) fn interrupt_on(&mut self, control: Arc<ReadControl>) -> Result<()> {
-        control.install(&self.db)
+        control.install(&mut self.db)
     }
 }
 
@@ -146,7 +146,7 @@ impl ReadControl {
         })
     }
 
-    pub(super) fn install(self: &Arc<Self>, db: &Connection) -> Result<()> {
+    pub(super) fn install(self: &Arc<Self>, db: &mut Connection) -> Result<()> {
         let control = self.clone();
         db.progress_handler(1000, Some(move || control.stopped()))?;
         Ok(())

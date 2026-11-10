@@ -263,8 +263,8 @@ struct Snippets {
 
 impl Snippets {
     fn new(control: &Arc<ReadControl>, expressions: &[String]) -> Result<Self> {
-        let db = Connection::open_in_memory()?;
-        control.install(&db)?;
+        let mut db = Connection::open_in_memory()?;
+        control.install(&mut db)?;
         db.execute_batch("CREATE VIRTUAL TABLE excerpt_fts USING fts5(text,tokenize='unicode61 remove_diacritics 2')")?;
         Ok(Self {
             db,
