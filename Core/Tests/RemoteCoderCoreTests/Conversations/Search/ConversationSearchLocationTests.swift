@@ -37,9 +37,12 @@ struct ConversationSearchLocationTests {
         let tail = try await fixture.service.openTail(header: header, base: nil)
         state.merge(tail, read: state.beginHistoryRead())
         #expect(state.hasVerifiedNewestHistory)
+        state.activity(turnID: "live", active: true)
         state.apply(try GatewayEventFixture.item("item/started", item: .agentMessage(id: "answer", text: "A"),
             threadID: header.id, turnID: "live", ordinal: 310, startedAtMs: 1_000, completedAtMs: 2_000))
-        #expect(ConversationProjection.project(state).messages.contains { $0.canonicalItemID == "answer" })
+        let initial = ConversationProjection.project(state)
+        #expect(initial.messages.contains { $0.canonicalTurnID == "live" && $0.isStreaming && $0.text == "A" })
+        #expect(initial.timelines.contains { $0.isLive })
 
         let read = state.beginHistoryRead()
         let located = try await fixture.service.openSearchHit(header: header, itemKey: "key", fallback: .keepCurrentWindow)
@@ -49,6 +52,7 @@ struct ConversationSearchLocationTests {
         let historical = ConversationProjection.project(state)
         #expect(historical.messages.contains { $0.canonicalItemID == "u10" })
         #expect(!historical.messages.contains { $0.canonicalTurnID == "live" || $0.canonicalTurnID == "t99" })
+        #expect(!historical.timelines.contains { $0.isLive })
         #expect(historical.items.endsAtNewerHistoryEdge)
         #expect(!state.hasVerifiedNewestHistory)
         #expect(state.turns["live"]?.items["answer"]?.value == .agentMessage(id: "answer", text: "AB"))
@@ -56,7 +60,8 @@ struct ConversationSearchLocationTests {
         let jump = state.beginHistoryRead()
         state.merge(try await fixture.service.openTail(header: header, base: jump.base, bypassCache: true), read: jump)
         let latest = ConversationProjection.project(state)
-        #expect(latest.messages.contains { $0.canonicalItemID == "answer" && $0.text == "AB" })
+        #expect(latest.messages.contains { $0.canonicalTurnID == "live" && $0.isStreaming && $0.text == "AB" })
+        #expect(latest.timelines.contains { $0.isLive })
         #expect(!latest.items.endsAtNewerHistoryEdge)
         #expect(state.hasVerifiedNewestHistory)
     }

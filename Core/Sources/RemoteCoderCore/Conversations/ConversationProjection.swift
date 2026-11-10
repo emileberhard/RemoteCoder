@@ -260,7 +260,9 @@ enum ConversationProjection {
         let placedVisuals = Set(visualPlacements.values.flatMap(\.references))
         let turnID = turn.id
         let jobID = GatewayNotificationRouting.jobID(threadID: threadID, turnID: turnID)
-        if turn.hasDiscardedLiveItems { rows.append(.historyEdge(HistoryEdge(kind: .reload(turnID: turnID), cursor: nil))) }
+        let showsTurn = state.showsTurn(turn)
+        let showsLiveTail = turn.isActive && state.window?.newer == nil
+        if showsTurn, turn.hasDiscardedLiveItems { rows.append(.historyEdge(HistoryEdge(kind: .reload(turnID: turnID), cursor: nil))) }
         var events: [JobTimelineEvent] = []
         var queuedSteers: [ChatMessage] = []
         var precedingBoundary: (id: String, date: Date)?
@@ -270,15 +272,15 @@ enum ConversationProjection {
         var endsWithRunningCompaction = false
 
         func flush(before next: Date?, terminal: Bool) {
-            guard !events.isEmpty || (terminal && turn.isActive && !endsWithRunningCompaction) else { return }
+            guard !events.isEmpty || (terminal && showsLiveTail && !endsWithRunningCompaction) else { return }
             let boundary = precedingBoundary?.id ?? "start"
             let id = "\(jobID)-seg-\(boundary)"
             let precedingDate = precedingBoundary?.date == .distantPast ? nil : precedingBoundary?.date
             let followingDate = next == .distantPast ? nil : next
             let started = JobTimelineSpan.startedAt(precedingMessageDate: precedingDate, events: events)
             let end = JobTimelineSpan.completedAt(followingMessageDate: terminal ? turn.completedAt : followingDate,
-                                                  events: events, isRunning: terminal && turn.isActive)
-            let active = terminal && turn.isActive
+                                                  events: events, isRunning: terminal && showsLiveTail)
+            let active = terminal && showsLiveTail
             let timeline = JobTimeline(id: id, startedAt: started,
                 anchorDate: precedingDate ?? started ?? .distantPast, completedAt: active ? nil : end,
                 isLive: active, isExpanded: state.expandedTimelineAnchors.contains(id)
@@ -383,7 +385,7 @@ enum ConversationProjection {
             }
         }
         flush(before: nil, terminal: true)
-        if state.showsOutcome(of: turn),
+        if showsTurn,
            let outcome = outcome(of: turn, hasReply: hasReply || (hasCompaction && timelines.isEmpty)) {
             rows.append(.turnOutcome(outcome))
         }

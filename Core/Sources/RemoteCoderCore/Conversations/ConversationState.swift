@@ -1182,7 +1182,7 @@ struct ConversationState: Sendable {
         }
     }
 
-    func showsOutcome(of turn: Turn) -> Bool {
+    func showsTurn(_ turn: Turn) -> Bool {
         guard let window, window.isLoaded, window.newer != nil else { return true }
         return historyTurn(turn.id, in: window) != nil
     }
