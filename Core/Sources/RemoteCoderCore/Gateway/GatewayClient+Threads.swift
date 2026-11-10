@@ -333,8 +333,8 @@ extension GatewayClient {
     }
 
     func historyPageData(method: String, params: JSONValue) async throws -> Data {
-        precondition(["thread/turns/list", "thread/items/list", "conversation/agents/classify"].contains(method))
-        return try await callRaw(method: method, params: params, timeout: timeouts.history)
+        precondition(["thread/turns/list", "thread/items/list", "conversation/agents/classify", "sessions/locate"].contains(method))
+        return try await callRaw(method: method, params: params, timeout: method == "sessions/locate" ? .seconds(2) : timeouts.history)
     }
 
     func interruptTurn(threadID: String, turnID: String) async throws {

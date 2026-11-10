@@ -9,6 +9,7 @@ extension GatewayClient {
         var fleetLiveActivity: Bool? = nil
         var claudeQueue: Bool? = nil
         var conversationSearch: Bool? = nil
+        var conversationSearchByMeaning: Bool? = nil
     }
 
     func registerDevice(_ request: DeviceRegistrationRequest) async throws -> DeviceRegistrationResponse {

@@ -49,4 +49,13 @@ extension GatewayClient {
         guard response.schemaVersion == ConversationSearchResponse.schemaVersion else { throw ClientError.invalidMessage }
         return response
     }
+    func searchConversationsByMeaning(_ params: ConversationSearchParams) async throws -> ConversationMeaningResponse {
+        let data = try await callRaw(method: "sessions/conversations/searchByMeaning", params: encodeToJSONValue(params),
+                                     timeout: .seconds(10))
+        let response = try await GatewayFrameDecoder.decodeResult(ConversationMeaningResponse.self, from: data,
+            dateDecodingStrategy: ConversationSearchResponse.dateDecoding)
+        guard response.schemaVersion == ConversationMeaningResponse.schemaVersion else { throw ClientError.invalidMessage }
+        return response
+    }
+
 }

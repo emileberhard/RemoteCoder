@@ -551,6 +551,12 @@ actor ConversationSession {
         scheduleProjection()
     }
 
+    func expandGroupForSearch(_ id: String) async -> ConversationSnapshot {
+        if let successor { return await successor.expandGroupForSearch(id) }
+        if !Task.isCancelled { state.changeTimeline(id, .expand) }
+        return await snapshot()
+    }
+
     var canEvict: Bool { observers.isEmpty && state.submissions.isEmpty }
     private var hasActiveTurn: Bool { state.turns.values.contains(where: \.isActive) }
     var evictionRevision: UInt64? { canEvict ? state.revision : nil }

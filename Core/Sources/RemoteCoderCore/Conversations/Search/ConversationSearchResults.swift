@@ -8,6 +8,9 @@ struct ConversationSearchRow: Identifiable, Sendable {
     }
 
     let address: ConversationAddress
+    let section: ConversationSearchSection.Kind
+    let itemKey: String?
+    let findTerm: String?
     let sessionKey: String?
     let generation: UInt64
     let headline: Headline
@@ -29,18 +32,19 @@ struct ConversationSearchSection: Equatable, Sendable {
     enum Kind: String, Sendable {
         case titles
         case messages
+        case meaning
 
         var visibleRowLimit: Int {
             switch self {
             case .titles: 4
-            case .messages: 10
+            case .messages, .meaning: 10
             }
         }
 
         var retainedRowLimit: Int {
             switch self {
             case .titles: 50
-            case .messages: 100
+            case .messages, .meaning: 100
             }
         }
     }
@@ -74,15 +78,17 @@ struct ConversationSearchStatus: Equatable, Sendable {
 struct ConversationSearchResults: Equatable, Sendable {
     var titles = ConversationSearchSection(kind: .titles)
     var messages = ConversationSearchSection(kind: .messages)
+    var meaning = ConversationSearchSection(kind: .meaning)
     var status = ConversationSearchStatus()
     var isPainted = false
 
-    var isEmpty: Bool { titles.rows.isEmpty && messages.rows.isEmpty }
+    var isEmpty: Bool { titles.rows.isEmpty && messages.rows.isEmpty && meaning.rows.isEmpty }
 
     func section(_ kind: ConversationSearchSection.Kind) -> ConversationSearchSection {
         switch kind {
         case .titles: titles
         case .messages: messages
+        case .meaning: meaning
         }
     }
 }
@@ -105,7 +111,8 @@ enum ConversationSearchMerge {
                 let recency = Date(timeIntervalSince1970: TimeInterval(header.latestActivityAt))
                 matches.append(ConversationSearchCandidate(
                     row: ConversationSearchRow(
-                        address: ConversationAddress(hostID: host.id, threadID: header.id), sessionKey: nil,
+                        address: ConversationAddress(hostID: host.id, threadID: header.id),
+                        section: .titles, itemKey: nil, findTerm: nil, sessionKey: nil,
                         generation: generation, headline: .title(title), excerpt: nil,
                         dateLabel: dateLabel(recency, now: now), provider: AgentProvider.provider(forThreadID: header.id),
                         folder: folder(of: header.cwd), hostName: showsHostLabels ? host.name : nil, additionalHitCount: 0),
@@ -120,8 +127,7 @@ enum ConversationSearchMerge {
         let showsHostLabels = ConversationSidebarProjection.showsHostLabels(targetCount: hosts.count)
         var localTitles: [UUID: [String: String]] = [:]
         return response.conversations.compactMap { conversation in
-            guard let host = hosts.first(where: { $0.id == conversation.hostId })
-                    ?? hosts.first(where: { $0.gatewayID == conversation.hostId }),
+            guard let host = host(conversation.hostId, among: hosts),
                   host.marks.purpose(of: conversation.threadId) != .probe else { return nil }
             let excerpt = conversation.hits.first.map { query.emphasizedExcerpt($0.excerpt) }
             let knownTitle = conversation.title ?? {
@@ -138,6 +144,9 @@ enum ConversationSearchMerge {
             return ConversationSearchCandidate(
                 row: ConversationSearchRow(
                     address: ConversationAddress(hostID: host.id, threadID: conversation.threadId),
+                    section: conversation.titleMatch ? .titles : .messages,
+                    itemKey: conversation.titleMatch ? nil : conversation.hits.first?.itemKey,
+                    findTerm: conversation.hits.first.flatMap { query.bestTerm(in: $0.excerpt) },
                     sessionKey: conversation.sessionKey, generation: generation, headline: headline,
                     excerpt: knownTitle == nil ? nil : excerpt,
                     dateLabel: conversation.lastAt.map { dateLabel($0, now: now) }, provider: conversation.provider,
@@ -145,6 +154,28 @@ enum ConversationSearchMerge {
                     additionalHitCount: max(0, conversation.hitCount - shownHits)),
                 titleMatch: conversation.titleMatch, recency: conversation.lastAt)
         }
+    }
+
+    static func meaningCandidates(from response: ConversationMeaningResponse, hosts: [ConversationSearchHost],
+                                  generation: UInt64, now: Date) -> [ConversationSearchCandidate] {
+        let showsHostLabels = ConversationSidebarProjection.showsHostLabels(targetCount: hosts.count)
+        return response.conversations.compactMap { conversation in
+            guard let host = host(conversation.hostId, among: hosts),
+                  host.marks.purpose(of: conversation.threadId) != .probe else { return nil }
+            return ConversationSearchCandidate(row: ConversationSearchRow(
+                address: ConversationAddress(hostID: host.id, threadID: conversation.threadId), section: .meaning,
+                itemKey: nil, findTerm: nil, sessionKey: conversation.sessionKey, generation: generation,
+                headline: conversation.title.map(ConversationSearchRow.Headline.title) ?? .untitled,
+                excerpt: AttributedString(conversation.summary),
+                dateLabel: conversation.lastAt.map { dateLabel($0, now: now) }, provider: conversation.provider,
+                folder: conversation.cwd.flatMap(folder(of:)), hostName: showsHostLabels ? host.name : nil,
+                additionalHitCount: 0), titleMatch: false, recency: conversation.lastAt)
+        }
+    }
+
+    private static func host(_ id: UUID, among hosts: [ConversationSearchHost]) -> ConversationSearchHost? {
+        let matches = hosts.filter { $0.id == id || $0.gatewayID == id }
+        return matches.count == 1 ? matches.first : nil
     }
 
     static func firstPaint(of results: ConversationSearchResults, titleMatches: [ConversationSearchCandidate],
@@ -158,8 +189,11 @@ enum ConversationSearchMerge {
         for candidate in titles where admit(candidate.row, listed: &listed, sessionKeys: &sessionKeys) {
             painted.titles.append(candidate.row)
         }
-        for candidate in answer where !candidate.titleMatch && admit(candidate.row, listed: &listed, sessionKeys: &sessionKeys) {
+        for candidate in answer where candidate.row.section == .messages && admit(candidate.row, listed: &listed, sessionKeys: &sessionKeys) {
             painted.messages.append(candidate.row)
+        }
+        for candidate in answer where candidate.row.section == .meaning && admit(candidate.row, listed: &listed, sessionKeys: &sessionKeys) {
+            painted.meaning.append(candidate.row)
         }
         return painted
     }
@@ -167,10 +201,14 @@ enum ConversationSearchMerge {
     static func appending(_ answer: [ConversationSearchCandidate],
                           to results: ConversationSearchResults) -> ConversationSearchResults {
         var appended = results
-        var listed = Set((results.titles.rows + results.messages.rows).map(\.address))
-        var sessionKeys = Set((results.titles.rows + results.messages.rows).compactMap(\.sessionKey))
+        var listed = Set((results.titles.rows + results.messages.rows + results.meaning.rows).map(\.address))
+        var sessionKeys = Set((results.titles.rows + results.messages.rows + results.meaning.rows).compactMap(\.sessionKey))
         for candidate in answer where admit(candidate.row, listed: &listed, sessionKeys: &sessionKeys) {
-            if candidate.titleMatch { appended.titles.append(candidate.row) } else { appended.messages.append(candidate.row) }
+            switch candidate.row.section {
+            case .titles: appended.titles.append(candidate.row)
+            case .messages: appended.messages.append(candidate.row)
+            case .meaning: appended.meaning.append(candidate.row)
+            }
         }
         return appended
     }

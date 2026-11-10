@@ -181,7 +181,10 @@ struct ConversationSearchSessionTests {
         #expect(!query.titleContainsEveryTerm("Fix the drawer"))
         #expect(!query.titleContainsEveryTerm("Fix the drawér flicker"))
         #expect(ConversationSearchQuery(" \n ") == nil)
-        #expect(ConversationSearchQuery((1...10).map { "t\($0)" }.joined(separator: " "))?.terms.count == 8)
+        let phrase = "where did we test the new drawer with reduced motion enabled"
+        let parsed = try #require(ConversationSearchQuery(phrase))
+        #expect(parsed.terms.count == 8)
+        #expect(parsed.meaningText == phrase)
         let long = String(repeating: "a", count: 300) + " " + String(repeating: "b", count: 300)
         #expect(ConversationSearchQuery(long)?.terms == [String(repeating: "a", count: 300)])
     }
@@ -209,6 +212,71 @@ struct ConversationSearchSessionTests {
         #expect(first.hits.map(\.excerpt) == ["…the drawer still shows a flicker…"])
         let second = response.conversations[1]
         #expect(second.title == nil && second.cwd == nil && second.lastAt == nil && second.titleMatch && second.hits.isEmpty)
+    }
+
+    @Test func aPaintedQueryIsReplacedRatherThanMixedWithTheNextQuery() async throws {
+        let session = session(hosts: [host(mini, "Mini")])
+        try await ask(session, "alpha", hosts: 1)
+        requests.answer(mini, with: [hit("alpha", on: mini)])
+        #expect(await waitUntil { session.results.isPainted })
+        try await ask(session, "beta", hosts: 1)
+        requests.answer(mini, with: [hit("beta", on: mini)])
+        #expect(await waitUntil { ids(session.results.messages) == ["beta"] })
+    }
+
+    @Test func meaningSearchKeepsTheStatusActiveAndAppendsDeduplicatedProviderOrder() async throws {
+        let meaning = MeaningRequests()
+        var source = host(mini, "Mini")
+        source.meaning = meaning.search
+        let session = session(hosts: [source])
+        try await ask(session, "drawer", hosts: 1)
+        #expect(await waitUntil { meaning.queries == ["drawer"] })
+        requests.answer(mini, with: [hit("literal", on: mini)])
+        #expect(await waitUntil { ids(session.results.messages) == ["literal"] })
+        #expect(session.results.status.isSearching)
+        meaning.answer("drawer", with: [meaningHit("literal"), meaningHit("second"), meaningHit("first")])
+        #expect(await waitUntil { !session.results.status.isSearching })
+        #expect(ids(session.results.messages) == ["literal"])
+        #expect(ids(session.results.meaning) == ["second", "first"])
+        #expect(session.results.meaning.rows.first?.excerpt.map { String($0.characters) } == "Remembered sidebar motion")
+        #expect(session.results.meaning.rows.first?.section == .meaning)
+    }
+
+    @Test func lateMeaningAnswersCannotPublishAfterCancellationOrAReplacementQuery() async throws {
+        let meaning = MeaningRequests()
+        var source = host(mini, "Mini")
+        source.meaning = meaning.search
+        let session = session(hosts: [source])
+        try await ask(session, "alpha", hosts: 1)
+        #expect(await waitUntil { meaning.queries == ["alpha"] })
+        requests.answer(mini, with: [])
+        #expect(await waitUntil { session.results.isPainted })
+        session.query = "beta"
+        #expect(await waitUntil { meaning.cancelled == ["alpha"] })
+        meaning.answer("alpha", with: [meaningHit("stale")])
+        #expect(await waitUntil { clock.sleeperCount == 1 })
+        clock.advance(by: ConversationSearchSession.debounce)
+        #expect(await waitUntil { meaning.queries == ["beta"] && requests.pendingQueries == ["beta"] })
+        requests.answer(mini, with: [hit("current", on: mini)])
+        meaning.fail("beta")
+        #expect(await waitUntil { !session.results.status.isSearching })
+        #expect(ids(session.results.messages) == ["current"])
+        #expect(session.results.meaning.rows.isEmpty)
+        #expect(session.results.status.unansweredHosts == ["Mini"])
+    }
+
+    @Test func messageHitsCarryTheExactItemKeyAndTheLongestMatchingFindTerm() throws {
+        let response = ConversationSearchResponse(schemaVersion: 1, conversations: [hit("one", on: mini, excerpt: "the drawer flickered")])
+        let query = try #require(ConversationSearchQuery("drawer flicker absent"))
+        let row = try #require(ConversationSearchMerge.candidates(from: response, hosts: [host(mini, "Mini")],
+            query: query, generation: 1, now: now).first?.row)
+        #expect(row.itemKey == "fixture@item:1")
+        #expect(row.findTerm == "flicker")
+    }
+
+    private func meaningHit(_ id: String) -> ConversationMeaningResponse.Conversation {
+        .init(sessionKey: "\(mini.uuidString):codex:home:\(id)", hostId: mini, provider: .codex,
+              threadId: id, title: "Remembered work", cwd: nil, lastAt: nil, summary: "Remembered sidebar motion")
     }
 
     private func session(hosts: [ConversationSearchHost]) -> ConversationSearchSession {
@@ -244,7 +312,7 @@ struct ConversationSearchSessionTests {
             sessionKey: sessionKey ?? "\(host.uuidString):codex:home:\(thread)", hostId: host, provider: .codex,
             threadId: thread, title: title, cwd: "/Users/developer/RemoteCoder",
             lastAt: lastAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }, titleMatch: titleMatch,
-            hitCount: hitCount, hits: excerpt.map { [.init(excerpt: $0)] } ?? [])
+            hitCount: hitCount, hits: excerpt.map { [.init(itemKey: "fixture@item:1", excerpt: $0)] } ?? [])
     }
 
     private func ids(_ section: ConversationSearchSection) -> [String] {
@@ -307,5 +375,31 @@ private nonisolated final class SearchRequests: Sendable {
             }
             return state.pending.remove(at: index)
         }
+    }
+}
+
+private nonisolated final class MeaningRequests: Sendable {
+    private struct State {
+        var pending: [String: CheckedContinuation<ConversationSearchHost.MeaningAnswer, any Error>] = [:]
+        var cancelled: [String] = []
+    }
+    private let state = Mutex(State())
+    var queries: [String] { state.withLock { $0.pending.keys.sorted() } }
+    var cancelled: [String] { state.withLock { $0.cancelled } }
+
+    func search(_ params: ConversationSearchParams) async throws -> ConversationSearchHost.MeaningAnswer {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                state.withLock { $0.pending[params.query] = continuation }
+            }
+        } onCancel: { state.withLock { $0.cancelled.append(params.query) } }
+    }
+
+    func answer(_ query: String, with conversations: [ConversationMeaningResponse.Conversation]) {
+        state.withLock { $0.pending.removeValue(forKey: query) }?.resume(returning: .results(.init(schemaVersion: 1, conversations: conversations)))
+    }
+
+    func fail(_ query: String) {
+        state.withLock { $0.pending.removeValue(forKey: query) }?.resume(throwing: GatewayClient.ClientError.notConnected)
     }
 }

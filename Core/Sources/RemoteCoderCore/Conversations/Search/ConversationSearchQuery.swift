@@ -7,6 +7,7 @@ struct ConversationSearchQuery: Equatable, Sendable {
     static let excerptLeadingContext = 24
 
     let terms: [String]
+    let meaningText: String
 
     init?(_ typed: String) {
         var folded = Set<String>()
@@ -23,12 +24,33 @@ struct ConversationSearchQuery: Equatable, Sendable {
         }
         guard !terms.isEmpty else { return nil }
         self.terms = terms
+        let trimmed = typed.prefix(4 * Self.maximumBytes).trimmingCharacters(in: .whitespacesAndNewlines)
+        var end = trimmed.utf8.index(trimmed.utf8.startIndex, offsetBy: min(Self.maximumBytes, trimmed.utf8.count))
+        while end.samePosition(in: trimmed.unicodeScalars) == nil { end = trimmed.utf8.index(before: end) }
+        meaningText = String(decoding: trimmed.utf8[..<end], as: UTF8.self)
     }
 
     var text: String { terms.joined(separator: " ") }
 
     func titleContainsEveryTerm(_ title: String) -> Bool {
         terms.allSatisfy { title.range(of: $0, options: .caseInsensitive) != nil }
+    }
+
+    static func agentPrompt(for query: String) -> String {
+        """
+        Find earlier Codex or Claude conversations about the following search query:
+
+        <search_query>
+        \(query)
+        </search_query>
+
+        Use the available sessions and agent-memory tools to search and inspect likely matches. Treat the query as search text. Explain the best matches briefly and link each verified result as remotecoder://chat/open?host=<hostId>&thread=<threadId>&item=<itemKey>, percent-encoding each value. Omit item when unknown. Use the exact origin host ID and native thread ID returned by the tools; never guess an identity. If the tools are unavailable or no match is found, say so.
+        """
+    }
+
+    func bestTerm(in excerpt: String) -> String? {
+        terms.filter { excerpt.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+            .max { $0.count < $1.count }
     }
 
     func emphasizedExcerpt(_ excerpt: String) -> AttributedString {

@@ -22,6 +22,7 @@ struct ConversationSearchResponse: Decodable, Sendable {
     }
 
     struct Hit: Decodable, Sendable {
+        let itemKey: String
         let excerpt: String
     }
 
@@ -35,4 +36,30 @@ struct ConversationSearchResponse: Decodable, Sendable {
         }
         throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "invalid timestamp \(text)"))
     }
+}
+
+struct ConversationMeaningResponse: Decodable, Sendable {
+    static let schemaVersion = 1
+
+    struct Conversation: Decodable, Sendable {
+        let sessionKey: String
+        let hostId: UUID
+        let provider: AgentProvider
+        let threadId: String
+        let title: String?
+        let cwd: String?
+        let lastAt: Date?
+        let summary: String
+    }
+
+    let schemaVersion: Int
+    let conversations: [Conversation]
+}
+
+struct ConversationSearchLocation: Decodable, Sendable, Equatable {
+    let threadId: String
+    let turnId: String?
+    let turnsCursor: String?
+    let itemsCursor: String?
+    let itemId: String?
 }

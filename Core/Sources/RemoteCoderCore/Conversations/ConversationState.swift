@@ -800,8 +800,9 @@ struct ConversationState: Sendable {
             ? adoptStoredTail(snapshot.window)
             : adopt(snapshot.update, resulting: snapshot.window, read: read)
         recordTurnCompletion(header: snapshot.header.lastTurnCompletedAt, observed: window?.turns.compactMap(\.metadata) ?? [])
-        let rereadsTail = applied && snapshot.update?.placement.readsTail == true
+        let rereadsTail = applied && snapshot.update?.placement.readsTail == true && snapshot.window.newer == nil
         if rereadsTail || applied && snapshot.source == .storedTail { hasVerifiedTail = snapshot.source == .gateway }
+        if applied, snapshot.update?.placement == .reset, snapshot.window.newer != nil { hasVerifiedTail = false }
         if applied, let window { mergeHistory(window, rereadsTail: rereadsTail) }
         if applied, snapshot.source == .gateway { reconcileCompactionFromHistory() }
         markPersistedChange()
@@ -1144,10 +1145,17 @@ struct ConversationState: Sendable {
         if changed { turns[id] = turn }
     }
 
-    mutating func toggleTimeline(_ id: String) {
+    mutating func toggleTimeline(_ id: String) { changeTimeline(id, .toggle) }
+
+    enum TimelineChange { case toggle, expand }
+
+    mutating func changeTimeline(_ id: String, _ change: TimelineChange) {
         guard let timeline = ConversationProjection.project(self).timelines.first(where: { $0.id == id }) else { return }
         let anchors = Set(timeline.events.map(\.id)).union([timeline.id])
-        if timeline.isExpanded { expandedTimelineAnchors.subtract(anchors) }
+        if timeline.isExpanded {
+            guard change == .toggle else { return }
+            expandedTimelineAnchors.subtract(anchors)
+        }
         else { expandedTimelineAnchors.formUnion(timeline.events.isEmpty ? [timeline.id] : timeline.events.map(\.id)) }
         revision += 1
     }

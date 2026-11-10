@@ -519,6 +519,87 @@ actor GatewayHistoryService {
             priority: priority, bypassCache: bypassCache)
     }
 
+    enum SearchFallback: Sendable {
+        case openTail(base: HistoryWindow?, bypassCache: Bool)
+        case keepCurrentWindow
+    }
+
+    struct SearchSnapshot: Sendable {
+        let snapshot: ConversationSnapshot?
+        let location: ConversationSearchLocation?
+    }
+
+    func openSearchHit(header: ConversationHeader, itemKey: String, fallback: SearchFallback) async throws -> SearchSnapshot {
+        let readEpoch = epoch
+        let generation = generations[header.id]
+        var location: ConversationSearchLocation?
+        do {
+            let data = try await gateway.historyPageData(method: "sessions/locate", params: .object(["itemKey": .string(itemKey)]))
+            let response: RPCResult<ConversationSearchLocation> = try await Self.decodePage(data)
+            try Task.checkCancellation()
+            guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
+            if response.result.threadId == header.id { location = response.result }
+            if let location, let cursor = location.itemsCursor {
+                let snapshot = try await openLocated(header: header, cursor: cursor, location: location)
+                try Task.checkCancellation()
+                guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
+                return SearchSnapshot(snapshot: snapshot, location: location)
+            }
+        } catch {
+            try Task.checkCancellation()
+            guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
+        }
+        guard case .openTail(let base, let bypassCache) = fallback else {
+            return SearchSnapshot(snapshot: nil, location: location)
+        }
+        let snapshot = try await openTail(header: header, base: base, bypassCache: bypassCache)
+        try Task.checkCancellation()
+        guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
+        return SearchSnapshot(snapshot: snapshot, location: location)
+    }
+
+    private func openLocated(header: ConversationHeader, cursor: String, location: ConversationSearchLocation) async throws -> ConversationSnapshot {
+        let readEpoch = epoch
+        let generation = generations[header.id]
+        let first: NativePage<ItemsResponse> = try await nativePage(header: header, method: "thread/items/list",
+            cursor: cursor, direction: .asc, priority: .foreground, limit: Self.tailItemPageLimit)
+        var page = first
+        if let itemID = location.itemId, !first.value.data.contains(where: { $0.item.id == itemID }) {
+            var next = first.value.nextCursor
+            var visited = Set([cursor])
+            for _ in 0..<4 {
+                guard let continuation = next, visited.insert(continuation).inserted else { break }
+                let candidate: NativePage<ItemsResponse> = try await nativePage(header: header, method: "thread/items/list",
+                    cursor: continuation, direction: .asc, priority: .foreground, limit: Self.itemPageLimit)
+                try Task.checkCancellation()
+                guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
+                if candidate.value.data.contains(where: { $0.item.id == itemID }) {
+                    page = candidate
+                    break
+                }
+                guard candidate.value.data.last?.turnId == location.turnId else { break }
+                next = candidate.value.nextCursor
+            }
+        }
+        guard !page.value.data.isEmpty else { throw GatewayClient.ClientError.invalidMessage }
+        var metadata: [HistoryWindow.Update.Metadata] = []
+        if let turnsCursor = location.turnsCursor {
+            let turns: NativePage<TurnsResponse> = try await nativePage(header: header, method: "thread/turns/list",
+                cursor: turnsCursor, direction: .asc, priority: .foreground, limit: Self.turnPageLimit)
+            metadata = [.init(page: Self.measured(HistoryWindow.TurnPage(turns.value.data, next: turns.value.nextCursor,
+                backwards: turns.value.backwardsCursor, direction: .asc, placement: .reset, fetchedAt: turns.fetchedAt),
+                bytes: turns.bytes), placement: .reset)]
+        }
+        try Task.checkCancellation()
+        guard epoch == readEpoch, generations[header.id] == generation else { throw HistoryReadFailure.invalidated }
+        var window = HistoryWindow()
+        let update = HistoryWindow.Update(items: Self.measured(HistoryWindow.ItemPage(page.value.data,
+            next: page.value.nextCursor, backwards: page.value.backwardsCursor, direction: .asc, placement: .reset,
+            fetchedAt: page.fetchedAt), bytes: page.bytes), placement: .reset, metadata: metadata)
+        window.apply(update)
+        return ConversationSnapshot(header: header, window: window, update: update, fetchedAt: page.fetchedAt, source: page.source)
+    }
+
     func readHeader(threadID: String) async throws -> ConversationHeader {
         try await ConversationHeader(gateway.readThread(threadID: threadID, includeTurns: false).thread)
     }
