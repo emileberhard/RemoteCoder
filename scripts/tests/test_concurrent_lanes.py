@@ -49,7 +49,6 @@ class ConcurrentLanesTests(unittest.TestCase):
     def test_a_failure_does_not_wait_for_a_sibling_descendant_holding_the_pipe(self):
         with tempfile.TemporaryDirectory() as temporary:
             holder = Path(temporary) / "holder"
-            started = time.monotonic()
             try:
                 status = run_lanes(
                     {
@@ -57,9 +56,10 @@ class ConcurrentLanesTests(unittest.TestCase):
                             (
                                 "spawns",
                                 python(
-                                    "import pathlib, subprocess, time; "
+                                    "import os, pathlib, subprocess, time; "
                                     f"pid = subprocess.Popen(['sleep', '{HANG_SECONDS}']).pid; "
-                                    f"pathlib.Path({str(holder)!r}).write_text(str(pid)); "
+                                    f"pathlib.Path({str(holder)!r} + '.new').write_text(str(pid)); "
+                                    f"os.replace({str(holder)!r} + '.new', {str(holder)!r}); "
                                     f"time.sleep({HANG_SECONDS})"
                                 ),
                             )
@@ -69,7 +69,8 @@ class ConcurrentLanesTests(unittest.TestCase):
                                 "broken",
                                 python(
                                     "import pathlib, time\n"
-                                    f"while not pathlib.Path({str(holder)!r}).exists(): time.sleep(0.01)\n"
+                                    f"deadline = time.monotonic() + {HANG_SECONDS}\n"
+                                    f"while not pathlib.Path({str(holder)!r}).exists() and time.monotonic() < deadline: time.sleep(0.01)\n"
                                     "raise SystemExit(2)"
                                 ),
                             )
@@ -78,11 +79,14 @@ class ConcurrentLanesTests(unittest.TestCase):
                     ".",
                     output=io.BytesIO(),
                 )
-                self.assertEqual(status, 2)
-                self.assertLess(time.monotonic() - started, HANG_SECONDS)
             finally:
-                if holder.exists():
+                try:
                     os.kill(int(holder.read_text()), signal.SIGKILL)
+                    holder_outlived_run = True
+                except (FileNotFoundError, ProcessLookupError):
+                    holder_outlived_run = False
+            self.assertEqual(status, 2)
+            self.assertTrue(holder_outlived_run, "run_lanes waited for the pipe holder to exit")
 
     def test_a_finished_lane_closes_its_output_pipe(self):
         gc.collect()

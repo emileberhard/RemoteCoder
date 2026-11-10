@@ -507,13 +507,13 @@ raise SystemExit(module.serve_worker(Path(sys.argv[2])))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             worker = self.reader_worker(root)
-            bootstrap = """import importlib.util,sys,time
+            bootstrap = """import importlib.util,signal,sys
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('controller',sys.argv[1])
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 with module.collecting_worker([sys.executable,sys.argv[2]]):
  Path(sys.argv[3]).touch()
- time.sleep(30)
+ signal.pause()
 """
             client = subprocess.Popen(
                 [
@@ -533,7 +533,10 @@ with module.collecting_worker([sys.executable,sys.argv[2]]):
                     time.sleep(0.01)
                 self.assertTrue((root / "collecting").exists())
                 getattr(client, cancellation)()
-                client.wait(timeout=HANG_SECONDS)
+                self.assertEqual(
+                    client.wait(timeout=HANG_SECONDS),
+                    {"terminate": 128 + signal.SIGTERM, "kill": -signal.SIGKILL}[cancellation],
+                )
                 deadline = time.monotonic() + HANG_SECONDS
                 while not (root / "released").exists() and time.monotonic() < deadline:
                     time.sleep(0.01)

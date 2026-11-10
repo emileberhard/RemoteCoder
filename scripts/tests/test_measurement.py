@@ -23,6 +23,7 @@ from process_group import (
     signal_process,
     terminate_process,
 )
+from hang_guard import HANG_SECONDS
 
 spec = importlib.util.spec_from_file_location("measurement", SCRIPTS / "measurement.py")
 measurement = importlib.util.module_from_spec(spec)
@@ -523,7 +524,7 @@ class MeasurementTests(unittest.TestCase):
                     output, errors = contender.communicate(timeout=60)
                     self.assertEqual(contender.returncode, 0, output + errors)
                     self.assertIn(b"admitted", output)
-                    deadline = time.monotonic() + 60
+                    deadline = time.monotonic() + HANG_SECONDS
                     while audit_alive(guard):
                         self.assertLess(time.monotonic(), deadline)
                         time.sleep(0.01)

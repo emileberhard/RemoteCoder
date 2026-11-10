@@ -9,6 +9,7 @@ import threading
 import unittest
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from hang_guard import HANG_SECONDS
@@ -858,6 +859,14 @@ class PerfTraceTests(unittest.TestCase):
         entered = threading.Event()
         release = threading.Event()
         failures = []
+        limit = 0.7
+
+        class DeadlineAfterProbe(threading.Event):
+            def wait(self, timeout=None):
+                if timeout != limit:
+                    return super().wait(timeout)
+                entered.wait(HANG_SECONDS)
+                return self.is_set()
 
         def blocked_probe(pid):
             entered.set()
@@ -872,9 +881,10 @@ class PerfTraceTests(unittest.TestCase):
                 failures.append(error)
 
         with (
-            patch.object(trace, "EXPORT_TIMEOUT_SECONDS", 0.7),
+            patch.object(trace, "EXPORT_TIMEOUT_SECONDS", limit),
             patch.object(trace, "memory_bytes", side_effect=blocked_probe),
             patch.object(trace.subprocess, "Popen", return_value=export),
+            patch.object(trace, "threading", SimpleNamespace(Event=DeadlineAfterProbe, Lock=threading.Lock, Thread=threading.Thread)),
         ):
             owner = threading.Thread(target=summarize)
             owner.start()
@@ -887,7 +897,7 @@ class PerfTraceTests(unittest.TestCase):
         self.assertFalse(owner.is_alive())
         self.assertEqual(len(failures), 1)
         self.assertIsInstance(failures[0], SystemExit)
-        self.assertIn("seconds", str(failures[0]))
+        self.assertIn(f"(limit {limit} seconds)", str(failures[0]))
 
     def test_memory_probe_error_or_timeout_stops_and_reaps_export(self):
         for probe, error in (
