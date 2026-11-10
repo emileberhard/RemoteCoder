@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import { homedir, userInfo } from "node:os";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 
@@ -65,8 +65,9 @@ export class IsolatedGateway {
     }
 
     static async create(binary) {
+        const temporary = process.platform === "linux" ? tmpdir() : "/tmp";
         return new IsolatedGateway(
-            binary, await realpath(await mkdtemp("/tmp/r")),
+            binary, await realpath(await mkdtemp(join(temporary, "r"))),
             randomBytes(32).toString("hex"), await availablePort(),
         );
     }
