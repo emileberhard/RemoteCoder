@@ -38,7 +38,7 @@ pub(crate) struct Item {
 
 pub(crate) fn item(db: &Reader, request: &Request, control: &ReadControl) -> Result<Item> {
     ensure!(!control.stopped(), "locate interrupted");
-    let row:Option<(String,String,Option<String>,String,String,String,Option<String>)>=db.query_row("SELECT s.thread_id,s.provider,i.turn_id,i.kind,i.source_ref,src.local_path,i.text FROM item i JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE i.item_key=?1 AND src.present=1",[&request.item_key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
+    let row=db.query_row("SELECT s.thread_id,s.provider,i.turn_id,i.kind,i.source_ref,src.local_path,i.text FROM item i JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE i.item_key=?1 AND src.present=1",[&request.item_key],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?))).optional()?;
     let (thread_id, provider, turn_id, kind, reference, path, text) =
         row.context("not_found: catalog item is unavailable")?;
     let unique_text = if provider == "codex" {
