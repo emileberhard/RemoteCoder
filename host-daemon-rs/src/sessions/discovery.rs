@@ -133,7 +133,7 @@ impl Discovery {
         origins: &[Origin],
         deadline: Instant,
     ) -> Result<bool> {
-        let mut header = db.prepare_cached(HEADER_EXISTS)?;
+        let mut header = db.prepare(HEADER_EXISTS)?;
         for path in &self.pending {
             ensure!(
                 Instant::now() < deadline,
