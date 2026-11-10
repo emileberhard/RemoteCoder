@@ -291,7 +291,10 @@ fn rank(
             entry.items.push(item);
         }
     }
-    let mut groups: Vec<_> = groups.into_values().collect();
+    let mut groups: Vec<_> = groups
+        .into_values()
+        .filter(|group| group.title_match || !group.items.is_empty())
+        .collect();
     groups.sort_by(|a, b| {
         b.terms
             .count_ones()

@@ -2941,3 +2941,46 @@ fn sessions_conversations_deadline_preserves_only_completed_stages() {
         .is_err()
     );
 }
+
+#[test]
+fn sessions_conversations_require_a_full_title_match_or_a_message_hit() {
+    let f = fixture();
+    scan(&f);
+    let root = super::session_key(&f.origins[0], "codex-root");
+    let other = super::session_key(&f.origins[1], "claude_root");
+    {
+        let db = f.store.writer().unwrap();
+        db.execute("DELETE FROM item", []).unwrap();
+        db.execute("UPDATE session SET title=NULL,cwd=NULL", [])
+            .unwrap();
+        db.execute(
+            "UPDATE session SET title='Needle Extra' WHERE session_key=?1",
+            [&root],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE session SET title='Needle',cwd='/Extra/folderword' WHERE session_key=?1",
+            [&other],
+        )
+        .unwrap();
+    }
+    let found = conversation_search(&f.store, "needle extra", 30, Default::default());
+    assert_eq!(found.conversations.len(), 1);
+    assert_eq!(found.conversations[0].session_key, root);
+    assert!(found.conversations[0].title_match);
+    assert!(found.conversations[0].hits.is_empty());
+    assert!(
+        conversation_search(&f.store, "folderword", 30, Default::default())
+            .conversations
+            .is_empty()
+    );
+    {
+        let db = f.store.writer().unwrap();
+        conversation_item(&db, &other, 0, "extra", "assistant", None);
+    }
+    let found = conversation_search(&f.store, "needle extra", 30, Default::default());
+    assert_eq!(found.conversations.len(), 2);
+    assert_eq!(found.conversations[1].session_key, other);
+    assert!(!found.conversations[1].title_match);
+    assert_eq!(found.conversations[1].hit_count, 1);
+}

@@ -179,7 +179,9 @@ only when delegated ownership is unavailable.
 The trimmed query must contain 1–512 UTF-8 bytes. Whitespace-separated terms are
 case-insensitive, deduplicated and limited to eight distinct terms. `limit` is
 required and accepts 1–50 conversations. Unknown fields are invalid params.
-Titles and folders match any term; messages use literal trigram matching only
+Titles and folders match any term for coverage; a returned conversation must
+have every term in its title or at least one message hit. Folder-only and partial
+title-only candidates are excluded. Messages use literal trigram matching only
 for terms of at least three Unicode characters, preserving the existing index's
 case and diacritic behavior. Short terms never match message text.
 
