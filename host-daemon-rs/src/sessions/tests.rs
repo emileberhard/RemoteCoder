@@ -31,6 +31,15 @@ fn codex_meta(id: &str, parent: Option<&str>) -> Value {
     json!({"type":"session_meta","timestamp":"2026-10-27T10:00:00Z","payload":{"id":id,"cwd":"/fixture","source":{"subagent":{"thread_spawn":{"parent_thread_id":parent}}}}})
 }
 
+fn fixture_store(path: PathBuf) -> Result<Store> {
+    Store::open_with_capacity(
+        path,
+        super::storage::Capacity::Fixed {
+            free_bytes: 1 << 40,
+        },
+    )
+}
+
 fn fixture() -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -91,7 +100,7 @@ fn fixture() -> Fixture {
             json!({"type":"user","sessionId":"root","uuid":"child-prompt","timestamp":"2026-10-27T10:00:00Z","message":{"content":"Native child"}}),
         ],
     );
-    let store = Store::open(root.join("state/catalog.sqlite3")).unwrap();
+    let store = fixture_store(root.join("state/catalog.sqlite3")).unwrap();
     Fixture {
         _directory: directory,
         store,
@@ -300,7 +309,7 @@ fn sessions_feed_records_only_evidence_and_keeps_its_newest_rows() {
     let db = f.store.reader().unwrap();
     let cursor = changes::cursor(&db).unwrap();
     drop(db);
-    let reopened = Store::open(f.store.path.clone()).unwrap();
+    let reopened = fixture_store(f.store.path.clone()).unwrap();
     assert_eq!(
         changes::cursor(&reopened.reader().unwrap()).unwrap(),
         cursor
@@ -414,7 +423,7 @@ fn sessions_skill_catalog_deduplicates_provider_symlinks() {
             path
         })
         .collect();
-    let store = Store::open(root.path().join("state/catalog.sqlite3")).unwrap();
+    let store = fixture_store(root.path().join("state/catalog.sqlite3")).unwrap();
     let db = store.writer().unwrap();
     ingest::catalog(&db, &roots).unwrap();
     assert_eq!(
@@ -460,7 +469,7 @@ fn sessions_previous_schema_rebuilds_projection_and_expires_cursor() {
             .sum::<u64>()
     };
     assert!(bytes(&f.store) > 50 << 20);
-    Store::open(f.store.path.clone()).unwrap();
+    fixture_store(f.store.path.clone()).unwrap();
     assert!(bytes(&f.store) < 4 << 20, "{}", bytes(&f.store));
     let db = f.store.reader().unwrap();
     assert_eq!(
@@ -523,7 +532,7 @@ fn sessions_spawn_then_resolve_catches_up_before_worker_scan() {
             .len(),
         1
     );
-    let next = Store::open(f.store.path.clone()).unwrap();
+    let next = fixture_store(f.store.path.clone()).unwrap();
     let worker = start_worker(&next, &f.origins);
     std::fs::write(f.codex.with_file_name("pending-identity.jsonl"), b"{").unwrap();
     ingest::refresh_inventory(&next).unwrap();
@@ -618,7 +627,7 @@ async fn sessions_mirror_preserves_sidecars_and_refuses_over_budget() {
     let f = fixture();
     scan(&f);
     let destination = tempfile::tempdir().unwrap();
-    let target = Store::open(destination.path().join("state/catalog.sqlite3")).unwrap();
+    let target = fixture_store(destination.path().join("state/catalog.sqlite3")).unwrap();
     let peer = f.store.clone();
     let origins = f.origins.clone();
     let call: mirror::Call = Arc::new(move |method: &'static str, params: Value| {
@@ -1617,7 +1626,7 @@ fn sessions_incremental_append_preserves_items_and_reconcile_verifies_the_chain(
     assert_eq!(revision, current_revision);
     assert_eq!(verified, revision);
     drop(db);
-    let fresh = Store::open(f._directory.path().join("rebuilt/catalog.sqlite3")).unwrap();
+    let fresh = fixture_store(f._directory.path().join("rebuilt/catalog.sqlite3")).unwrap();
     ingest::scan(&fresh, &f.origins, &AtomicBool::new(false)).unwrap();
     let rebuilt_chain: String = fresh
         .reader()
@@ -1918,7 +1927,7 @@ fn sessions_mirror_pages_seek_before_stats_and_deduplicate_shared_evidence() {
     std::fs::create_dir_all(&root).unwrap();
     let actual = root.join("actual.jsonl");
     std::fs::write(&actual, b"fixture\n").unwrap();
-    let store = Store::open(directory.path().join("state/catalog.sqlite3")).unwrap();
+    let store = fixture_store(directory.path().join("state/catalog.sqlite3")).unwrap();
     {
         let mut db = store.writer().unwrap();
         let tx = db.transaction().unwrap();
@@ -2310,7 +2319,7 @@ async fn sessions_mirror_idle_uses_only_feed_and_defers_full_tree_reconciliation
     let f = fixture();
     scan(&f);
     let directory = tempfile::tempdir()?;
-    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let call = mirror_peer(&f, calls.clone(), Arc::new(AtomicBool::new(false)));
     assert_eq!(sync_mirror(&target, call.clone()).await?["full"], true);
@@ -2360,7 +2369,7 @@ async fn sessions_mirror_skips_failed_transfers_until_full_reconciliation_and_pr
     let f = fixture();
     scan(&f);
     let directory = tempfile::tempdir()?;
-    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let fail = Arc::new(AtomicBool::new(false));
     let call = mirror_peer(&f, calls.clone(), fail.clone());
@@ -2432,7 +2441,7 @@ async fn sessions_mirror_replays_changes_that_race_the_initial_listing() -> Resu
     let f = fixture();
     scan(&f);
     let directory = tempfile::tempdir()?;
-    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
     let peer = f.store.clone();
     let origins = f.origins.clone();
     let new = f.codex.with_file_name("racing.jsonl");
@@ -2501,7 +2510,7 @@ async fn sessions_mirror_skips_outside_entries_without_reclaiming() -> Result<()
     let f = fixture();
     scan(&f);
     let directory = tempfile::tempdir()?;
-    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
     let peer = mirror_peer(&f, Arc::default(), Arc::new(AtomicBool::new(false)));
     sync_mirror(&target, peer.clone()).await?;
     let orphan = target
@@ -2549,7 +2558,7 @@ async fn sessions_mirror_appends_verified_growth_and_replaces_a_changed_prefix()
     let f = fixture();
     scan(&f);
     let directory = tempfile::tempdir()?;
-    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
     let peer = mirror_peer(&f, Arc::default(), Arc::new(AtomicBool::new(false)));
     sync_mirror(&target, peer.clone()).await?;
     let path: String = target.reader()?.query_row(
@@ -2913,7 +2922,7 @@ async fn sessions_conversations_mirror_origin_metadata_without_entry_changes() -
     let root = super::session_key(&f.origins[0], "codex-root");
     let child = super::session_key(&f.origins[0], "codex-child");
     let directory = tempfile::tempdir()?;
-    let target = Store::open(directory.path().join("state/catalog.sqlite3"))?;
+    let target = fixture_store(directory.path().join("state/catalog.sqlite3"))?;
     let call = mirror_peer(&f, Default::default(), Default::default());
     sync_mirror(&target, call.clone()).await?;
     f.store.writer()?.execute("UPDATE session SET title='Native Codex title',delegated_parent_known=1,delegated_parent_session_key=?2 WHERE session_key=?1",rusqlite::params![child,root])?;

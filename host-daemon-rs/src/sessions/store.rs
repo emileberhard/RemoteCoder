@@ -19,11 +19,18 @@ pub(crate) struct Store {
 
 impl Store {
     pub fn open(path: PathBuf) -> Result<Self> {
+        Self::open_with_capacity(path, super::storage::Capacity::Host)
+    }
+
+    pub(crate) fn open_with_capacity(
+        path: PathBuf,
+        capacity: super::storage::Capacity,
+    ) -> Result<Self> {
         let parent = path
             .parent()
             .context("Session database needs a parent directory")?;
         private_state::ensure_private_directory(parent)?;
-        let storage = std::sync::Arc::new(super::storage::Storage::new(&path)?);
+        let storage = std::sync::Arc::new(super::storage::Storage::new(&path, capacity)?);
         discard_other_schema(&path, &storage)?;
         let store = Self {
             anchor: std::sync::Arc::new(std::sync::Mutex::new(Connection::open(&path)?)),
@@ -115,7 +122,10 @@ fn discard_other_schema(path: &Path, storage: &super::storage::Storage) -> Resul
 pub(crate) fn reader(path: &Path) -> Result<Reader> {
     Ok(Reader {
         db: reader_connection(path)?,
-        storage: std::sync::Arc::new(super::storage::Storage::new(path)?),
+        storage: std::sync::Arc::new(super::storage::Storage::new(
+            path,
+            super::storage::Capacity::Host,
+        )?),
     })
 }
 

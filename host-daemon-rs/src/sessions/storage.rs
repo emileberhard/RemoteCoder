@@ -9,11 +9,42 @@ pub(crate) const CAP_BYTES: u64 = 64 << 30;
 pub(crate) const RESERVE_BYTES: u64 = 20 << 30;
 pub(crate) const WAL_BYTES: u64 = 8 << 30;
 
+#[derive(Clone, Copy)]
+pub(crate) enum Capacity {
+    Host,
+    #[cfg(test)]
+    Fixed {
+        free_bytes: u64,
+    },
+}
+
+impl Capacity {
+    fn free_bytes(self, root: &Path) -> Result<u64> {
+        match self {
+            #[cfg(test)]
+            Self::Fixed { free_bytes } => Ok(free_bytes),
+            Self::Host => {
+                let path = std::ffi::CString::new(root.as_os_str().as_encoded_bytes())?;
+                let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+                ensure!(
+                    unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } == 0,
+                    "unavailable: cannot measure session free disk: {}",
+                    std::io::Error::last_os_error()
+                );
+                let stats = unsafe { stats.assume_init() };
+                u64::try_from(u128::from(stats.f_bavail) * u128::from(stats.f_frsize))
+                    .context("session free disk exceeds supported size")
+            }
+        }
+    }
+}
+
 pub(crate) struct Storage {
     root: PathBuf,
     database: PathBuf,
     cache: Mutex<Cache>,
     gate: Arc<Gate>,
+    capacity: Capacity,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -34,13 +65,14 @@ pub(crate) struct Usage {
 }
 
 impl Storage {
-    pub fn new(database: &Path) -> Result<Self> {
+    pub fn new(database: &Path, capacity: Capacity) -> Result<Self> {
         let storage = Self {
             root: database
                 .parent()
                 .context("Session state needs a directory")?
                 .to_owned(),
             database: database.to_owned(),
+            capacity,
             gate: Arc::new(Gate::default()),
             cache: Mutex::new(Cache {
                 other_bytes: 0,
@@ -155,16 +187,7 @@ impl Storage {
                 .checked_add(file_bytes(&path)?)
                 .context("Session state size overflow")?;
         }
-        let path = std::ffi::CString::new(self.root.as_os_str().as_encoded_bytes())?;
-        let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-        ensure!(
-            unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } == 0,
-            "unavailable: cannot measure session free disk: {}",
-            std::io::Error::last_os_error()
-        );
-        let stats = unsafe { stats.assume_init() };
-        let free = u64::try_from(u128::from(stats.f_bavail) * u128::from(stats.f_frsize))
-            .context("session free disk exceeds supported size")?;
+        let free = self.capacity.free_bytes(&self.root)?;
         let headroom_bytes = headroom(used, free, self.wal_bytes()?);
         Ok(Usage {
             used_bytes: used,
@@ -354,12 +377,33 @@ mod tests {
     #[test]
     fn session_lease_unlocks_with_an_inherited_descriptor() {
         let root = tempfile::tempdir().unwrap();
-        let storage = Storage::new(&root.path().join("catalog.sqlite3")).unwrap();
+        let storage = Storage::new(
+            &root.path().join("catalog.sqlite3"),
+            Capacity::Fixed {
+                free_bytes: 1 << 40,
+            },
+        )
+        .unwrap();
         let lease = storage.lease(0).unwrap();
         let inherited = lease.file.try_clone().unwrap();
         drop(lease);
         let next = storage.lease(0).unwrap();
         drop(inherited);
         drop(next);
+    }
+    #[test]
+    fn session_production_reserve_refuses_low_free_space() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::new(
+            &root.path().join("catalog.sqlite3"),
+            Capacity::Fixed {
+                free_bytes: RESERVE_BYTES - 1,
+            },
+        )
+        .unwrap();
+        let usage = storage.usage().unwrap();
+        assert_eq!(usage.reserve_bytes, RESERVE_BYTES);
+        assert_eq!(usage.headroom_bytes, 0);
+        assert!(storage.lease(1).is_err());
     }
 }
