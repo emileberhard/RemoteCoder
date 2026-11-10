@@ -93,6 +93,17 @@ struct ItemsCursor {
     include_anchor: bool,
 }
 
+impl ItemsCursor {
+    fn encode(thread_id: &str, item_id: &str, include_anchor: bool) -> Result<String> {
+        serde_json::to_string(&Self {
+            thread_id: thread_id.to_owned(),
+            item_id: item_id.to_owned(),
+            include_anchor,
+        })
+        .context("failed to serialize cursor")
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TurnsCursor {
@@ -422,6 +433,7 @@ pub(crate) struct Location {
     pub turn_id: String,
     pub item_id: String,
     pub turns_cursor: String,
+    pub items_cursor: String,
 }
 
 impl Projection {
@@ -454,12 +466,15 @@ impl Projection {
 
     pub(crate) fn locate(
         &self,
+        thread_id: &str,
         file: &File,
         target: &LocateTarget,
         check: &dyn Fn() -> Result<()>,
     ) -> Result<Option<Location>> {
         match target {
-            LocateTarget::Item { offset, part } => self.locate_item(*offset, *part, check),
+            LocateTarget::Item { offset, part } => {
+                self.locate_item(thread_id, *offset, *part, check)
+            }
             LocateTarget::Agent { agent_id } => {
                 let mut found = None;
                 let mut records = RecordReader::new(file);
@@ -490,7 +505,7 @@ impl Projection {
                         if found.is_some() {
                             return Ok(None);
                         }
-                        found = Some(self.location(item)?);
+                        found = Some(self.location(thread_id, item)?);
                     }
                 }
                 Ok(found)
@@ -498,10 +513,11 @@ impl Projection {
         }
     }
 
-    fn location(&self, item: &Item) -> Result<Location> {
+    fn location(&self, thread_id: &str, item: &Item) -> Result<Location> {
         let turn_id = self.turns[item.turn].id.clone();
         Ok(Location {
             item_id: item.id.clone(),
+            items_cursor: ItemsCursor::encode(thread_id, &item.id, true)?,
             turns_cursor: serde_json::to_string(&TurnsCursor {
                 turn_id: turn_id.clone(),
                 include_anchor: true,
@@ -512,6 +528,7 @@ impl Projection {
 
     fn locate_item(
         &self,
+        thread_id: &str,
         offset: u64,
         part: usize,
         check: &dyn Fn() -> Result<()>,
@@ -534,7 +551,7 @@ impl Projection {
                 Source::Synthetic(_) => false,
             };
             if matches {
-                return Ok(Some(self.location(item)?));
+                return Ok(Some(self.location(thread_id, item)?));
             }
         }
         Ok(None)
@@ -707,12 +724,7 @@ impl Projection {
             params.sort_direction.unwrap_or(SortDirection::Asc),
         );
         let cursor_for = |position: usize, include_anchor: bool| {
-            serde_json::to_string(&ItemsCursor {
-                thread_id: params.thread_id.clone(),
-                item_id: self.items[position].id.clone(),
-                include_anchor,
-            })
-            .context("failed to serialize cursor")
+            ItemsCursor::encode(&params.thread_id, &self.items[position].id, include_anchor)
         };
         let backwards_cursor = page
             .selected

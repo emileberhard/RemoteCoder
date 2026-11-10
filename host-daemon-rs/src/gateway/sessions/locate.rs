@@ -105,6 +105,7 @@ impl Gateway {
                         item.response.turn_id = Some(location.turn_id);
                         item.response.item_id = Some(location.item_id);
                         item.response.turns_cursor = Some(location.turns_cursor);
+                        item.response.items_cursor = Some(location.items_cursor);
                     }
                 }
                 Ok(item)
@@ -112,7 +113,10 @@ impl Gateway {
             .await
             .map_err(|e| session_error(e.into()))?
             .map_err(session_error)?;
-            if item.provider != "codex" || !matches!(item.kind.as_str(), "user" | "assistant") {
+            if item.provider != "codex"
+                || (item.response.turn_id.is_none()
+                    && !matches!(item.kind.as_str(), "user" | "assistant"))
+            {
                 return serde_json::to_value(item.response).map_err(|e| session_error(e.into()));
             }
             let Ok(permit) = runtime.native_locates.clone().try_acquire_owned() else {
@@ -146,6 +150,28 @@ impl Gateway {
         &self,
         item: locate::Item,
         control: Arc<ReadControl>,
+    ) -> locate::Response {
+        let mut response = if matches!(item.kind.as_str(), "user" | "assistant") {
+            self.locate_native_occurrence(item, &control).await
+        } else {
+            item.response
+        };
+        if !control.stopped()
+            && let Some(turn)=&response.turn_id
+            && let Ok(page)=self.call_control_read_until_reply("thread/items/list",json!({"threadId":response.thread_id,"turnId":turn,"limit":1,"sortDirection":"asc"})).await
+            && let Some(rows)=page["data"].as_array()
+            && let Some(first)=rows.first().filter(|_|rows.len()==1)
+            && first["turnId"]==*turn
+        {
+            response.items_cursor=page["backwardsCursor"].as_str().map(str::to_owned);
+        }
+        response
+    }
+
+    async fn locate_native_occurrence(
+        &self,
+        item: locate::Item,
+        control: &ReadControl,
     ) -> locate::Response {
         let mut response = item.response;
         let Some(text) = item.text.filter(|s| !s.trim().is_empty()) else {

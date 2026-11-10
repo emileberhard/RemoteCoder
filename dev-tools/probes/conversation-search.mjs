@@ -37,7 +37,9 @@ try {
   const located=await rpc('sessions/locate',{itemKey:hit.itemKey});
   assert.equal(located.result.threadId,`claude_${root}`);
   assert.equal(located.result.itemId,'answer#0');
-  assert.ok(located.result.turnId && located.result.turnsCursor);
+  assert.ok(located.result.turnId && located.result.turnsCursor && located.result.itemsCursor);
+  const items=await rpc('thread/items/list',{threadId:located.result.threadId,cursor:located.result.itemsCursor,sortDirection:'asc',limit:1});
+  assert.equal(items.result.data[0].item.id,located.result.itemId);
   const page=await rpc('thread/turns/list',{threadId:located.result.threadId,cursor:located.result.turnsCursor,sortDirection:'asc',itemsView:'full',limit:1});
   assert.equal(page.result.data[0].id,located.result.turnId);
   assert.ok(JSON.stringify(page.result).includes(located.result.itemId));

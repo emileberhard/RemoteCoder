@@ -69,7 +69,7 @@ impl ClaudeHistory {
                 check,
                 |projection, file| {
                     verify(file)?;
-                    Ok(projection.locate(file, target, check)?)
+                    Ok(projection.locate(thread_id, file, target, check)?)
                 },
             )
             .map(|(location, _)| location)

@@ -22,6 +22,7 @@ pub(crate) struct Response {
     pub thread_id: String,
     pub turn_id: Option<String>,
     pub turns_cursor: Option<String>,
+    pub items_cursor: Option<String>,
     pub item_id: Option<String>,
 }
 
@@ -71,6 +72,7 @@ pub(crate) fn item(db: &Reader, request: &Request, control: &ReadControl) -> Res
             thread_id,
             turn_id: if provider == "codex" { turn_id } else { None },
             turns_cursor: None,
+            items_cursor: None,
             item_id: None,
         },
         provider,

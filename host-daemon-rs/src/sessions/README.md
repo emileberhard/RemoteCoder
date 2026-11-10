@@ -253,22 +253,25 @@ end-to-end measurements belong to the work issue.
 
 ## Locate a matching item
 
-`sessions/locate {itemKey}` returns `{threadId,turnId,turnsCursor,itemId}`.
-The last three fields are nullable. `turnsCursor` starts `thread/turns/list`
-ascending at the located turn inclusive. The capability is `conversationSearch`;
-the shell entry point is `sessions locate ITEM_KEY` through the gateway.
+`sessions/locate {itemKey}` returns `{threadId,turnId,turnsCursor,itemId,itemsCursor}`.
+All fields except `threadId` are nullable. `turnsCursor` starts `thread/turns/list`
+ascending at the located turn inclusive; `itemsCursor` starts thread-wide
+`thread/items/list` ascending at its anchor inclusive. The capability is
+`conversationSearch`; the shell entry point is `sessions locate ITEM_KEY`.
 
 The catalog verifies the exact source record before locating. Claude uses the
 existing projection's byte span and content part, preserving provider item and
-turn identities. Native Claude children resolve to the parent conversation's
-spawning Agent call only when its structured result links the exact child agent
-id; otherwise the parent thread is returned with null position fields.
+turn identities. Its item cursor anchors the exact item. Native Claude children
+resolve to the parent conversation's spawning Agent call only when its
+structured result links the exact child agent id; otherwise the parent thread
+is returned with null position fields.
 
 Codex preserves the catalog's native turn when known. At most two occurrence
-pages and one exact `thread/items/read` verify a unique text/item identity.
-The fork's turn-filtered item cursor cannot position thread-wide turns; its
-occurrence cursor can. Tool output and reasoning therefore retain a turn-level
-answer. Locate never resumes or subscribes a thread. Its one-second Query
+pages and one exact `thread/items/read` verify a unique text/item identity. One
+`thread/items/list` filtered to the known turn with limit 1 yields its inclusive
+`backwardsCursor`, which the fork accepts thread-wide. It anchors the first item
+of the turn. Tool output and reasoning can use that turn anchor while `itemId`
+remains null. Locate never resumes or subscribes a thread. Its one-second Query
 deadline and cancel-on-drop path interrupt catalog and Claude work. Native Codex
 reads cannot be cancelled: cancelling releases the waiter while the physical
 read finishes. Two native read permits remain held until the actual reply; a

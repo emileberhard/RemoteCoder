@@ -1456,16 +1456,27 @@ fn locate_maps_exact_parts_and_agent_links_to_inclusive_turn_cursors() {
     let (projection, file) = project(home.path(), "claude_locate", &path, None);
     let offset = serde_json::to_vec(&records[0]).unwrap().len() as u64 + 1;
     let text = projection
-        .locate(&file, &LocateTarget::Item { offset, part: 0 }, &|| Ok(()))
+        .locate(
+            "claude_locate",
+            &file,
+            &LocateTarget::Item { offset, part: 0 },
+            &|| Ok(()),
+        )
         .unwrap()
         .unwrap();
     let tool = projection
-        .locate(&file, &LocateTarget::Item { offset, part: 1 }, &|| Ok(()))
+        .locate(
+            "claude_locate",
+            &file,
+            &LocateTarget::Item { offset, part: 1 },
+            &|| Ok(()),
+        )
         .unwrap()
         .unwrap();
     assert_ne!(text.item_id, tool.item_id);
     let agent = projection
         .locate(
+            "claude_locate",
             &file,
             &LocateTarget::Agent {
                 agent_id: "child".into(),
@@ -1487,9 +1498,24 @@ fn locate_maps_exact_parts_and_agent_links_to_inclusive_turn_cursors() {
         )
         .unwrap();
     assert_eq!(page["data"][0]["id"], agent.turn_id);
+    let items = projection
+        .items_page(
+            &file,
+            &items_params(
+                "claude_locate",
+                None,
+                Some(agent.items_cursor),
+                Some(1),
+                SortDirection::Asc,
+            ),
+        )
+        .unwrap();
+    assert_eq!(items["data"][0]["item"]["id"], agent.item_id);
+
     assert!(
         projection
             .locate(
+                "claude_locate",
                 &file,
                 &LocateTarget::Agent {
                     agent_id: "missing".into()
@@ -1502,6 +1528,7 @@ fn locate_maps_exact_parts_and_agent_links_to_inclusive_turn_cursors() {
     assert!(
         projection
             .locate(
+                "claude_locate",
                 &file,
                 &LocateTarget::Agent {
                     agent_id: "child".into()
