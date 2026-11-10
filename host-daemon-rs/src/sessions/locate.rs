@@ -36,16 +36,24 @@ pub(crate) struct Item {
 
 pub(crate) fn item(db: &Reader, request: &Request, control: &ReadControl) -> Result<Item> {
     ensure!(!control.stopped(), "locate interrupted");
-    let row=db.query_row("SELECT s.thread_id,s.provider,i.turn_id,i.kind,i.source_ref,src.local_path,CASE WHEN s.provider='codex' AND i.kind IN ('user','assistant') THEN i.text END FROM item i JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE i.item_key=?1 AND src.present=1",[&request.item_key],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?))).optional()?;
-    let (thread_id, provider, turn_id, kind, reference, path, text) =
+    let snapshot = db.unchecked_transaction()?;
+    let row=snapshot.query_row("SELECT s.thread_id,s.provider,i.turn_id,i.kind,i.source_ref,src.local_path FROM item i JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE i.item_key=?1 AND src.present=1",[&request.item_key],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?))).optional()?;
+    let (thread_id, provider, turn_id, kind, reference, path) =
         row.context("not_found: catalog item is unavailable")?;
-    let unique_text = if text.is_some() {
-        db.query_row("SELECT count(*)=1 FROM (SELECT 1 FROM item WHERE session_key=(SELECT session_key FROM item WHERE item_key=?1) AND turn_id IS ?2 AND text IS ?3 LIMIT 2)",rusqlite::params![request.item_key,turn_id,text],|r|r.get(0))?
+    let needs_occurrence = provider == "codex" && matches!(kind.as_str(), "user" | "assistant");
+    let (text, unique_text) = if needs_occurrence {
+        let text: Option<String> = snapshot.query_row(
+            "SELECT text FROM item WHERE item_key=?1",
+            [&request.item_key],
+            |r| r.get(0),
+        )?;
+        let unique = snapshot.query_row("SELECT count(*)=1 FROM (SELECT 1 FROM item WHERE session_key=(SELECT session_key FROM item WHERE item_key=?1) AND turn_id IS ?2 AND text IS ?3 LIMIT 2)",rusqlite::params![request.item_key,turn_id,text],|r|r.get(0))?;
+        (text, unique)
     } else {
-        false
+        (None, false)
     };
     let reference: SourceRef = serde_json::from_str(&reference)?;
-    let length = if text.is_some() {
+    let length = if needs_occurrence {
         usize::try_from(reference.length)?
     } else {
         0
@@ -60,7 +68,7 @@ pub(crate) fn item(db: &Reader, request: &Request, control: &ReadControl) -> Res
             Ok(())
         },
     )?;
-    let provider_item_id = if length > 0 {
+    let provider_item_id = if needs_occurrence {
         let record: serde_json::Value = serde_json::from_slice(&raw)?;
         record
             .pointer("/payload/id")

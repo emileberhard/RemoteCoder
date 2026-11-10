@@ -3,7 +3,7 @@ use anyhow::{Result, ensure};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 pub(crate) const DEADLINE: Duration = Duration::from_secs(1);
@@ -31,19 +31,26 @@ impl Request {
         self.validate()?;
         let query = self.query.trim();
         let mut terms = Vec::new();
-        for word in query.split_whitespace() {
+        for word in query
+            .split_whitespace()
+            .filter(|word| has_token_character(word))
+        {
             let word = word.to_lowercase();
             if !terms.contains(&word) {
                 terms.push(word);
             }
         }
         ensure!(terms.len() <= 8, "query accepts at most 8 distinct terms");
-        terms.retain(|term| {
-            term.chars().any(|c| c.is_alphanumeric() || matches!(c, '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}'))
-        });
         ensure!(!terms.is_empty(), "query must contain a searchable word");
         Ok(terms)
     }
+}
+
+fn has_token_character(word: &str) -> bool {
+    static TOKEN_CHAR: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"[\p{L}\p{N}\p{Co}]").expect("valid unicode61 token categories")
+    });
+    TOKEN_CHAR.is_match(word)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -241,4 +248,50 @@ fn excerpt(snippet: &str) -> String {
         result.push('…');
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sessions_conversation_term_categories_match_unicode61() -> Result<()> {
+        let db = rusqlite::Connection::open_in_memory()?;
+        db.execute_batch("CREATE VIRTUAL TABLE token_probe USING fts5(text,tokenize='unicode61 remove_diacritics 2')")?;
+        for (term, searchable) in [
+            ("a", true),
+            ("Malmö", true),
+            ("漢", true),
+            ("9", true),
+            ("Ⅳ", true),
+            ("\u{e016}", true),
+            ("->", false),
+            ("—", false),
+            ("&", false),
+            ("€", false),
+            ("🧰", false),
+            ("\u{0345}", false),
+            ("\"", false),
+        ] {
+            db.execute("DELETE FROM token_probe", [])?;
+            db.execute("INSERT INTO token_probe VALUES(?1)", [term])?;
+            let matches: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM token_probe WHERE token_probe MATCH ?1)",
+                [literal(term, false)],
+                |r| r.get(0),
+            )?;
+            assert_eq!(matches, searchable, "{term:?}");
+            assert_eq!(has_token_character(term), matches, "{term:?}");
+        }
+        assert_eq!(
+            Request {
+                query: "a -> b & c — d $ e -> f -> g -> h".into(),
+                limit: 1
+            }
+            .terms()?
+            .len(),
+            8
+        );
+        Ok(())
+    }
 }
