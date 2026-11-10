@@ -1938,9 +1938,10 @@ the canonical id of the turn before the edited message, taken from the loaded
 history window's order or, for a live turn after a window that reaches the tail,
 from the conversation's turn order, which notification-gap recovery keeps
 contiguous. An unloaded, aliased, unfinished or unknown previous turn offers no
-edit. Once a send that created a thread (new or forked) is accepted,
-`TranscriptRecovery` reconciles that thread's tail, which shows a fork's
-inherited turns and gives a new thread its history window. A fork's origin comes from
+edit. A send that created a thread has `TranscriptRecovery` reconcile that
+thread's tail: a fork once its turn is accepted, which shows its inherited
+turns, and a new thread once its first turn completes, since its history is
+not written before. Either way the conversation gains its history window. A fork's origin comes from
 `forkedFromId` on the `thread/read` the app already makes when it opens a
 conversation (and on fork responses); list rows never carry it, so the header
 cache retains a known origin across list refreshes and an absent one stays

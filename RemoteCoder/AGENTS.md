@@ -760,9 +760,10 @@ entrypoint linked above.
   (`restorableComposerContent`) in a turn the history window holds or a live turn
   after a window that reaches the tail, and either the thread's first message
   with the start of history loaded or after a loaded, canonical, finished turn.
-  A send that creates a thread, new or forked, asks the target to reconcile that
-  thread's tail once its turn is accepted, so a fork shows its inherited turns and
-  a new thread's turns become editable without reopening. It opens a
+  A send that creates a thread asks the target to reconcile that thread's tail:
+  a fork once its turn is accepted, so it shows its inherited turns, and a new
+  thread once its first turn completes, because its history is not written
+  before; its turns then become editable without reopening. It opens a
   new unsent draft holding that text whose `NewChatSetup.forkPoint` names the
   source thread and that previous turn; the first message gets a plain new chat
   with the same folder and settings. Nothing forks on tap: the send passes

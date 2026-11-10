@@ -63,6 +63,27 @@ struct EditAsForkDispatchTests {
         await fixture.close()
     }
 
+    @Test func aNewThreadReadsItsHistoryOnlyOnceItsFirstTurnCompletes() async throws {
+        let fixture = try await StopFixture.open()
+        await fixture.socket.setStartedThread(try ThreadFixture.wire("fresh", updatedAt: 1), model: nil, effort: nil)
+        let conversationID = UUID()
+        let draft = try #require(await fixture.drafts.draft(for: .newChat(UUID())))
+        let session = await fixture.conversations.session(conversationID: conversationID, threadID: nil)
+        try await session.restore()
+        let message = ChatMessage(role: .user, text: "Hello")
+        _ = try await session.submitDurably(message, input: "Hello")
+
+        fixture.dispatcher.startTurn(.init(draft: draft, conversationID: conversationID, userMessageID: message.id, input: "Hello",
+                                           interactionMode: .text, settings: fixture.settings), in: .start)
+        await fixture.dispatcher.drain()
+        #expect(fixture.createdThreadReads.isEmpty)
+
+        fixture.dispatcher.turnCompleted(threadID: "fresh", turnID: "successor")
+        fixture.dispatcher.turnCompleted(threadID: "fresh", turnID: "successor")
+        #expect(fixture.createdThreadReads == ["fresh"])
+        await fixture.close()
+    }
+
     private struct EditDraft {
         let conversationID: UUID
         let draft: ComposerDraft

@@ -106,6 +106,7 @@ final class TurnDispatcher {
     private var queueChangeTails: [String: UUID] = [:]
     private var stoppedTurns: [RunningTurn: StoppedTurn] = [:]
     private var inflightSteers: [RunningTurn: Int] = [:]
+    private var historyAwaitingFirstTurns: Set<RunningTurn> = []
 
     init(host: any TurnDispatchHost, gateway: GatewayClient, turns: TurnRegistry, stops: TurnStops,
          conversations: ConversationSessions, sessionIndex: ConversationIndex, metadata: ConversationMetadataService,
@@ -125,6 +126,7 @@ final class TurnDispatcher {
     @discardableResult
     func cancelAll() -> [Task<Void, Never>] {
         clearStoppedTurns()
+        historyAwaitingFirstTurns.removeAll()
         return tasks.cancelAll() + queueReads.cancelAll()
     }
 
@@ -138,6 +140,7 @@ final class TurnDispatcher {
     func quiesce() {
         acceptsWork = false
         clearStoppedTurns()
+        historyAwaitingFirstTurns.removeAll()
         tasks.quiesce()
         queueReads.quiesce()
     }
@@ -193,6 +196,7 @@ final class TurnDispatcher {
 
     func turnCompleted(threadID: String, turnID: String) {
         let key = Self.normalized(RunningTurn(threadID: threadID, turnID: turnID))
+        if historyAwaitingFirstTurns.remove(key) != nil { host?.readHistory(ofCreatedThread: threadID) }
         stoppedTurns[key]?.completed = true
         continueStoppedTurn(key)
     }
@@ -545,7 +549,7 @@ final class TurnDispatcher {
                 }
 
                 await session.accepted(userMessageID, turnID: turnID)
-                if sessionID == nil { host.readHistory(ofCreatedThread: threadID) }
+                readHistory(ofThreadCreatedBy: target, threadID: threadID, firstTurnID: turnID)
                 logger.notice("turn accepted thread=\(threadID) new=\(sessionID == nil) elapsed=\(String(describing: started.duration(to: .now)))")
                 if sessionID == nil, host.selectionIsCurrent(revision: settings.selectionRevision, threadID: threadID) {
                     await metadata.upsert(sessionID: threadID, modelID: settings.model.id,
@@ -566,6 +570,16 @@ final class TurnDispatcher {
                     guard !isClosed, await session.deliveryIsUncertain(userMessageID) else { return }
                 }
             }
+        }
+    }
+
+    private func readHistory(ofThreadCreatedBy target: ThreadTarget, threadID: String, firstTurnID: String) {
+        switch target {
+        case .existing: return
+        case .fork: host?.readHistory(ofCreatedThread: threadID)
+        case .start:
+            if turns.hasCompleted(threadID: threadID, turnID: firstTurnID) { host?.readHistory(ofCreatedThread: threadID) }
+            else { historyAwaitingFirstTurns.insert(Self.normalized(RunningTurn(threadID: threadID, turnID: firstTurnID))) }
         }
     }
 
