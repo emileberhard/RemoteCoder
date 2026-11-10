@@ -56,7 +56,7 @@ struct ConversationSidebarProjectionTests {
         #expect(miniRow.id != bookRow.id)
     }
 
-    @Test func schemaFivePinsSortAndSearchByConversationTitles() throws {
+    @Test func schemaFivePinsSortByConversationTitles() throws {
         let marks = ConversationMarks(schemaVersion: 5, revision: 1, readBaseline: 0,
             threads: ["a": ThreadMarks(pinned: true), "b": ThreadMarks(pinned: true)])
         let rows = sidebarRows(hosts: [host(mini, name: "Mini", threads: [
@@ -67,15 +67,6 @@ struct ConversationSidebarProjectionTests {
         #expect(rows.map(\.isPinned) == [true, true])
         #expect(rows.map(\.canRename) == [true, true])
         #expect(rows.map(\.canRegenerateName) == [true, true])
-        #expect(ConversationSidebarProjection.matches(title: rows[0].title, workingDirectory: "", hostName: nil, query: "Alpha"))
-    }
-
-    @Test func unloadedPinSearchUsesOnlyKnownTitlesAndHost() {
-        #expect(ConversationSidebarProjection.matches(title: nil, workingDirectory: "", hostName: nil, query: ""))
-        #expect(!ConversationSidebarProjection.matches(title: nil, workingDirectory: "", hostName: nil, query: "unknown"))
-        #expect(!ConversationSidebarProjection.matches(title: nil, workingDirectory: "", hostName: nil, query: "thread-42"))
-        #expect(ConversationSidebarProjection.matches(title: nil, workingDirectory: "", hostName: "Mini", query: "Mini"))
-        #expect(ConversationSidebarProjection.matches(title: "Legacy pin", workingDirectory: "", hostName: nil, query: "legacy"))
     }
 
     @Test func rowsMergeByPinThenRecencyThenStableAddress() throws {
@@ -382,15 +373,6 @@ struct ConversationSidebarProjectionTests {
             fold: .folded, rowCount: 1, unreadCount: 0, liveActivity: nil))))
         #expect(!folded.contains { if case let .row(row) = $0 { row.isAutomation } else { false } })
         #expect(ConversationSidebarSections.sections(of: folded).first { $0.id == "automations" }?.rows.isEmpty == true)
-        arrangement.query = "daily"
-        let searched = items(hosts, arrangement: arrangement)
-        #expect(searched == [.automationsHeader(ConversationSectionSummary(
-            fold: .searching, rowCount: 1, unreadCount: 0, liveActivity: nil)), .row(row)])
-        let foldedHeader = try #require(folded.first { $0.id == .automationsHeader })
-        #expect(searched[0].keepingFold(of: foldedHeader) == .automationsHeader(
-            ConversationSectionSummary(fold: .folded, rowCount: 1, unreadCount: 0, liveActivity: nil)))
-        arrangement.query = "missing"
-        #expect(items(hosts, arrangement: arrangement).isEmpty)
     }
 
     @Test func automationsFollowPinsAndShowTheFiveMostRecentUntilRevealed() throws {
@@ -505,17 +487,11 @@ struct ConversationSidebarProjectionTests {
         #expect(outline(hosts, arrangement: expanded) == ["[settled]"] + (1...30).reversed().map { "s\($0)" })
     }
 
-    @Test func searchCoversTheShelfAndUnreadOnlyLeavesItOut() throws {
+    @Test func unreadOnlyLeavesTheShelfOut() throws {
         let threads = [try thread("fresh", updatedAt: 900_000, preview: "Release plan"),
                        try thread("old", updatedAt: 100, preview: "Release checklist"),
                        try thread("other", updatedAt: 200, preview: "Groceries")]
         let hosts = [host(mini, name: "Mini", threads: threads, marks: marks(schemaVersion: 2, readBaseline: 500))]
-
-        var search = ConversationDrawerArrangement()
-        search.query = "release"
-        #expect(outline(hosts, arrangement: search) == ["fresh", "[settled]", "old"])
-        #expect(items(hosts, arrangement: search).dropLast().last == .settledHeader(ConversationSectionSummary(
-            fold: .searching, rowCount: 1, unreadCount: 0, liveActivity: nil)))
 
         var unreadOnly = ConversationDrawerArrangement(unreadOnly: true)
         unreadOnly.isSettledFolded = false
@@ -656,7 +632,7 @@ struct ConversationSidebarProjectionTests {
             fold: .folded, rowCount: 7, unreadCount: 1, liveActivity: .working)))])
     }
 
-    @Test func foldedPinnedChatsKeepASummaryUntilASearchMatchesThem() throws {
+    @Test func foldedPinnedChatsKeepASummary() throws {
         let threads = [try thread("a", updatedAt: 100), try thread("b", updatedAt: 200), try thread("c", updatedAt: 300)]
         let hosts = [host(mini, name: "Mini", threads: threads, marks: marks(pins: ["a": "Alpha", "b": "Beta"], readBaseline: 150),
                           activityByThreadID: ["a": .working])]
@@ -666,11 +642,6 @@ struct ConversationSidebarProjectionTests {
         #expect(items(hosts, arrangement: folded).first == .pinnedHeader(ConversationSectionSummary(
             fold: .folded, rowCount: 2, unreadCount: 1, liveActivity: .working)))
         #expect(outline(hosts, arrangement: folded) == ["[pinned]", "[chats]", "c"])
-
-        folded.query = "beta"
-        #expect(outline(hosts, arrangement: folded) == ["[pinned]", "b"])
-        #expect(items(hosts, arrangement: folded).first == .pinnedHeader(ConversationSectionSummary(
-            fold: .searching, rowCount: 1, unreadCount: 1, liveActivity: nil)))
     }
 
     @Test func foldedSummariesShowNeedsInputBeforeWorking() throws {
@@ -721,41 +692,6 @@ struct ConversationSidebarProjectionTests {
         let hosts = [host(mini, name: "Mini", threads: [try thread("a", updatedAt: 100), try thread("b", updatedAt: 200)],
                           marks: marks(pins: ["a": "Keep"]), remoteHomePath: "/Users/developer")]
         #expect(outline(hosts, arrangement: ConversationDrawerArrangement(mode: .projects)) == ["[pinned]", "a", "{~/repo}", "b"])
-    }
-
-    @Test func searchMatchesTitleFolderAndVisibleHostIgnoringFoldsAndLimits() throws {
-        let hosts = [
-            host(mini, name: "Mini", threads: [
-                try thread("release", updatedAt: 400, preview: "Release checklist", cwd: "/Users/developer/RemoteCoder"),
-                try thread("api", updatedAt: 300, preview: "API cleanup", cwd: "/Users/developer/work/service"),
-            ], remoteHomePath: "/Users/developer"),
-            host(book, name: "MacBook", threads: [
-                try thread("cafe", updatedAt: 200, preview: "Café menu", cwd: "/Users/developer/site"),
-                try thread("notes", updatedAt: 100, preview: "Old API notes", cwd: "/Users/developer/RemoteCoder"),
-            ], remoteHomePath: "/Users/developer"),
-        ]
-        func matches(_ query: String, _ arrangement: ConversationDrawerArrangement = .init()) -> [String] {
-            var arrangement = arrangement
-            arrangement.query = query
-            return sidebarRows(hosts: hosts, arrangement: arrangement).map(\.address.threadID)
-        }
-
-        #expect(matches("  ") == ["release", "api", "cafe", "notes"])
-        #expect(matches("CAFE") == ["cafe"])
-        #expect(matches("service") == ["api"])
-        #expect(matches("macbook") == ["cafe", "notes"])
-        #expect(matches("mini api") == ["api"])
-        #expect(matches("api remotecoder") == ["notes"])
-        #expect(matches("mini site").isEmpty)
-
-        let folded = ConversationDrawerArrangement(
-            mode: .projects, foldedProjects: ["\(mini.uuidString)|directory|/Users/developer/work/service"], projectRowLimit: 0)
-        #expect(matches("api", folded) == ["api", "notes"])
-
-        let single = [host(mini, name: "Mini", threads: [try thread("only", updatedAt: 1, preview: "Draft")])]
-        var named = ConversationDrawerArrangement()
-        named.query = "mini"
-        #expect(sidebarRows(hosts: single, arrangement: named).isEmpty)
     }
 
     @Test func aFirstTurnUsesCreationTimeRegardlessOfToolActivity() throws {

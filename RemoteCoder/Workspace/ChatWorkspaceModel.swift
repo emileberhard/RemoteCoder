@@ -136,7 +136,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         let launchHost = settings.activeHostID.flatMap { id in settings.hosts.first { $0.id == id } } ?? settings.hosts.first
         windows = [ChatWindowModel(
             id: UUID(), isPrimary: true,
-            selectedTarget: launchHost.map { ExecutionTarget(hostID: $0.id) })]
+            selectedTarget: launchHost.map { ExecutionTarget(hostID: $0.id) }, search: Self.conversationSearch(over: targets))]
         notifications = CompletionNotificationCenter(defaults: defaults, authorization: notificationAuthorization)
         pushTokens = PushTokenSources(defaults: defaults)
         self.voiceCalls = voiceCalls
@@ -476,7 +476,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     private func addWindow(id: UUID) -> ChatWindowModel {
-        let window = ChatWindowModel(id: id, isPrimary: false, selectedTarget: keyWindow.selectedTarget)
+        let window = ChatWindowModel(id: id, isPrimary: false, selectedTarget: keyWindow.selectedTarget,
+                                     search: Self.conversationSearch(over: targets))
         for model in models { installScreen(of: model, in: window) }
         windows.append(window)
         return window
@@ -1027,7 +1028,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             waitingSinceByThreadID: model.waitingSinceByThreadID(in: activity),
             projects: model.conversationList.projects,
             settlementEdits: model.conversationList.settlementEdits,
-            canLoadMore: model.conversationList.canLoadOlder(query: window.drawerQuery),
+            canLoadMore: model.conversationList.canLoadOlder,
             hasDiscardedHeaders: model.conversationList.hasDiscardedHeaders,
             unloadedPins: model.conversationList.unloadedPinnedThreads
         )
@@ -1063,8 +1064,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         let inputs = sidebarInputs(in: window)
         let admitted = ConversationSidebarProjection.admittingLayout(hosts: inputs, layout: layout)
         let drafts = unsentDraftRows(in: window, now: now)
-        let shownDraftCount = window.revealsAllDrafts || !window.drawerQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? drafts.count : min(drafts.count, UnsentDraftRow.collapsedLimit)
+        let shownDraftCount = window.revealsAllDrafts ? drafts.count : min(drafts.count, UnsentDraftRow.collapsedLimit)
         let snapshot = ConversationSidebarSnapshot(
             drafts: Array(drafts.prefix(shownDraftCount)), hiddenDraftCount: drafts.count - shownDraftCount,
             items: sidebarItems(inputs, in: window, layout: admitted, arrangement: drawerArrangement(in: window), now: now),
@@ -1093,7 +1093,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
         return UnsentDraftRow.rows(from: inputs, selected: shown,
                                    showsHostLabels: ConversationSidebarProjection.showsHostLabels(targetCount: models.count),
-                                   query: window.drawerQuery, condensedPaths: condensedPaths, now: now)
+                                   condensedPaths: condensedPaths, now: now)
     }
 
     func isShowingUnsentDraft(_ address: UnsentDraftAddress, in window: ChatWindowModel) -> Bool {
@@ -1168,24 +1168,20 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             condensedPaths: condensedPaths, now: now, dateLabels: sidebarDateLabels)
     }
 
+    private static func conversationSearch(over targets: ExecutionTargetRegistry) -> ConversationSearchSession {
+        ConversationSearchSession { [weak targets] in
+            targets?.models.filter { !$0.isRetired }.map(\.conversationSearchHost) ?? []
+        }
+    }
+
     func captureDrawerOpening(at date: Date, in window: ChatWindowModel) -> ConversationDrawerLayout {
         ConversationSidebarProjection.layout(hosts: sidebarInputs(in: window), at: date)
     }
 
-    func loadOlderHistory(on target: ExecutionTarget, in window: ChatWindowModel) async {
-        guard let owner = model(for: target.hostID), !owner.isRetired else { return }
-        let query = window.drawerQuery
-        let showsHostLabel = ConversationSidebarProjection.showsHostLabels(targetCount: models.count)
-        await owner.conversationList.loadOlder(query: query) { header in
-            ConversationSidebarProjection.matches(title: owner.conversationList.pinnedName(for: header.id) ?? header.displayTitle,
-                workingDirectory: condensedPaths.condensedPath(header.cwd, remoteHomePath: owner.remoteHomePath),
-                hostName: showsHostLabel ? targetName(of: owner) : nil, query: query)
-        }
-    }
-
-    func loadOlderHistory(in window: ChatWindowModel) async {
+    func loadOlderHistory() async {
         await withHostConcurrency(models) { model in
-            await self.loadOlderHistory(on: model.target, in: window)
+            guard !model.isRetired else { return }
+            await model.conversationList.loadOlder()
         }
     }
 
@@ -1200,8 +1196,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             revealedProjects: window.revealedProjects,
             projectRowLimit: SidebarPresentation.projectRowLimit,
             automationRowLimit: window.revealsAllAutomations ? nil : ConversationDrawerArrangement.initialAutomationRowLimit,
-            settledRowLimit: window.settledRowLimit,
-            query: window.drawerQuery
+            settledRowLimit: window.settledRowLimit
         )
     }
 
@@ -1862,6 +1857,22 @@ struct VoiceCallUnavailable: LocalizedError, CustomLocalizedStringResourceConver
 }
 
 private extension ChatTargetModel {
+    var conversationSearchHost: ConversationSearchHost {
+        let directories = directories
+        let gateway = gatewayClient
+        return ConversationSearchHost(
+            id: hostID, name: hostDisplayName, gatewayID: host.gatewayID,
+            headers: conversationList.threads, marks: conversationList.marks,
+            availability: gatewayConnectivity.route == nil ? .unreachable : .connected { params in
+                guard let information = await directories.resolveInformation() else {
+                    throw GatewayClient.ClientError.notConnected
+                }
+                guard information.conversationSearch == true else { return .unsupported }
+                return .results(try await gateway.searchConversations(params))
+            }
+        )
+    }
+
     var fleetLiveActivityHost: FleetLiveActivityService.Host {
         let directories = directories
         let gateway = gatewayClient

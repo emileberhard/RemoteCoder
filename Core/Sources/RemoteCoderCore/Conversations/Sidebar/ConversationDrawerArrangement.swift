@@ -20,7 +20,6 @@ struct ConversationDrawerArrangement: Equatable, Sendable {
     var projectRowLimit: Int?
     var automationRowLimit: Int? = Self.initialAutomationRowLimit
     var settledRowLimit: Int? = Self.initialSettledRowLimit
-    var query = ""
 }
 
 struct ConversationDrawerRank: Equatable, Sendable {

@@ -27,7 +27,36 @@ struct ConversationHistoryList: View, Equatable {
     var body: some View {
         ZStack {
             ThemedSheetBackground()
-            content
+            ZStack {
+                if selection == nil, window.search.isActive {
+                    ConversationSearchList(search: window.search, open: actions.open)
+                } else {
+                    content
+                }
+            }
+            .safeAreaBar(edge: .top, spacing: 0) {
+                header.scrollItemMenuObstruction(rowMenu)
+            }
+            .safeAreaBar(edge: .bottom, spacing: 0) {
+                bottomBar
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var bottomBar: some View {
+        if let selection {
+            selectionBar(selection, items: snapshot?.items ?? [])
+                .scrollItemMenuObstruction(rowMenu)
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+        } else {
+            VStack(spacing: 0) {
+                statusMessages
+                    .animation(reduceMotion ? nil : .spring(duration: 0.3, bounce: 0), value: notice)
+                    .animation(reduceMotion ? nil : .spring(duration: 0.3, bounce: 0), value: undo)
+                DrawerSearchField(search: window.search)
+                    .scrollItemMenuObstruction(rowMenu)
+            }
         }
     }
 
@@ -68,11 +97,11 @@ struct ConversationHistoryList: View, Equatable {
                                 sectionTitle("Automations", systemImage: "clock.arrow.circlepath")
                             }
                         case let .moreAutomations(hiddenCount):
-                            moreButton("Show \(hiddenCount) more") {
+                            DrawerMoreButton(title: "Show \(hiddenCount) more") {
                                 withAnimation(reduceMotion ? nil : .snappy) { window.revealAllAutomations() }
                             }
                         case .chatsHeader:
-                            staticSectionHeader("Chats", systemImage: "bubble.left.and.bubble.right.fill", isFirst: false)
+                            DrawerSectionHeader(title: "Chats", systemImage: "bubble.left.and.bubble.right.fill", isFirst: false)
                         case let .project(header):
                             sectionHeader(header.summary, identifier: "drawer-project-\(header.key)",
                                           isFirst: item.id == firstItemID) {
@@ -81,7 +110,7 @@ struct ConversationHistoryList: View, Equatable {
                                 projectTitle(header)
                             }
                         case let .more(key, hiddenCount):
-                            moreButton("Show \(hiddenCount) more") {
+                            DrawerMoreButton(title: "Show \(hiddenCount) more") {
                                 withAnimation(reduceMotion ? nil : .snappy) { window.reveal(project: key) }
                             }
                         case let .settledHeader(summary):
@@ -92,7 +121,7 @@ struct ConversationHistoryList: View, Equatable {
                                 sectionTitle("Settled", systemImage: ConversationSettlementSymbol.shelf)
                             }
                         case let .moreSettled(hiddenCount):
-                            moreButton("Show \(hiddenCount) more") {
+                            DrawerMoreButton(title: "Show \(hiddenCount) more") {
                                 withAnimation(reduceMotion ? nil : .snappy) { window.revealMoreSettled() }
                             }
                         case let .row(row):
@@ -102,7 +131,7 @@ struct ConversationHistoryList: View, Equatable {
                         }
                     }
                 }
-                ConversationHistoryLoadingFooter(workspace: workspace, window: window, states: snapshot?.hostStates ?? [], open: actions.open)
+                ConversationHistoryLoadingFooter(workspace: workspace, states: snapshot?.hostStates ?? [], open: actions.open)
                     .fontWeight(.medium)
                     .foregroundStyle(themeStore.theme.colors.accentTint)
                     .buttonStyle(ResponsiveButtonStyle(feedback: .disclosure, pressedScale: 0.99, pressedOpacity: 0.8))
@@ -126,20 +155,6 @@ struct ConversationHistoryList: View, Equatable {
             isScrolling = false
             swipedEdges = []
             onInteractionChanged(false)
-        }
-        .safeAreaBar(edge: .top, spacing: 0) {
-            header.scrollItemMenuObstruction(rowMenu)
-        }
-        .safeAreaBar(edge: .bottom, spacing: 0) {
-            if let selection {
-                selectionBar(selection, items: items)
-                    .scrollItemMenuObstruction(rowMenu)
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-            } else {
-                statusMessages
-                    .animation(reduceMotion ? nil : .spring(duration: 0.3, bounce: 0), value: notice)
-                    .animation(reduceMotion ? nil : .spring(duration: 0.3, bounce: 0), value: undo)
-            }
         }
         .refreshable { await workspace.refreshAllHosts() }
     }
@@ -186,7 +201,7 @@ struct ConversationHistoryList: View, Equatable {
 
     @ViewBuilder
     private func draftsSection(_ drafts: [UnsentDraftRow], above firstItem: ConversationSidebarItem?) -> some View {
-        staticSectionHeader("Drafts", systemImage: "square.and.pencil", isFirst: true)
+        DrawerSectionHeader(title: "Drafts", systemImage: "square.and.pencil", isFirst: true)
         ForEach(drafts) { draft in
             UnsentDraftRowView(row: draft, open: { actions.openDraft(draft.address) },
                                discard: { actions.discardDraft(draft.address) })
@@ -202,12 +217,12 @@ struct ConversationHistoryList: View, Equatable {
                 .transition(.opacity)
         }
         if let hidden = snapshot?.hiddenDraftCount, hidden > 0 {
-            moreButton("Show \(hidden) more") {
+            DrawerMoreButton(title: "Show \(hidden) more") {
                 withAnimation(reduceMotion ? nil : .snappy) { window.revealAllDrafts() }
             }
         }
         if case .row? = firstItem {
-            staticSectionHeader("Chats", systemImage: "bubble.left.and.bubble.right.fill", isFirst: false)
+            DrawerSectionHeader(title: "Chats", systemImage: "bubble.left.and.bubble.right.fill", isFirst: false)
         }
     }
 
@@ -220,38 +235,7 @@ struct ConversationHistoryList: View, Equatable {
         onInteractionChanged(isScrolling || !swipedEdges.isEmpty || rowMenu.liftedID != nil)
     }
 
-    private func staticSectionHeader(_ title: LocalizedStringKey, systemImage: String, isFirst: Bool) -> some View {
-        sectionTitle(title, systemImage: systemImage)
-            .font(.subheadline.weight(.semibold))
-            .staticSectionHeaderFrame(isFirst: isFirst)
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
-    }
-
-    @ViewBuilder
     private func sectionHeader(_ summary: ConversationSectionSummary, identifier: String,
-                               isFirst: Bool, toggle: @escaping () -> Void,
-                               @ViewBuilder title: () -> some View) -> some View {
-        if summary.fold == .searching {
-            HStack(spacing: 8) {
-                title()
-                Spacer(minLength: 8)
-                Text(summary.rowCount, format: .number)
-                    .font(.footnote.weight(.medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-            }
-            .font(.subheadline.weight(.semibold))
-            .staticSectionHeaderFrame(isFirst: isFirst)
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
-            .accessibilityIdentifier(identifier)
-        } else {
-            foldableHeader(summary, identifier: identifier, isFirst: isFirst, toggle: toggle, title: title)
-        }
-    }
-
-    private func foldableHeader(_ summary: ConversationSectionSummary, identifier: String,
                                 isFirst: Bool, toggle: @escaping () -> Void,
                                 @ViewBuilder title: () -> some View) -> some View {
         let isFolded = summary.fold == .folded
@@ -338,25 +322,6 @@ struct ConversationHistoryList: View, Equatable {
         let state = isFolded ? "Collapsed" : "Expanded"
         let chats = "\(state), \(summary.rowCount) \(summary.rowCount == 1 ? "chat" : "chats")"
         return isFolded && summary.unreadCount > 0 ? "\(chats), \(summary.unreadCount) unread" : chats
-    }
-
-    private func moreButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
-                    .frame(width: headerIconWidth, alignment: .center)
-                    .accessibilityHidden(true)
-                Text(title)
-                    .font(.footnote.weight(.semibold))
-            }
-            .foregroundStyle(themeStore.theme.colors.accentTint)
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget, alignment: .leading)
-            .contentShape(.rect)
-        }
-        .padding(.vertical, -6)
-        .buttonStyle(ResponsiveButtonStyle(feedback: .disclosure, pressedScale: 0.99, pressedOpacity: 0.8))
     }
 
     private func toggleSelection(_ address: ConversationAddress) {
@@ -575,13 +540,4 @@ extension ConversationHistoryList {
 private enum DrawerListMetrics {
     static let rowSpacing: CGFloat = 10
     static let cardCornerRadius: CGFloat = 16
-}
-
-private extension View {
-    func staticSectionHeaderFrame(isFirst: Bool) -> some View {
-        frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.top, isFirst ? 6 : 14)
-            .padding(.bottom, 2)
-    }
 }

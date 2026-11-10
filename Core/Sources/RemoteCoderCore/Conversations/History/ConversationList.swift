@@ -64,10 +64,7 @@ final class ConversationList {
     @ObservationIgnored private var locallyChangedDuringRefresh: Set<String> = []
     @ObservationIgnored private var protectedThreadIDs: Set<String> = []
     @ObservationIgnored private var browsedThreadIDs: Set<String> = []
-    @ObservationIgnored private var searchContinuation = ConversationListContinuation()
-    @ObservationIgnored private var searchQuery = ""
     @ObservationIgnored private var olderProvider = AgentProvider.codex
-    @ObservationIgnored private var searchProvider = AgentProvider.codex
     @ObservationIgnored private var listReadGeneration: UInt64 = 0
     @ObservationIgnored private var headerRevision: UInt64 = 0
     @ObservationIgnored private var projectReadGeneration: UInt64 = 0
@@ -582,14 +579,9 @@ final class ConversationList {
                 let initializesCodex = intent == .replaceCoverage || continuation.codex == .notLoaded || reopensCodex
                 let initializesClaude = intent == .replaceCoverage || continuation.claude == .notLoaded || reopensClaude
                 if intent == .replaceCoverage {
-                    searchQuery = ""
-                    searchContinuation = ConversationListContinuation()
                     browsedThreadIDs = []
                     olderProvider = .codex
-                    searchProvider = .codex
                 }
-                if reopensCodex, searchContinuation.codex == .end { searchContinuation.codex = .notLoaded }
-                if reopensClaude, searchContinuation.claude == .end { searchContinuation.claude = .notLoaded }
                 if complete, !result.continuation.canLoad { hasDiscardedHeaders = false }
                 applyRetained(committed, promoting: intent == .replaceCoverage || browsedThreadIDs.isEmpty ? Set(fetched.map(\.id)) : [])
                 let admitted = Set(threads.map(\.id)).union(locallyChangedDuringRefresh)
@@ -723,27 +715,14 @@ final class ConversationList {
         }.sorted { $0.id < $1.id }
     }
 
-    func canLoadOlder(query: String) -> Bool {
-        guard !headerReadsRetired else { return false }
-        let query = query.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return query.isEmpty ? continuation.canLoad : query != searchQuery || searchContinuation.canLoad
-    }
+    var canLoadOlder: Bool { !headerReadsRetired && continuation.canLoad }
 
-    func loadOlder(query: String, including matches: (ConversationHeader) -> Bool) async {
+    func loadOlder() async {
         await loadPersistedThreadsIfNeeded()
         guard !headerReadsRetired, activeRefreshRequest == nil, !Task.isCancelled else { return }
-        let query = query.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        if !query.isEmpty, query != searchQuery {
-            searchQuery = query
-            searchContinuation = ConversationListContinuation()
-            searchProvider = .codex
-            listReadGeneration &+= 1
-            isLoadingOlder = false
-        }
-        guard !isLoadingOlder, canLoadOlder(query: query) else { return }
-        let positions = query.isEmpty ? continuation : searchContinuation
-        let preferred = query.isEmpty ? olderProvider : searchProvider
-        let provider: AgentProvider = if preferred == .codex { positions.codex.canLoad ? .codex : .claude }
+        guard !isLoadingOlder, canLoadOlder else { return }
+        let positions = continuation
+        let provider: AgentProvider = if olderProvider == .codex { positions.codex.canLoad ? .codex : .claude }
             else { positions.claude.canLoad ? .claude : .codex }
         let position = provider == .codex ? positions.codex : positions.claude
         listReadGeneration &+= 1
@@ -755,8 +734,7 @@ final class ConversationList {
             let result = try await service.fetchOlderPage(provider: provider, position: position, knownHeaders: threads)
             try Task.checkCancellation()
             guard !headerReadsRetired, generation == listReadGeneration else { return }
-            let fetched = (query.isEmpty ? result.threads : result.threads.filter(matches))
-                .filter { !locallyChangedDuringRefresh.contains($0.id) }
+            let fetched = result.threads.filter { !locallyChangedDuringRefresh.contains($0.id) }
             let previousDates = Dictionary(uniqueKeysWithValues: threads.map { ($0.id, $0.lastTurnCompletedAt) })
             let headers = fetched.map { thread in
                 var header = thread
@@ -768,8 +746,8 @@ final class ConversationList {
             var advanced = positions
             if provider == .codex { advanced.codex = result.position } else { advanced.claude = result.position }
             let next: AgentProvider = provider == .codex ? .claude : .codex
-            if query.isEmpty { continuation = advanced; olderProvider = next }
-            else { searchContinuation = advanced; searchProvider = next }
+            continuation = advanced
+            olderProvider = next
             errorMessage = result.unavailable.isEmpty ? nil : "Some completion times couldn't be loaded; keeping their last known values."
             await threadStore.save(snapshot: nextHeaderSnapshot())
             guard !headerReadsRetired, generation == listReadGeneration, !Task.isCancelled else { return }
@@ -857,12 +835,7 @@ final class ConversationList {
         if case let .reading(id) = headerRecovery, retained.threads.contains(where: { $0.id == id }) {
             headerRecovery = .superseded
         }
-        let retainedIDs = Set(retained.threads.map(\.id))
-        if !searchQuery.isEmpty, !searchContinuation.canLoad,
-           !browsedThreadIDs.isSubset(of: retainedIDs) {
-            searchContinuation = ConversationListContinuation()
-        }
-        browsedThreadIDs.formIntersection(retainedIDs)
+        browsedThreadIDs.formIntersection(retained.threads.map(\.id))
         hasDiscardedHeaders = hasDiscardedHeaders || retained.discarded
         let directories = Set(retained.threads.map(\.cwd))
         if directories != Set(threads.map(\.cwd)) { projectReadGeneration &+= 1 }

@@ -66,11 +66,6 @@ struct ConversationHistoryView: View {
                     receive(arranged.snapshot)
                 }
             }
-            .task(id: SearchRequest(isVisible: isVisible, query: window.drawerQuery)) {
-                guard isVisible, !window.drawerQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
-                await workspace.loadOlderHistory(in: window)
-            }
             .task(id: notice) {
                 guard notice != nil else { return }
                 do { try await Task.sleep(for: .seconds(3)) } catch { return }
@@ -163,11 +158,6 @@ struct ConversationHistoryView: View {
     private struct Arrangement: Equatable {
         let isVisible: Bool
         let windowActivations: Int
-    }
-
-    private struct SearchRequest: Equatable {
-        let isVisible: Bool
-        let query: String
     }
 
     private var presented: ConversationSidebarSnapshot? {

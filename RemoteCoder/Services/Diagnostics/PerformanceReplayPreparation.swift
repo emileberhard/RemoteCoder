@@ -28,12 +28,12 @@ enum PerformanceReplayPreparation {
             }
             try await Task.sleep(for: .milliseconds(100))
         }
-        for _ in 0..<64 where model.conversationList.canLoadOlder(query: "") {
+        for _ in 0..<64 where model.conversationList.canLoadOlder {
             try Task.checkCancellation()
             try await settleSidebar()
             let count = model.conversationList.threads.count
             let position = model.conversationList.continuation
-            await model.conversationList.loadOlder(query: "", including: { _ in true })
+            await model.conversationList.loadOlder()
             try await settleSidebar()
             guard model.conversationList.threads.count != count || model.conversationList.continuation != position else {
                 throw PerformanceReplayScenario.Failure.invalidScenario("sidebar traversal made no progress; position=\(String(describing: model.conversationList.continuation)), failure=\(model.conversationList.errorMessage ?? "none")")

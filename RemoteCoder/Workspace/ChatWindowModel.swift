@@ -13,7 +13,7 @@ final class ChatWindowModel {
     private(set) var isHistoryDrawerOpen = false
     var showsHistoryDrawer: Bool { isHistoryDrawerOpen && isVisible }
     @ObservationIgnored private var historyDrawerOverlaysTranscript = true
-    var drawerQuery = ""
+    let search: ConversationSearchSession
     private(set) var revealedProjects: Set<String> = []
     private(set) var revealsAllDrafts = false
     private(set) var revealsAllAutomations = false
@@ -29,10 +29,11 @@ final class ChatWindowModel {
 
     var composerFocusCompletion: Task<Void, Never>? { focusTasks.task(.composer) }
 
-    init(id: UUID, isPrimary: Bool, selectedTarget: ExecutionTarget?) {
+    init(id: UUID, isPrimary: Bool, selectedTarget: ExecutionTarget?, search: ConversationSearchSession) {
         self.id = id
         self.isPrimary = isPrimary
         self.selectedTarget = selectedTarget
+        self.search = search
     }
 
     var logID: String { String(id.uuidString.prefix(8)) }
@@ -73,6 +74,7 @@ final class ChatWindowModel {
 
     func detach() {
         cancelComposerFocus()
+        search.cancel()
         isAttached = false
     }
 

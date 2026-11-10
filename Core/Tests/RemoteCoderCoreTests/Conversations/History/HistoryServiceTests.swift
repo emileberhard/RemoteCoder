@@ -21,7 +21,7 @@ struct HistoryServiceTests {
             cache: HistoryPageCache(directory: directory.appending(path: "pages"))), marksRemote: gateway,
             hostID: hostID, threadStore: store,
             marksStore: ConversationMarksStore(directory: directory), defaults: temporary.defaults)
-        let loading = Task { await model.loadOlder(query: "", including: { _ in true }) }
+        let loading = Task { await model.loadOlder() }
         await gateway.waitForHeldRead()
         model.retireHeaderReads()
         #expect(!loading.isCancelled)
@@ -49,23 +49,19 @@ struct HistoryServiceTests {
             hostID: hostID, threadStore: ConversationHeaderStore(hostID: hostID, directory: directory),
             marksStore: ConversationMarksStore(directory: directory), defaults: temporary.defaults)
         await model.refresh()
-        #expect(!model.canLoadOlder(query: ""))
-        for _ in 0..<2 { await model.loadOlder(query: "claude", including: { _ in true }) }
-        #expect(!model.canLoadOlder(query: "claude"))
+        #expect(!model.canLoadOlder)
         let new = try (0..<61).map { try header("claude_new-\($0)", time: 2_000 - $0) }
         await gateway.setClaudeHeaders(new + old)
         await model.refresh(reason: "stale-auto")
-        #expect(model.canLoadOlder(query: ""))
-        #expect(model.canLoadOlder(query: "claude"))
+        #expect(model.canLoadOlder)
         #expect(model.header(id: new[60].id) == nil)
         #expect(Set(old.map(\.id)).isSubset(of: Set(model.threads.map(\.id))))
-        for _ in 0..<2 { await model.loadOlder(query: "", including: { _ in true }) }
+        for _ in 0..<2 { await model.loadOlder() }
         #expect(model.header(id: new[60].id) != nil)
-        #expect(!model.canLoadOlder(query: ""))
+        #expect(!model.canLoadOlder)
     }
 
-    @MainActor @Test(arguments: [false, true])
-    func incrementalRefreshPreservesOlderAndSearchProgress(_ searching: Bool) async throws {
+    @MainActor @Test func incrementalRefreshPreservesOlderProgress() async throws {
         let hostID = UUID()
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
@@ -80,8 +76,7 @@ struct HistoryServiceTests {
             hostID: hostID, threadStore: ConversationHeaderStore(hostID: hostID, directory: directory),
             marksStore: ConversationMarksStore(directory: directory), defaults: temporary.defaults)
         await model.refresh()
-        let query = searching ? "A" : ""
-        for _ in 0..<2 { await model.loadOlder(query: query, including: { _ in true }) }
+        for _ in 0..<2 { await model.loadOlder() }
         let kept = Set(model.threads.map(\.id))
         let boundary = try #require(await gateway.claudeCursors.last)
         let limit = try #require(await gateway.claudeLimits.last)
@@ -89,7 +84,7 @@ struct HistoryServiceTests {
         await model.refresh(reason: "stale-auto")
         #expect(kept.isSubset(of: Set(model.threads.map(\.id))))
         let before = await gateway.claudeCursors.count
-        for _ in 0..<2 { await model.loadOlder(query: query, including: { _ in true }) }
+        for _ in 0..<2 { await model.loadOlder() }
         let continued = await gateway.claudeCursors
         try #require(continued.count > before)
         #expect(continued[before] == String(expected))
@@ -153,45 +148,6 @@ struct HistoryServiceTests {
         #expect(model.unloadedPinnedThreads.count == 40)
     }
 
-    @MainActor @Test func replacingRecentCoverageLetsTheSameExhaustedQueryRediscoverAnEvictedMatch() async throws {
-        let temporary = TemporaryHostStorage()
-        defer { temporary.cleanUp() }
-        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let gateway = HistoryGatewayFixture()
-        var headers = try (0..<1_100).map { try header("claude_\($0)", time: 2_000 - $0) }
-        headers[1_099].name = "RareMatch"
-        await gateway.setClaudeHeaders(headers)
-        await gateway.setCodexHeaders([])
-        let hostID = UUID()
-        let store = ConversationHeaderStore(hostID: hostID, directory: directory)
-        await store.save(snapshot: .init(threads: headers.map(ConversationHeader.init), lastSuccessfulRefreshAt: nil, revision: 1))
-        let model = ConversationList(service: GatewayHistoryService(gateway: gateway,
-            cache: HistoryPageCache(directory: directory.appending(path: "pages"))), marksRemote: gateway,
-            hostID: hostID, threadStore: store,
-            marksStore: ConversationMarksStore(directory: directory), defaults: temporary.defaults)
-        for _ in 0..<10 {
-            await model.loadOlder(query: "RareMatch", including: { $0.displayTitle == "RareMatch" })
-        }
-        #expect(model.header(id: headers[1_099].id) != nil)
-        #expect(!model.canLoadOlder(query: "RareMatch"))
-        let newer = try (0..<400).map { try header("claude_new-\($0)", time: 3_000 - $0) }
-        await gateway.setClaudeHeaders(newer + headers)
-        await model.manualRefresh()
-        #expect(model.header(id: headers[1_099].id) == nil)
-        #expect(model.hasDiscardedHeaders)
-        try #require(model.canLoadOlder(query: "RareMatch"))
-        let before = await gateway.claudeCursors.count
-        for _ in 0..<12 {
-            await model.loadOlder(query: "RareMatch", including: { $0.displayTitle == "RareMatch" })
-        }
-        let cursors = await gateway.claudeCursors
-        try #require(cursors.count > before)
-        #expect(cursors[before] == nil)
-        #expect(model.header(id: headers[1_099].id) != nil)
-        #expect(!model.canLoadOlder(query: "RareMatch"))
-    }
-
     @MainActor @Test func aCompleteRecentReadClearsDiscardedCoverageAndPersistsThatChange() async throws {
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
@@ -214,7 +170,7 @@ struct HistoryServiceTests {
         await model.refresh()
         #expect(model.threads.map(\.id) == [recent.id])
         #expect(!model.hasDiscardedHeaders)
-        #expect(!model.canLoadOlder(query: ""))
+        #expect(!model.canLoadOlder)
         await model.flushHeaders()
         let loaded = await ConversationHeaderStore(hostID: hostID, directory: directory).load()
         #expect(!loaded.hasDiscardedHeaders)
@@ -240,7 +196,7 @@ struct HistoryServiceTests {
         let model = ConversationList(service: GatewayHistoryService(gateway: gateway,
             cache: HistoryPageCache(directory: directory.appending(path: "pages"))), marksRemote: gateway,
             hostID: hostID, threadStore: store, marksStore: marksStore, defaults: temporary.defaults)
-        await model.loadOlder(query: "", including: { _ in true })
+        await model.loadOlder()
         #expect(model.header(id: browsed.id) == nil)
         #expect(model.hasDiscardedHeaders)
         #expect(model.unloadedPinnedThreads.map(\.id) == [pins[0].id])
@@ -299,14 +255,13 @@ struct HistoryServiceTests {
 
     }
 
-    @MainActor @Test func boundedHeaderWindowReloadsPinsAndLiveIDsAndSearchFindsAnEvictedOlderMatch() async throws {
+    @MainActor @Test func boundedHeaderWindowReloadsPinsAndLiveIDs() async throws {
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let gateway = HistoryGatewayFixture()
-        var headers = try (0..<1_500).map { try header("claude_\($0)", time: 2_000 - $0) }
-        headers[1_499].name = "RareMatch old conversation"
+        let headers = try (0..<1_500).map { try header("claude_\($0)", time: 2_000 - $0) }
         await gateway.setClaudeHeaders(headers)
         let hostID = UUID()
         let store = ConversationHeaderStore(hostID: hostID, directory: directory)
@@ -329,16 +284,7 @@ struct HistoryServiceTests {
         #expect(model.unloadedPinnedThreads.isEmpty)
         #expect(model.header(id: headers[1_499].id) == nil)
         #expect(model.continuation.claude == .next("60"))
-        for _ in 0..<12 {
-            await model.loadOlder(query: "rarematch", including: { $0.displayTitle.localizedStandardContains("rarematch") })
-            #expect(model.threads.count <= ConversationHeaderRetention.countLimit)
-        }
-        #expect(model.header(id: headers[1_499].id)?.name == "RareMatch old conversation")
-        #expect(model.header(id: pinID) != nil)
-        #expect(model.header(id: liveID) != nil)
-        #expect(!model.canLoadOlder(query: "rarematch"))
-        #expect(model.canLoadOlder(query: ""))
-        #expect(model.continuation.claude == .next("60"))
+        #expect(model.canLoadOlder)
         #expect(await gateway.pageReads == 0)
         await model.flushHeaders()
         let reloaded = await ConversationHeaderStore(hostID: hostID, directory: directory).load()
