@@ -2110,7 +2110,10 @@ drain owner can run. Each thread's drain waits only for that thread's restart
 recovery, and an entry whose input was written is settled from the session
 transcript, never requeued blindly.
 `thread/queue/changed` is stored like other thread notifications; clients read
-`thread/queue/list` after it, on reconnect and after relaunch.
+`thread/queue/list` after it, on reconnect and after relaunch. The app edits a
+queued message with `thread/queue/delete` alone, saving the text to the draft
+before dropping its write-ahead receipt, so both providers need no update or
+reorder RPC.
 `host-daemon-rs/AGENTS.md` (*Gateway RPCs*, and *Claude provider* for the
 Claude queue) owns the contract.
 

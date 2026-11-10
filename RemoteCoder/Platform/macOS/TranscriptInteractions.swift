@@ -19,6 +19,9 @@ struct ChatBubbleMenu: View {
             if message.delivery == .queued, let sendNow = deliveryActions.sendNow {
                 Button("Send Now") { sendNow(message) }
             }
+            if message.delivery == .queued, message.restorableComposerContent != nil {
+                Button("Edit") { deliveryActions.edit(message) }
+            }
             Button(message.delivery == .queued ? "Remove from Queue" : "Remove", role: .destructive) {
                 deliveryActions.remove(message)
             }

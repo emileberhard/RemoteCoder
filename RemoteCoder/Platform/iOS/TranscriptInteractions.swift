@@ -17,6 +17,9 @@ struct ChatBubbleMenu: View {
                     Label("Send Now", systemImage: "arrow.up.circle")
                 }
             }
+            if message.delivery == .queued, message.restorableComposerContent != nil {
+                Button("Edit", systemImage: "pencil") { deliveryActions.edit(message) }
+            }
             Button(role: .destructive) {
                 deliveryActions.remove(message)
             } label: {

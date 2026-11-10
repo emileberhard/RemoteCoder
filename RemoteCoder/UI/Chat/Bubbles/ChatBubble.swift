@@ -316,6 +316,7 @@ private struct ChatBubbleOwnedPreview: View {
 
 struct MessageDeliveryActions {
     let sendNow: ((ChatMessage) -> Void)?
+    let edit: (ChatMessage) -> Void
     let remove: (ChatMessage) -> Void
 }
 

@@ -377,23 +377,46 @@ final class TurnDispatcher {
     }
 
     func removeQueued(messageID: UUID, conversationID: UUID, threadID: String) {
+        deleteQueued(messageID: messageID, conversationID: conversationID, threadID: threadID) {}
+    }
+
+    func editQueued(messageID: UUID, conversationID: UUID, threadID: String,
+                    content: ComposerDocumentContent, into draft: ComposerDraft) {
+        deleteQueued(messageID: messageID, conversationID: conversationID, threadID: threadID) { [drafts] in
+            try await drafts.restoreMessage(content, to: draft)
+        }
+    }
+
+    private func deleteQueued(messageID: UUID, conversationID: UUID, threadID: String,
+                              keep: @escaping @MainActor () async throws -> Void) {
         guard let host, !isClosed else { return }
         let feedback = host.feedbackForCurrentConversation()
         changeQueue(threadID: threadID) { [self] in
             let session = await conversations.session(conversationID: conversationID, threadID: threadID)
             guard let queuedSubmissionID = await session.queuedSubmissionID(for: messageID) else { return }
+            let deleted: Bool
             do {
-                if try await gateway.deleteQueuedMessage(threadID: threadID, queuedSubmissionID: queuedSubmissionID) {
-                    await session.queueRemoved(messageID)
-                } else {
-                    reconcileQueue(threadID: threadID)
-                }
+                deleted = try await gateway.deleteQueuedMessage(threadID: threadID, queuedSubmissionID: queuedSubmissionID)
             } catch is CancellationError {
                 reconcileQueue(threadID: threadID)
+                return
             } catch {
                 feedback(.error)
                 await reportQueueFailure(error, messageID: messageID, session: session, conversationID: conversationID)
                 reconcileQueue(threadID: threadID)
+                return
+            }
+            guard deleted else {
+                reconcileQueue(threadID: threadID)
+                return
+            }
+            do {
+                try await keep()
+                await session.queueRemoved(messageID)
+            } catch {
+                feedback(.error)
+                await session.queueEntryNotRestored(messageID,
+                    reason: "Removed from the queue, but the draft could not keep it: \(error.localizedDescription)")
             }
         }
     }

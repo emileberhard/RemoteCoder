@@ -721,6 +721,13 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
                                       settings: turnSettings(model: model))
     }
 
+    func editQueuedMessage(_ message: ChatMessage) {
+        guard target.acceptsWork, message.delivery == .queued, let threadID = activeSessionID,
+              let draft = currentDraft, let content = message.restorableComposerContent else { return }
+        target.dispatcher.editQueued(messageID: message.id, conversationID: currentConversationID, threadID: threadID,
+                                     content: content, into: draft)
+    }
+
     func removeMessage(_ message: ChatMessage) {
         switch message.delivery {
         case .queued:

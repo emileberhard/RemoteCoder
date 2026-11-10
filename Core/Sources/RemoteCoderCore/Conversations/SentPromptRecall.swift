@@ -7,20 +7,34 @@ enum SentPromptRecall {
             case .historyEdge:
                 return nil
             case .message(let message) where message.role == .user && message.questionReplies == nil:
-                if let inline = message.inlineContent { return inline.document }
-                let pasted = message.attachments.compactMap { attachment -> String? in
-                    if case .text(let text) = attachment.content { return text }
-                    return nil
-                }
-                let text = ([message.text] + pasted).filter { !$0.isEmpty }.joined(separator: "\n\n")
-                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      message.text != ChatMessage.imageAttachmentText,
-                      message.text != ChatMessage.fileAttachmentText else { return nil }
-                return .init(runs: [.text(text)])
+                return message.composerContent
             default:
                 continue
             }
         }
         return nil
+    }
+}
+
+extension ChatMessage {
+    var composerContent: ComposerDocumentContent? {
+        guard role == .user, questionReplies == nil else { return nil }
+        if let inlineContent { return inlineContent.document }
+        let pasted = attachments.compactMap { attachment -> String? in
+            if case .text(let text) = attachment.content { return text }
+            return nil
+        }
+        let text = ([text] + pasted).filter { !$0.isEmpty }.joined(separator: "\n\n")
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              self.text != Self.imageAttachmentText,
+              self.text != Self.fileAttachmentText else { return nil }
+        return .init(runs: [.text(text)])
+    }
+
+    var restorableComposerContent: ComposerDocumentContent? {
+        guard visualReplies.isEmpty, attachments.allSatisfy({ attachment in
+            if case .text = attachment.content { true } else { false }
+        }) else { return nil }
+        return composerContent
     }
 }

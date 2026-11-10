@@ -685,9 +685,17 @@ entrypoint linked above.
   unconfirmed until listed. The canonical `userMessage` with the matching
   `clientId` moves the row into its turn as an ordinary first message. Stop
   pauses the queue (both providers skip dispatch after an interrupt); a queued row
-  offers Send Now (`thread/queue/start`, only while no turn runs) and Remove
-  from Queue (`thread/queue/delete`). A held Claude queue's reason reads
-  "Paused: …" once, on the first listed local row without its own error.
+  offers Send Now (`thread/queue/start`, only while no turn runs), Edit and
+  Remove from Queue (`thread/queue/delete`). Edit (`TurnDispatcher.editQueued`,
+  offered only for `ChatMessage.restorableComposerContent`, so never for images
+  or files) deletes the entry first; after the acknowledgement it appends the
+  text to the draft after a blank line (the whole draft when nothing is typed)
+  and saves it, and only then drops the row. A delete that finds the entry
+  already started reconciles and leaves the composer alone; a draft that cannot
+  take the text turns the row "Not sent". A kill before the save leaves the
+  receipt, which restores as an "Unconfirmed" row with its text. A held Claude
+  queue's reason reads "Paused: …" once, on the first listed local row without
+  its own error.
 - A delivery failure stays on its own row: the label carries the submission's
   `deliveryError`, including a failed Send Now or Remove from Queue on a queued
   row. The transcript has no separate error rows; restore drops the local
@@ -1060,7 +1068,9 @@ entrypoint linked above.
     Shift- or Option-Return inserts a newline, and Return never sends while IME
     text is marked. Up Arrow in an empty field inserts the conversation's last
     sent prompt for editing (`SentPromptRecall`: nothing when that prompt is
-    not loaded or contained only image/file attachments). v2 recalls restore
+    not loaded or contained only image/file attachments). `ChatMessage.composerContent`
+    is the one message-to-composer conversion, and `restorableComposerContent`
+    the one rule for a message the composer holds in full. v2 recalls restore
     inline chips; earlier pasted-text attachments expand as plain text.
     Esc stops a stoppable turn through the
     same `stopTurn` path as ⌘. and Stop; otherwise it continues up the responder

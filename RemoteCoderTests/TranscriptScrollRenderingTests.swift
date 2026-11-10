@@ -488,7 +488,7 @@ private struct TranscriptScrollFixtureView: View {
     var body: some View {
         ChatTranscriptView(items: fixture.items, readingPosition: fixture.readingPosition, rowPresentations: fixture.rowPresentations, readingScope: fixture.readingScope, retainedSurfaces: nil, renderedMessages: fixture.store, forkableMessageIDs: [],
             scrollToRow: fixture.request,
-            onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, remove: { _ in }),
+            onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, edit: { _ in }, remove: { _ in }),
             onToggleTimeline: { _ in }, questionCard: { _ in EmptyView() },
             onRefreshCompaction: {},
             onBackgroundTap: {}, historyEdgeStatus: [:], canPrefetchOlderHistory: true, canLoadHistory: true, onLoadHistory: { _ in nil }, onShowLatest: {},
@@ -601,7 +601,7 @@ private struct HistoryPagingRenderView: View {
     let fixture: HistoryPagingRenderFixture
     var body: some View {
         ChatTranscriptView(items: fixture.items, readingPosition: fixture.readingPosition, rowPresentations: fixture.rowPresentations, readingScope: fixture.readingScope, retainedSurfaces: nil, renderedMessages: fixture.store, forkableMessageIDs: [],
-            scrollToRow: fixture.request, onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, remove: { _ in }),
+            scrollToRow: fixture.request, onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, edit: { _ in }, remove: { _ in }),
             onToggleTimeline: { _ in }, questionCard: { _ in EmptyView() },
             onBackgroundTap: {}, historyEdgeStatus: fixture.historyEdgeStatus, canPrefetchOlderHistory: true, canLoadHistory: true, onLoadHistory: fixture.load, onShowLatest: {},
             onFirstContent: {}, bottomBar: EmptyView?.none)
@@ -685,7 +685,7 @@ private struct UnreadyHistoryRenderView: View {
     let fixture: UnreadyHistoryRenderFixture
     var body: some View {
         ChatTranscriptView(items: fixture.items, readingPosition: fixture.readingPosition, rowPresentations: fixture.rowPresentations, readingScope: fixture.readingScope, retainedSurfaces: nil, renderedMessages: fixture.store, forkableMessageIDs: [],
-            scrollToRow: nil, onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, remove: { _ in }),
+            scrollToRow: nil, onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, edit: { _ in }, remove: { _ in }),
             onToggleTimeline: { _ in }, questionCard: { _ in EmptyView() },
             onBackgroundTap: {}, historyEdgeStatus: [:], canPrefetchOlderHistory: true, canLoadHistory: fixture.canLoadHistory,
             onLoadHistory: fixture.load, onShowLatest: {},
@@ -721,7 +721,7 @@ private struct NewerEdgeRenderView: View {
     let fixture: NewerEdgeRenderFixture
     var body: some View {
         ChatTranscriptView(items: fixture.items, readingPosition: fixture.readingPosition, rowPresentations: fixture.rowPresentations, readingScope: fixture.readingScope, retainedSurfaces: nil, renderedMessages: fixture.store, forkableMessageIDs: [],
-            scrollToRow: nil, onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, remove: { _ in }),
+            scrollToRow: nil, onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, edit: { _ in }, remove: { _ in }),
             onToggleTimeline: { _ in }, questionCard: { _ in EmptyView() },
             onBackgroundTap: {}, historyEdgeStatus: [:], canPrefetchOlderHistory: true, canLoadHistory: true,
             onLoadHistory: { fixture.loads.append($0); return nil },
@@ -945,7 +945,7 @@ private struct ChainedPagesRenderView: View {
     let fixture: ChainedPagesRenderFixture
     var body: some View {
         ChatTranscriptView(items: fixture.items, readingPosition: fixture.readingPosition, rowPresentations: fixture.rowPresentations, readingScope: fixture.readingScope, retainedSurfaces: nil, renderedMessages: fixture.store, forkableMessageIDs: [],
-            scrollToRow: fixture.request, onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, remove: { _ in }),
+            scrollToRow: fixture.request, onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, edit: { _ in }, remove: { _ in }),
             onToggleTimeline: { _ in }, questionCard: { _ in EmptyView() },
             onBackgroundTap: {}, historyEdgeStatus: fixture.historyEdgeStatus, canPrefetchOlderHistory: fixture.canPrefetchOlderHistory, canLoadHistory: true, onLoadHistory: fixture.load, onShowLatest: {},
             onFirstContent: {}, bottomBar: EmptyView?.none)
@@ -1003,7 +1003,7 @@ private struct OlderPageRenderView: View {
     let fixture: OlderPageRenderFixture
     var body: some View {
         ChatTranscriptView(items: fixture.items, readingPosition: fixture.readingPosition, rowPresentations: fixture.rowPresentations, readingScope: fixture.readingScope, retainedSurfaces: nil, renderedMessages: fixture.store, forkableMessageIDs: [],
-            scrollToRow: fixture.request, onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, remove: { _ in }),
+            scrollToRow: fixture.request, onFork: { _ in }, countChanges: nil, deliveryActions: MessageDeliveryActions(sendNow: nil, edit: { _ in }, remove: { _ in }),
             onToggleTimeline: { _ in }, questionCard: { _ in EmptyView() },
             onBackgroundTap: {}, historyEdgeStatus: fixture.historyEdgeStatus, canPrefetchOlderHistory: true, canLoadHistory: true, onLoadHistory: fixture.load, onShowLatest: {},
             onFirstContent: {}, bottomBar: EmptyView?.none)

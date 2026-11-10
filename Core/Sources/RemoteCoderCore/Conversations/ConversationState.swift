@@ -477,6 +477,14 @@ struct ConversationState: Sendable {
         return true
     }
 
+    mutating func queueEntryNotRestored(_ messageID: UUID, reason: String) -> Bool {
+        guard submissions[messageID]?.status == .queued else { return false }
+        submissions[messageID]?.status = .failed
+        submissions[messageID]?.deliveryError = reason
+        markPersistedChange()
+        return true
+    }
+
     mutating func removeNotSent(_ messageID: UUID) {
         guard let pending = submissions[messageID], pending.status == .failed else { return }
         remove(pending)

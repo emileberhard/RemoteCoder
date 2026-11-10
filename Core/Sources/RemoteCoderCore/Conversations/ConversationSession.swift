@@ -404,6 +404,12 @@ actor ConversationSession {
         return true
     }
 
+    func queueEntryNotRestored(_ messageID: UUID, reason: String) async {
+        if let successor { await successor.queueEntryNotRestored(messageID, reason: reason); return }
+        guard state.queueEntryNotRestored(messageID, reason: reason) else { return }
+        await persistLocalChanges()
+    }
+
     func removeNotSent(_ messageID: UUID) async throws {
         if let successor { try await successor.removeNotSent(messageID); return }
         guard state.submissions[messageID]?.status == .failed else { return }

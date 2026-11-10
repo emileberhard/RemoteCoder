@@ -77,6 +77,7 @@ final class TranscriptNativeActions {
 
     var deliveryActions: MessageDeliveryActions {
         MessageDeliveryActions(sendNow: queued?.sendNow == nil ? nil : { [weak self] in self?.queued?.sendNow?($0) },
+                             edit: { [weak self] in self?.queued?.edit($0) },
                              remove: { [weak self] in self?.queued?.remove($0) })
     }
 }

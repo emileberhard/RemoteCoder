@@ -390,6 +390,15 @@ final class ComposerDraftStore {
         pendingReceipts[recordingID] = .init(draftID: draft.id, requiredRevision: draft.revision, receivedAt: .now)
     }
 
+    func restoreMessage(_ content: ComposerDocumentContent, to draft: ComposerDraft) async throws {
+        try requireActive()
+        guard !draft.isDiscarded else { throw DraftSaveError(message: "The draft was discarded.") }
+        try await document(for: draft).apply(.appendParagraph(content))
+        try requireActive()
+        guard !draft.isDiscarded else { throw DraftSaveError(message: "The draft was discarded.") }
+        guard await flush() else { throw DraftSaveError(message: errorMessage ?? "The draft could not be saved.") }
+    }
+
     func hasSavedReceipt(for recordingID: UUID) async throws -> Bool {
         try requireActive()
         let backing = try await open()
