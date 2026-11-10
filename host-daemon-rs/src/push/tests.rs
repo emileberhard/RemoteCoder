@@ -583,28 +583,28 @@ async fn fleet_subagent_counts_follow_ordered_trees_and_include_remote_children(
     assert_eq!(empty["activeTaskCount"], 0);
     assert_eq!(empty["activeTaskSubagentCounts"], json!([]));
 
-    let mut local = delegated(&["a", "b"], &[]);
+    let mut local = delegated(&["a", "b", "root"], &[]);
     local.running_roots.extend([
         ("a-child".into(), "a".into()),
         ("a-grandchild".into(), "a".into()),
         ("c-child".into(), "c".into()),
     ]);
-    local.content.active_task_count = 3;
+    local.content.active_task_count = 4;
     service.report_live_activity(Some(LOCAL), local).await;
     peer(
         &service,
         1,
         Some(delegated(
-            &["remote-child"],
-            &[("remote-child", LOCAL, "a")],
+            &["remote-child", "root"],
+            &[("remote-child", LOCAL, "a"), ("root", LOCAL, "root")],
         )),
     );
     let result = serde_json::to_value(fleet(&service, &hosts)).unwrap();
     assert_eq!(
         result,
         json!({
-            "activeTaskCount": 3,
-            "activeTaskSubagentCounts": [3, 0, 1],
+            "activeTaskCount": 4,
+            "activeTaskSubagentCounts": [3, 0, 1, 1],
             "attention": [],
             "attentionCount": 0,
             "unavailableHostIDs": []
@@ -642,6 +642,24 @@ async fn fleet_subagent_changes_advance_revision_without_changing_tree_count() {
         fleet(&service, &[LOCAL]).active_task_subagent_counts,
         vec![0]
     );
+
+    peer(&service, 1, Some(delegated(&[], &[])));
+    changes.borrow_and_update();
+    peer(
+        &service,
+        1,
+        Some(delegated(&["root"], &[("root", LOCAL, "root")])),
+    );
+    assert!(changes.has_changed().unwrap());
+    let remote_started = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(remote_started.content.active_task_count, 1);
+    assert_eq!(remote_started.active_task_subagent_counts, vec![1]);
+    changes.borrow_and_update();
+    peer(&service, 1, Some(delegated(&[], &[])));
+    assert!(changes.has_changed().unwrap());
+    let remote_stopped = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(remote_stopped.content.active_task_count, 1);
+    assert_eq!(remote_stopped.active_task_subagent_counts, vec![0]);
 }
 
 #[tokio::test]

@@ -192,16 +192,18 @@ impl SourceProjection {
     pub(crate) fn running_trees(&self, host: &str) -> BTreeSet<AgentAddress> {
         self.running_roots
             .values()
-            .map(|root| {
-                self.remote_parents
-                    .get(root)
-                    .cloned()
-                    .unwrap_or_else(|| AgentAddress {
-                        host_id: host.to_owned(),
-                        thread_id: root.clone(),
-                    })
-            })
+            .map(|root| self.tree_address(host, root))
             .collect()
+    }
+
+    fn tree_address(&self, host: &str, root: &str) -> AgentAddress {
+        self.remote_parents
+            .get(root)
+            .cloned()
+            .unwrap_or_else(|| AgentAddress {
+                host_id: host.to_owned(),
+                thread_id: root.to_owned(),
+            })
     }
 
     fn validate_report(&self, host: &str) -> Result<()> {
@@ -558,14 +560,7 @@ impl Sources {
                 continue;
             };
             for (thread, root) in &projection.running_roots {
-                let tree = projection
-                    .remote_parents
-                    .get(root)
-                    .cloned()
-                    .unwrap_or_else(|| AgentAddress {
-                        host_id: host.clone(),
-                        thread_id: root.clone(),
-                    });
+                let tree = projection.tree_address(host, root);
                 let owner = match self.owning_tree(tree, local_host) {
                     Ok(root) => root,
                     Err(unresolved) => {
