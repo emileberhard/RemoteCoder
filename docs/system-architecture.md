@@ -1869,16 +1869,12 @@ the browsed page outranks every unprotected, unpinned row, so its roots are
 admitted before the cursor advances. Recent coverage leaves an unconsumed
 provider at not-loaded if admission dropped eligible rows.
 
-Search scans metadata pages using the same title, path and execution-target
-label matcher as visible rows; native Codex's case-sensitive search does not
-narrow that coverage. Search has its own continuation, and query changes cancel
-or fence old results. Incremental refresh preserves in-progress browsing and its
-admission priority; an explicit manual refresh (pull-to-refresh or Refresh) resets it. An
-exhausted provider reopens when fresh partial coverage proves there is more,
-and an exhausted query can restart after its admitted page is evicted. A visible nonempty query starts one discovery pass after
-500 ms; further history remains an explicit action: the footer's one
-Load Older Chats (Search More History while filtering) loads the next page on
-every target that has one. List reads never resume
+Incremental refresh preserves in-progress browsing and its admission priority;
+an explicit manual refresh (pull-to-refresh or Refresh) resets it. An exhausted
+provider reopens when fresh partial coverage proves there is more. Older history
+is an explicit action: the footer's one Load Older Chats loads the next page on
+every target that has one. [Conversation search](#conversation-search) never
+pages this window; it asks each gateway's catalog. List reads never resume
 threads or fetch transcripts. Retained exact ancestry is inherited before
 classification, and only unresolved retained headers rotate through retries.
 Selection and screen membership update protected headers synchronously. Exact
@@ -2848,7 +2844,7 @@ sections:
   closes; the Mac shows every row.
 
 The Pinned section folds in both views, like a project section, and pinning a
-chat unfolds it. Searching ignores every fold and offers no disclosure.
+chat unfolds it.
 
 Activity is `latestActivityAt`: the later of the provider's `recencyAt` (the
 creation time when absent) and the last finished turn. Tool calls, streamed
@@ -2881,17 +2877,14 @@ Date labels are projected once per snapshot using a day-keyed cache bounded to
 2,048 entries.
 Unread Only keeps rows unread at opening or since, plus the selected row, so a row read in the meantime does not vanish. A row captured as settled that turns unread shows in Chats at its captured rank; other settled rows stay hidden. The Mac sidebar is open whenever it is
 visible and recaptures each time its window becomes key or returns from
-occlusion. Searching (the Mac's
-filter field) matches every whitespace-separated term against the title, folder
-and, while shown, the host name, without reordering, and ignores folding and row
-limits.
+occlusion.
 
 Rows whose purpose is `probe` are hidden unless live or selected. Unpinned
 `automation` rows appear in their own collapsible Automations section after
 Pinned and before Chats/projects, with an automation symbol that remains when
 pinned. Pinned membership takes precedence and each row appears once.
 Automation membership takes precedence over settlement; the stored settlement
-and its actions remain intact. Search reveals matches through a folded section.
+and its actions remain intact.
 The Automations fold is a device preference and starts expanded; expanded, it
 shows its first five rows plus the selected row until "Show N more" reveals the
 rest for that drawer opening. Collapse and
@@ -3066,3 +3059,44 @@ receipt timestamp cannot disagree with the persisted provider event. History rea
 recover completions missed while the app was disconnected. Failed completion reads keep a
 known cached date and report incomplete coverage instead of substituting activity
 or the current time.
+
+### Conversation search
+
+Typing in the drawer's search field (a bottom glass field on iOS, the sidebar's
+`.searchable` field on the Mac) searches every past conversation on every
+connected host by title and message text. `ConversationSearchSession`
+(`Core/Conversations/Search/`), held per window as `ChatWindowModel.search`, is
+the one owner of the query, its generation and the published
+`ConversationSearchResults`. While the query has terms, `ConversationSearchList`
+replaces the drawer list; on iOS selection mode shows the drawer list instead.
+The ⌘K palette is separate.
+
+The query follows the gateway's term rule (whitespace-separated, deduplicated
+case-insensitively, at most 8 terms and 512 UTF-8 bytes). After a 200 ms
+debounce the session asks every host whose route is up with
+`sessions/conversations/search` (limit 30), resolving `host/info`'s
+`conversationSearch` first; a host without it is reported, not asked. Each new
+query cancels the previous task, whose child requests send `$/cancelRequest`.
+Title matching over local headers, mapping answers to cards and merging run
+`@concurrent`; the main actor applies results only when their generation is
+still current, so a superseded answer never publishes.
+
+Results form two sections. Titles holds local headers whose title contains every
+term plus the gateway's `titleMatch` rows; Messages holds the rest, in host
+order. The first paint waits up to 150 ms for the first host's answer, so title
+matches and that answer land together; otherwise title matches paint alone.
+After it, rows never move or disappear while the query is unchanged: later
+answers append at the end of their section, deduplicated by address and session
+key against listed rows. Rows from an unknown origin host (matched by host id,
+then gateway id) and probe-marked rows are dropped. A missing gateway title falls
+back to the local header's title, else the excerpt is the headline. The card
+re-centres the excerpt about 24 characters before the first matching term and
+emphasises every term of at least three characters, following the gateway's
+trigram rule. "+N more" counts hits beyond the one shown.
+
+Sections show 4 and 10 rows until "Show N more" and retain at most 50 and 100.
+One fixed-height status row reads Searching… while requests are open, then names
+hosts that did not answer or cannot search messages yet, and nothing when every
+host answered. Opening a card goes through the ordinary selection path, and
+`recordOpening` logs only its section and rank, never the query. The query and
+results stay while the drawer closes; detaching the window cancels the search.
