@@ -33,7 +33,7 @@ final class ConversationSearchSession {
     static let firstPaintHold = Duration.milliseconds(150)
     static let resultLimit = 30
 
-    var query = "" {
+    var query: String {
         didSet { if query != oldValue { queryChanged() } }
     }
     private(set) var focusRequest = 0
@@ -47,9 +47,20 @@ final class ConversationSearchSession {
     @ObservationIgnored private let logger = AppLogger(category: "ConversationSearch")
 
     init(clock: any Clock<Duration> = ContinuousClock(), hosts: @escaping @MainActor () -> [ConversationSearchHost]) {
+        self.query = ""
         self.clock = clock
         self.hosts = hosts
     }
+
+    #if DEBUG
+    init(previewQuery: String, results: ConversationSearchResults) {
+        self.query = previewQuery
+        self.clock = ContinuousClock()
+        self.hosts = { [] }
+        self.isActive = true
+        self.results = results
+    }
+    #endif
 
     func requestFocus() { focusRequest &+= 1 }
 
