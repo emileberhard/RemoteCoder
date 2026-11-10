@@ -12,7 +12,7 @@ struct ConversationSearchQuery: Equatable, Sendable {
         var folded = Set<String>()
         var terms: [String] = []
         var bytes = 0
-        for word in typed.split(whereSeparator: \.isWhitespace) {
+        for word in typed.prefix(4 * Self.maximumBytes).split(whereSeparator: \.isWhitespace) {
             let term = String(word)
             guard !folded.contains(term.lowercased()) else { continue }
             let added = term.utf8.count + (terms.isEmpty ? 0 : 1)

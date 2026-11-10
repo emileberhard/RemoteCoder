@@ -3062,7 +3062,7 @@ or the current time.
 
 ### Conversation search
 
-Typing in the drawer's search field (a bottom glass field on iOS, the sidebar's
+Typing in the drawer's search field (a bottom capsule on iOS, the sidebar's
 `.searchable` field on the Mac) searches every past conversation on every
 connected host by title and message text. `ConversationSearchSession`
 (`Core/Conversations/Search/`), held per window as `ChatWindowModel.search`, is

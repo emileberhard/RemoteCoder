@@ -1463,8 +1463,8 @@ entrypoint linked above.
   rows have no lifted row menu.
 - Conversation search has one owner per window, `ChatWindowModel.search`
   (`ConversationSearchSession` in Core `Conversations/Search/`). The iOS drawer's
-  bottom glass field (`DrawerSearchField`, replaced by the selection bar) and the
-  Mac `.searchable` field write its `query`; while it has terms,
+  bottom field (`DrawerSearchField`, replaced by the selection bar) and the Mac
+  `.searchable` field write its `query`; while it has terms,
   `ConversationSearchList` replaces the list on each platform. It asks only
   connected hosts whose `host/info` reports `conversationSearch`, through
   `GatewayClient.searchConversations`, and never pages the header window or
@@ -1474,6 +1474,9 @@ entrypoint linked above.
   `ConversationSearchSection.Kind`. Cards are fixed height (two excerpt lines
   reserved); iOS uses content surfaces like drawer rows, the Mac plain sidebar
   buttons like draft rows. Opening logs section and rank, never the query.
+  Unused search costs the drawer nothing: its list reads only `isActive`, the
+  field is an opaque content surface so scrolling composites no extra glass, and
+  it observes drawer visibility only while focused.
   [System architecture](../docs/system-architecture.md#conversation-search)
   holds the contract.
 - Opening the drawer captures a `ConversationDrawerLayout`: every row's
