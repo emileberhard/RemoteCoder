@@ -1,5 +1,11 @@
 import SwiftUI
 
+struct TranscriptSearchFindRequest: Equatable {
+    let id = UUID()
+    let term: String
+    let rowID: String
+}
+
 @MainActor
 @Observable
 final class TranscriptFind {
@@ -10,6 +16,7 @@ final class TranscriptFind {
     private(set) var matches: [String] = []
     private(set) var currentIndex: Int?
     private(set) var focusRequest: UUID?
+    private(set) var locatedRequestID: UUID?
     @ObservationIgnored private var preferredRowID: String?
 
     var hasMatches: Bool { !matches.isEmpty }
@@ -19,10 +26,10 @@ final class TranscriptFind {
         focusRequest = UUID()
     }
 
-    func present(term: String, rowID: String?) {
-        if query == term, let rowID, let index = matches.firstIndex(of: rowID) { currentIndex = index }
-        query = term
-        preferredRowID = rowID
+    func present(_ request: TranscriptSearchFindRequest) {
+        query = request.term
+        preferredRowID = request.rowID
+        locatedRequestID = request.id
         focusRequest = nil
         isPresented = true
     }
@@ -30,6 +37,7 @@ final class TranscriptFind {
     func dismiss() {
         isPresented = false
         focusRequest = nil
+        locatedRequestID = nil
         preferredRowID = nil
         query = ""
         matches = []
@@ -69,6 +77,7 @@ struct TranscriptFindBar: View {
         let query: String
         let screen: ObjectIdentifier
         let transcript: String
+        let location: UUID?
     }
 
     var body: some View {
@@ -121,7 +130,7 @@ struct TranscriptFindBar: View {
         .appGlass(.standard, in: .capsule)
         #endif
         .onChange(of: find.focusRequest, initial: true) { isFieldFocused = find.focusRequest != nil }
-        .task(id: SearchKey(query: find.query, screen: ObjectIdentifier(screen), transcript: screen.transcriptIdentity)) {
+        .task(id: SearchKey(query: find.query, screen: ObjectIdentifier(screen), transcript: screen.transcriptIdentity, location: find.locatedRequestID)) {
             let query = find.query
             if !query.isEmpty {
                 try? await Task.sleep(for: .milliseconds(120))
@@ -145,8 +154,10 @@ struct TranscriptSearchFindReceiver: View {
 
     var body: some View {
         Color.clear.frame(width: 0, height: 0)
-            .onChange(of: screen.searchFindTerm) { _, term in
-                if let term { find.present(term: term, rowID: screen.pendingTranscriptRequest?.rowID) }
+            .onChange(of: screen.searchFindRequest, initial: true) { _, request in
+                guard let request else { return }
+                find.present(request)
+                screen.consumeSearchFindRequest(request.id)
             }
     }
 }

@@ -65,7 +65,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private(set) var pendingQuestion: QuestionPrompt?
     private(set) var questionPrompts: [String: QuestionPrompt] = [:]
     private(set) var pendingTranscriptRequest: TranscriptRowRequest?
-    private(set) var searchFindTerm: String?
+    private(set) var searchFindRequest: TranscriptSearchFindRequest?
     @ObservationIgnored private(set) var selectedConversation: ConversationSession?
     @ObservationIgnored private var presentedRevision: UInt64 = 0
     @ObservationIgnored private var presentedCompletionAt: Int64?
@@ -186,6 +186,10 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     func revealTranscriptRow(_ rowID: String, highlighted: Bool = false) {
         requestTranscriptRow(rowID, anchor: .center, motion: .instant, highlighted: highlighted)
+    }
+
+    func consumeSearchFindRequest(_ id: UUID) {
+        if searchFindRequest?.id == id { searchFindRequest = nil }
     }
 
     func requestTranscriptRow(_ rowID: String, anchor: UnitPoint, motion: TranscriptRowRequest.Motion, highlighted: Bool = false) {
@@ -309,7 +313,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     func resetRendering() {
         ownedTasks.cancel(.searchAsk)
-        searchFindTerm = nil
+        searchFindRequest = nil
         htmlVisualPreparation.cancelDemand()
         htmlVisualReplies.update(.unknown, threadID: nil)
         compaction = nil
@@ -1084,7 +1088,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         adoptModelProvider(thread.modelProvider, threadID: thread.id)
         showRecentSettings(threadID: thread.id)
         if transcriptIdentity != identity { showTranscript(identity: identity, threadID: thread.id) }
-        searchFindTerm = nil
+        searchFindRequest = nil
         if pendingTranscriptRequest?.highlighted == true { pendingTranscriptRequest = nil }
         let loadID = beginResumeLoad(threadID: thread.id)
         searchResumeID = opening == nil ? nil : loadID
@@ -1165,7 +1169,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
                     guard isCurrentResumeLoad(loadID, threadID: thread.id) else { throw CancellationError() }
                 }
                 revealTranscriptRow(reveal.rowID, highlighted: true)
-                searchFindTerm = opening?.findTerm
+                if let term = opening?.findTerm { searchFindRequest = .init(term: term, rowID: reveal.rowID) }
             }
             target.dispatcher.reconcileQueue(threadID: thread.id)
             if isCurrentResumeLoad(loadID, threadID: thread.id), contextWindowUsage == nil {
