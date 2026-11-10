@@ -634,10 +634,14 @@ fn ingest_source(
         params![origin.host, original],
         |row| row.get(0),
     )?;
-    if !append {
+    let metadata = if append {
+        None
+    } else {
+        let metadata = super::metadata::source_metadata(&tx, source)?;
         tx.execute("DELETE FROM session WHERE source_id=?1", [source])?;
         tx.execute("DELETE FROM dependency WHERE source_id=?1", [source])?;
-    }
+        metadata
+    };
     let mut chain = if append {
         prior
             .as_ref()
@@ -745,6 +749,9 @@ fn ingest_source(
     }
     drop(reader);
     normalize::save_session(&tx, origin, source, &state)?;
+    if !append {
+        super::metadata::source_replaced(&tx, origin, metadata.as_ref())?;
+    }
     if mode != ReadMode::Inventory && !checkpointed {
         refresh_dependencies(&tx, origin, source, &companions)?;
     }

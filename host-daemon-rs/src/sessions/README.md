@@ -190,11 +190,12 @@ for `malmo`. Two- and three-character prefixes have dedicated indexes.
 Conversation documents contain separately weighted title, typed-user,
 assistant/reasoning and folder columns. Title and typed text receive weights
 8 and 4; assistant/reasoning receives 1 and the folder contributes coverage only.
-BM25 document score ranks first, followed by recency and canonical key. Tool
-calls, tool output and injected context stay outside conversation documents;
-the existing trigram index retains literal access to that evidence. A result
-requires an all-terms title match or a message hit, so folder-only matches do
-not occupy the list. Ranking never fetches full message text.
+BM25 document score ranks first, followed by recency and canonical key. Grouped
+search uses only document matches as candidates. It cannot find terms that occur
+only in tool calls, tool output or injected context. The existing trigram RPC
+`sessions/search` retains literal substring access to that evidence. A grouped
+result requires an all-terms title match or a message hit. Ranking never fetches
+full message text.
 
 Schema-version-1 responses contain `truncated` and ranked `conversations`. Each
 conversation carries its root `sessionKey`, origin `hostId`, `provider`,

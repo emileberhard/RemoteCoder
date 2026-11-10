@@ -2937,6 +2937,51 @@ async fn sessions_conversations_mirror_origin_metadata_without_entry_changes() -
 }
 
 #[test]
+fn sessions_conversations_preserve_origin_facts_through_replacement() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let root = super::session_key(&f.origins[0], "codex-root");
+    let child = super::session_key(&f.origins[0], "codex-child");
+    let titles = f.origins[0].local_home.join("session_index.jsonl");
+    write(
+        &titles,
+        &[
+            json!({"id":"codex-root","thread_name":"Native root title"}),
+            json!({"id":"later","thread_name":"Already named"}),
+        ],
+    );
+    {
+        let db = f.store.writer()?;
+        super::metadata::titles(&db, &f.origins)?;
+        db.execute("UPDATE session SET delegated_parent_known=1,delegated_parent_session_key=?2 WHERE session_key=?1", rusqlite::params![root,child])?;
+    }
+    write(&f.codex, &[codex_meta("codex-root", None)]);
+    let later = f.origins[0].path().join("later.jsonl");
+    write(&later, &[codex_meta("later", None)]);
+    ingest::scan_scope(
+        &f.store,
+        &f.origins,
+        ingest::Scope::Changed(&[f.codex.clone(), later]),
+        &AtomicBool::new(false),
+    )?;
+    let db = f.store.writer()?;
+    let retained: (String, String) = db.query_row(
+        "SELECT title,delegated_parent_session_key FROM session WHERE session_key=?1",
+        [&root],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert_eq!(retained, ("Native root title".into(), child));
+    super::metadata::titles(&db, &f.origins)?;
+    let title: String = db.query_row(
+        "SELECT title FROM session WHERE thread_id='later'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(title, "Already named");
+    Ok(())
+}
+
+#[test]
 #[ignore]
 fn sessions_rebuild_search_corpus() -> Result<()> {
     let manifest = PathBuf::from(std::env::var("RC_SESSIONS_MEASURE_ORIGINS")?);
