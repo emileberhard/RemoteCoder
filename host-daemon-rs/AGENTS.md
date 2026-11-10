@@ -530,8 +530,17 @@ blocks startup or provider journal retirement.
   `retryable`; the JSON-RPC code is unchanged. Upstream Codex texts are matched only where the response is
   correlated to its request (`src/rpc/upstream_errors.rs`), pinned by a test to
   the fork commit in `docs/codex/compatibility.json`.
+- `sessions/conversations/search` is a local-catalog Query-lifetime read,
+  advertised by `host/info.conversationSearch`. It groups bounded trigram windows
+  into root conversations, folds native and persisted delegated children and
+  returns ranked excerpts. Its one-second deadline includes FIFO and admission;
+  completed stages survive timeout with `truncated`, and no completed stage uses
+  typed `requestTimedOut`. A request-owned drop guard signals the SQLite progress
+  handler on cancellation, disconnect or deadline. Two dedicated reader permits
+  isolate it from inventory/mirror reads. `src/sessions/README.md` owns its wire
+  contract and measured bounds. The existing `sessions/search` stays unchanged.
 - `host/info` returns the gateway process's `homeDirectory`, physical `hostname`,
-  `automationsAuthority`, `speechAvailable`, `fleetLiveActivity` and `claudeQueue` capabilities. These are the
+  `automationsAuthority`, `speechAvailable`, `fleetLiveActivity`, `claudeQueue` and `conversationSearch` capabilities. These are the
   authoritative inputs for client feature availability and physical-host routing.
   Missing capabilities stay unknown/unavailable, never guessed from a display
   name. It is the only way a client learns the home directory; `command/exec` serves

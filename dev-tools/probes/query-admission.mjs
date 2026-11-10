@@ -52,8 +52,9 @@ try {
     const started = performance.now();
     for (let id = 0; id < 20; id++) {
         ws.send(JSON.stringify({
-            id: `burst-${id}`, method: "conversation/agents/list",
-            params: { threadId: "claude_e1741c43-3d9a-4448-9f4a-3c7e5906e852" },
+            id: `burst-${id}`, method: id >= 18 ? "sessions/conversations/search" : "conversation/agents/list",
+            params: id >= 18 ? { query: "needle", limit: 30 }
+                : { threadId: "claude_e1741c43-3d9a-4448-9f4a-3c7e5906e852" },
         }));
     }
     for (const id of cancelled) {
@@ -73,7 +74,8 @@ try {
     const elapsedMs = Math.round(performance.now() - started);
     ws.send(JSON.stringify({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id: "burst-0" } }));
     ws.send(JSON.stringify({ id: "sentinel", method: "host/info", params: {} }));
-    assert((await lab.within(sentinel, 10000, "Post-cancellation read did not finish")).result);
+    const host = await lab.within(sentinel, 10000, "Post-cancellation read did not finish");
+    assert.equal(host.result?.conversationSearch, true);
     assert.equal(responses.size, 20);
     assert(!messageError, messageError?.message);
     console.log(JSON.stringify({

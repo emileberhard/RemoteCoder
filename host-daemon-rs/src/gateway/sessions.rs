@@ -1,19 +1,29 @@
 use super::Gateway;
 use crate::rpc::error::{RpcCode, RpcData};
 use crate::rpc::{RpcError, RpcResult};
-use crate::sessions::{Origin, cluster, mirror, query, store::Store, worker::Worker};
+use crate::sessions::{
+    Origin, cluster, conversations, mirror, query,
+    store::{ReadControl, Store},
+    worker::Worker,
+};
 use anyhow::{Context, Result};
 use futures_util::FutureExt;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
+
+tokio::task_local! {
+    pub(super) static CONVERSATION_SEARCH_DEADLINE: std::time::Instant;
+}
 
 pub(super) struct Runtime {
     store: Store,
     origins: Vec<Origin>,
     worker: Arc<Worker>,
     readers: Arc<Semaphore>,
+    search_readers: Arc<Semaphore>,
     mirror_lock: Mutex<()>,
     mirror_failures: Arc<mirror::Failures>,
     mirror_stop: tokio_util::sync::CancellationToken,
@@ -59,6 +69,7 @@ impl Gateway {
                         origins,
                         worker,
                         readers: Arc::new(Semaphore::new(16)),
+                        search_readers: Arc::new(Semaphore::new(2)),
                         mirror_lock: Mutex::new(()),
                         mirror_failures: Arc::default(),
                         mirror_stop: tokio_util::sync::CancellationToken::new(),
@@ -212,9 +223,86 @@ impl Gateway {
         method: &str,
         params: Value,
     ) -> RpcResult {
+        if method == "sessions/conversations/search" {
+            return self.conversation_search(params).await;
+        }
         self.session_request(grant, method, params)
             .await
             .map_err(session_error)
+    }
+
+    async fn conversation_search(&self, params: Value) -> RpcResult {
+        let request: conversations::Request =
+            serde_json::from_value(params).map_err(|error| session_error(error.into()))?;
+        request.terms().map_err(session_error)?;
+        let deadline = CONVERSATION_SEARCH_DEADLINE
+            .try_with(|deadline| *deadline)
+            .unwrap_or_else(|_| std::time::Instant::now() + conversations::DEADLINE);
+        let control = ReadControl::new(deadline);
+        let _cancel = control.cancel_on_drop();
+        let completed: conversations::Completed = Arc::default();
+        let work = async {
+            let runtime = self.sessions_runtime().await.map_err(session_error)?;
+            let permit = runtime
+                .search_readers
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|error| session_error(error.into()))?;
+            let host = self.host_identity().await.map_err(session_error)?.host_id;
+            let jobs = self.jobs.clone();
+            let handle = tokio::runtime::Handle::current();
+            let store = runtime.store.clone();
+            let completed = completed.clone();
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                let mut db = store.reader()?;
+                db.interrupt_on(control.clone())?;
+                conversations::search(&db, &request, &control, |headers| {
+                    handle.block_on(async {
+                        let lookup = async {
+                            let identities = headers.iter().filter(|h| h.session.host_id == host).filter_map(|h| {
+                                let provider = match h.session.provider.as_str() {
+                                    "codex" => crate::agents::jobs::model::Provider::Codex,
+                                    "claude" => crate::agents::jobs::model::Provider::Claude,
+                                    _ => return None,
+                                };
+                                let identity = crate::agents::jobs::model::ConversationIdentity {
+                                    provider,
+                                    provider_home: crate::agents::jobs::model::ProviderHome::Known { path: h.provider_home.clone().into() },
+                                    thread_id: h.session.thread_id.clone(),
+                                };
+                                Some((identity, h.session.session_key.clone()))
+                            }).collect::<HashMap<_, _>>();
+                            let tags = jobs.store().await?.parent_tags(identities.keys().cloned().collect()).await?;
+                            let mut addresses = HashMap::new();
+                            for header in headers {
+                                let address = (&header.session.host_id, &header.session.thread_id);
+                                addresses.entry(address).and_modify(|key| *key = None).or_insert(Some(&header.session.session_key));
+                            }
+                            Ok::<_, anyhow::Error>(tags.into_iter().filter_map(|(identity, parent)| {
+                                let root = parent.and_then(|parent| addresses.get(&(&parent.host_id, &parent.thread_id)).and_then(|key| key.as_ref()).map(|key| (*key).clone()));
+                                Some((identities.get(&identity)?.clone(), root))
+                            }).collect())
+                        };
+                        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline.min(std::time::Instant::now() + std::time::Duration::from_millis(50))), lookup)
+                            .await.ok().and_then(Result::ok).unwrap_or_default()
+                    })
+                }, &completed)
+            }).await.map_err(|error| session_error(error.into()))?
+                .map_err(session_error)
+        };
+        let response =
+            match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), work).await {
+                Ok(Err(_)) if std::time::Instant::now() >= deadline => {
+                    conversations::partial(&completed)
+                        .ok_or_else(|| RpcError::request_timed_out(conversations::DEADLINE))?
+                }
+                Ok(result) => result?,
+                Err(_) => conversations::partial(&completed)
+                    .ok_or_else(|| RpcError::request_timed_out(conversations::DEADLINE))?,
+            };
+        serde_json::to_value(response).map_err(|error| session_error(error.into()))
     }
 
     async fn session_request(
@@ -337,4 +425,156 @@ fn session_error(error: anyhow::Error) -> RpcError {
         data["message"].as_str().unwrap_or("Session request failed"),
     )
     .with_data(RpcData::Raw(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::jobs::model::{
+        AgentRecord, ConversationBinding, ConversationIdentity, Origin as JobOrigin, Provider,
+        ProviderHome, Recipient,
+    };
+    use crate::wire::cluster::AgentAddress;
+
+    #[tokio::test]
+    async fn sessions_conversations_rpc_uses_persisted_ownership_and_current_promotions() {
+        let directory = tempfile::tempdir().unwrap();
+        let gateway = crate::test_support::TestGateway::new();
+        let host = gateway.host_identity().await.unwrap().host_id;
+        let home = directory.path().join("codex");
+        let origin = Origin {
+            host: host.clone(),
+            provider: "codex".into(),
+            provider_home: home.clone(),
+            local_home: home.clone(),
+        };
+        let root = "8c43d12f-8038-5d28-be95-ef14cc47faf3";
+        let child = "0e1a0399-0e3d-5aa4-ace7-0ed28835d55f";
+        std::fs::create_dir_all(origin.path()).unwrap();
+        for (id, parent, message) in [
+            (root, None, "parent conversation"),
+            (child, Some(root), "ownershipneedle"),
+        ] {
+            let records = [
+                json!({"type":"session_meta","timestamp":"2026-11-01T10:00:00Z","payload":{"id":id,"cwd":"/fixture","source":{"subagent":{"thread_spawn":{"parent_thread_id":parent}}}}}),
+                json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":message}]}}),
+            ];
+            std::fs::write(
+                origin.path().join(format!("{id}.jsonl")),
+                records
+                    .iter()
+                    .map(|record| format!("{record}\n"))
+                    .collect::<String>(),
+            )
+            .unwrap();
+        }
+        let store = Store::open(directory.path().join("sessions/catalog.sqlite3")).unwrap();
+        crate::sessions::ingest::scan(
+            &store,
+            std::slice::from_ref(&origin),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        let worker = Arc::new(
+            Worker::start(
+                store.clone(),
+                vec![origin.clone()],
+                directory.path().join("cap-status.json"),
+            )
+            .unwrap(),
+        );
+        let stopping = worker.clone();
+        tokio::task::spawn_blocking(move || stopping.stop())
+            .await
+            .unwrap();
+        gateway
+            .session_runtime
+            .set(Arc::new(Runtime {
+                store,
+                origins: vec![origin.clone()],
+                worker,
+                readers: Arc::new(Semaphore::new(16)),
+                search_readers: Arc::new(Semaphore::new(2)),
+                mirror_lock: Mutex::new(()),
+                mirror_failures: Arc::default(),
+                mirror_stop: tokio_util::sync::CancellationToken::new(),
+                mirror_task: Mutex::new(None),
+            }))
+            .unwrap_or_else(|_| panic!("fresh sessions runtime"));
+        let identity = |thread: &str| ConversationIdentity {
+            provider: Provider::Codex,
+            provider_home: ProviderHome::Known { path: home.clone() },
+            thread_id: thread.into(),
+        };
+        let jobs = gateway.jobs.store().await.unwrap();
+        jobs.adopt_conversation(AgentRecord {
+            agent_id: "search-child".into(),
+            conversation: ConversationBinding::Known {
+                conversation: identity(child),
+            },
+            origin: JobOrigin::Parent {
+                conversation: identity(root),
+            },
+            tool_scope: None,
+            origin_job_id: None,
+            latest_job_id: None,
+            parent: Some(AgentAddress {
+                host_id: host,
+                thread_id: root.into(),
+            }),
+            parent_revision: 0,
+            parent_recipient: Some(Recipient::Conversation {
+                conversation: identity(root),
+            }),
+        })
+        .await
+        .unwrap();
+        let grant = crate::auth::installation_credentials::Grant::Operator;
+        let response = gateway
+            .sessions_rpc(
+                &grant,
+                "sessions/conversations/search",
+                json!({"query":"ownershipneedle","limit":30}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response["conversations"][0]["sessionKey"],
+            crate::sessions::session_key(&origin, root)
+        );
+        assert_eq!(
+            response["conversations"][0]["hits"][0]["agentThreadId"],
+            child
+        );
+        jobs.set_parent_for_test("search-child".into(), None, Recipient::None)
+            .await
+            .unwrap();
+        let response = gateway
+            .sessions_rpc(
+                &grant,
+                "sessions/conversations/search",
+                json!({"query":"ownershipneedle","limit":30}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response["conversations"][0]["sessionKey"],
+            crate::sessions::session_key(&origin, child)
+        );
+        assert!(response["conversations"][0]["hits"][0]["agentThreadId"].is_null());
+        for params in [
+            json!({"query":"needle"}),
+            json!({"query":"needle","limit":0}),
+            json!({"query":"needle","limit":1,"local":true}),
+        ] {
+            assert_eq!(
+                gateway
+                    .sessions_rpc(&grant, "sessions/conversations/search", params)
+                    .await
+                    .unwrap_err()
+                    .code,
+                RpcCode::InvalidParams
+            );
+        }
+    }
 }

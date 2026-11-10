@@ -175,7 +175,7 @@ pub(crate) fn inventory(
     })
 }
 
-fn session_header(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionHeader> {
+pub(super) fn session_header(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionHeader> {
     Ok(SessionHeader {
         session_key: r.get(0)?,
         host_id: r.get(1)?,

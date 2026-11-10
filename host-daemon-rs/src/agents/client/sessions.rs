@@ -18,6 +18,11 @@ pub(crate) struct Command {
 
 #[derive(Clone, Debug, Subcommand)]
 enum Operation {
+    Conversations {
+        query: String,
+        #[arg(long, default_value_t = 30)]
+        limit: usize,
+    },
     Search {
         query: String,
         #[arg(long)]
@@ -70,6 +75,13 @@ fn since(value: Option<String>) -> Result<Option<String>> {
 
 fn request(command: &Command) -> Result<(&'static str, Value)> {
     Ok(match &command.operation {
+        Operation::Conversations { query, limit } => (
+            "sessions/conversations/search",
+            serde_json::to_value(crate::sessions::conversations::Request {
+                query: query.clone(),
+                limit: *limit,
+            })?,
+        ),
         Operation::Search {
             query,
             since: date,
@@ -122,8 +134,23 @@ async fn execute(command: &Command, env_file: Option<&Path>) -> Result<Value> {
             .clone()
             .map(Ok)
             .unwrap_or_else(crate::sessions::default_database)?;
-        let db = crate::sessions::store::reader(&path)?;
+        let mut db = crate::sessions::store::reader(&path)?;
         return match method {
+            "sessions/conversations/search" => {
+                let control = crate::sessions::store::ReadControl::new(
+                    std::time::Instant::now() + crate::sessions::conversations::DEADLINE,
+                );
+                db.interrupt_on(control.clone())?;
+                Ok(serde_json::to_value(
+                    crate::sessions::conversations::search(
+                        &db,
+                        &serde_json::from_value(params)?,
+                        &control,
+                        |_| Default::default(),
+                        &Default::default(),
+                    )?,
+                )?)
+            }
             "sessions/search" => query::search(&db, &serde_json::from_value(params)?),
             "sessions/read" => query::read(&db, serde_json::from_value(params)?),
             "sessions/sql" => query::sql(&db, params["sql"].as_str().context("SQL missing")?),

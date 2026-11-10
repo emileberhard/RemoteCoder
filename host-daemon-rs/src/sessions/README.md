@@ -165,3 +165,61 @@ Changed paths and full manifests are capped at 100,000, provider homes at 1,024;
 overflow refuses the batch without advancing the cursor. The projection's last
 completion state is retained separately from origin coverage so idle ticks do not
 rescan history to recover it. The role remains off by default.
+
+## Conversation search
+
+`sessions/conversations/search {query, limit}` is a gateway-owned, Query-lifetime
+read of this host's catalog, including every mirrored origin. It never contacts
+cluster members. `host/info.conversationSearch` advertises support. The existing
+`sessions/search` retains its literal, pageable, newest-ingested-item contract.
+The debug CLI is `remote-coder-codex-gateway sessions conversations QUERY --limit 30`;
+`--database PATH` and `--local` read that catalog directly, with native ancestry
+only when delegated ownership is unavailable.
+
+The trimmed query must contain 1–512 UTF-8 bytes. Whitespace-separated terms are
+case-insensitive, deduplicated and limited to eight distinct terms. `limit` is
+required and accepts 1–50 conversations. Unknown fields are invalid params.
+Titles and folders match any term; messages use literal trigram matching only
+for terms of at least three Unicode characters, preserving the existing index's
+case and diacritic behavior. Short terms never match message text.
+
+Schema-version-1 responses contain `truncated` and ranked `conversations`. Each
+conversation carries the root `sessionKey`, origin `hostId`, `provider`,
+`threadId`, nullable `title`, `cwd` and `lastAt`, `titleMatch`, `hitCount`, and up
+to three `hits`. Each hit contains its exact `itemKey`, catalog `kind`, nullable
+`at`, an excerpt of at most 240 Unicode characters centered on its first match,
+and nullable `agentThreadId` for a folded child. Unknown dates and metadata stay
+null. Deleted catalog sources are excluded. Native `parent_session_key` links
+and the existing persisted `JobStore::parent_tags` index fold children through
+at most 16 links; missing, ambiguous, cyclic or unavailable ownership leaves the
+session unfolded. Delegated ownership is looked up only for this host's
+conversations, with a single bounded batch and at most 50 ms; no ancestry
+registry or provider history calls are added. Current persisted parent tags override
+native provenance, including promotion to a standalone conversation.
+
+Conversation order is distinct-term coverage across metadata and window hits,
+then all-terms-in-title, then newest hit timestamp (falling back to `lastAt`).
+Hits prefer more distinct message terms, then user/assistant text, then recency.
+Item keys deduplicate hits found in multiple term windows. Ties use canonical
+keys for stable results.
+
+Two dedicated reader permits isolate typing from the 16 inventory/mirror
+readers. A request reads at most 10,000 newest session headers and 512 newest
+FTS item rows per eligible term, each with one lookahead: at most 14,105 fetched
+rows. FTS rowid order stops before any whole-match-set join or sort. Header and
+per-term stages publish completed ranked snapshots. The one-second deadline
+includes connection FIFO, admission and execution; it returns the last completed
+snapshot with `truncated: true`, or typed `requestTimedOut` if none completed.
+Hitting a candidate cap also sets `truncated`; limiting the final conversation
+list alone does not. A request-owned drop guard sets the reader's cancellation
+flag; the existing SQLite progress handler checks that flag and the deadline
+every 1,000 VM instructions. Cancel, disconnect and deadline therefore stop
+blocking SQLite work through the same path and release its reader permit.
+
+The initial bounds were measured on an APFS clone of a 7,310-session, 18 GB
+catalog: the first complete header read took 302 ms; common-word windows of
+64/128/256/512 items took 23/9/12/75 ms and covered 9/11/12/17 conversations.
+A subsequent 512-row full-text read took 3 ms for 4.3 MB of text. The header cap
+retains the module's 10,000-row ceiling; 512 balances candidate diversity against
+eight-term latency. Deadline and cap truncation remain explicit as the catalog
+grows. No schema or index rebuild is required.

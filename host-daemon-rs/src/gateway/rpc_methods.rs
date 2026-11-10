@@ -1703,6 +1703,7 @@ fn host_info(speech_available: bool, claude_queue: bool) -> RpcResult {
         automations_authority,
         speech_available,
         fleet_live_activity: true,
+        conversation_search: true,
         claude_queue,
     }))
 }

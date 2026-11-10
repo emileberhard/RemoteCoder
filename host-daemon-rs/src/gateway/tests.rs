@@ -266,6 +266,7 @@ async fn host_info_reports_the_gateway_home_directory() {
     let home = std::env::var("HOME").expect("HOME");
     assert_eq!(reply["id"], 7);
     assert_eq!(reply["result"]["homeDirectory"], home);
+    assert_eq!(reply["result"]["conversationSearch"], true);
     assert_eq!(reply["result"]["speechAvailable"], true);
     assert_eq!(
         reply["result"]["claudeQueue"], false,

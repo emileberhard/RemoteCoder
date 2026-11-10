@@ -2584,3 +2584,359 @@ fn sessions_inventory_header_coverage_does_not_require_parsed_bodies() -> Result
     );
     Ok(())
 }
+
+fn conversation_search(
+    store: &Store,
+    query: &str,
+    limit: usize,
+    parents: std::collections::HashMap<String, Option<String>>,
+) -> super::conversations::Response {
+    let control = super::store::ReadControl::new(Instant::now() + super::conversations::DEADLINE);
+    let mut db = store.reader().unwrap();
+    db.interrupt_on(control.clone()).unwrap();
+    super::conversations::search(
+        &db,
+        &super::conversations::Request {
+            query: query.into(),
+            limit,
+        },
+        &control,
+        |_| parents,
+        &Default::default(),
+    )
+    .unwrap()
+}
+
+fn conversation_item(
+    db: &rusqlite::Connection,
+    key: &str,
+    id: usize,
+    text: &str,
+    kind: &str,
+    at: Option<&str>,
+) {
+    db.execute("INSERT INTO item(item_key,session_key,seq,at,kind,text,text_bytes,source_ref,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,'{}',1)", rusqlite::params![format!("fixture-item-{id}"), key, id as i64, at, kind, text, text.len() as i64]).unwrap();
+}
+
+#[test]
+fn sessions_conversations_rank_coverage_title_hits_and_native_children() {
+    let f = fixture();
+    scan(&f);
+    let root = super::session_key(&f.origins[0], "codex-root");
+    let child = super::session_key(&f.origins[0], "codex-child");
+    let other = super::session_key(&f.origins[1], "claude_root");
+    {
+        let db = f.store.writer().unwrap();
+        db.execute("DELETE FROM item", []).unwrap();
+        db.execute("UPDATE session SET title=NULL,cwd=NULL,last_at=NULL", [])
+            .unwrap();
+        db.execute(
+            "UPDATE session SET title='drawer' WHERE session_key=?1",
+            [&root],
+        )
+        .unwrap();
+        conversation_item(&db, &child, 0, "flicker", "assistant", None);
+        conversation_item(
+            &db,
+            &root,
+            1,
+            "drawer flicker",
+            "tool_result",
+            Some("2026-11-04T10:00:00Z"),
+        );
+        conversation_item(
+            &db,
+            &root,
+            2,
+            "drawer flicker",
+            "user",
+            Some("2026-11-03T10:00:00Z"),
+        );
+        conversation_item(
+            &db,
+            &root,
+            3,
+            "drawer",
+            "assistant",
+            Some("2026-11-05T10:00:00Z"),
+        );
+        conversation_item(
+            &db,
+            &other,
+            4,
+            "drawer",
+            "user",
+            Some("2026-11-06T10:00:00Z"),
+        );
+    }
+    let found = conversation_search(&f.store, "drawer flicker", 30, Default::default());
+    assert!(!found.truncated);
+    assert_eq!(found.conversations.len(), 2);
+    let best = &found.conversations[0];
+    assert_eq!(best.session_key, root);
+    assert!(!best.title_match);
+    assert_eq!(best.hit_count, 4);
+    assert_eq!(
+        best.hits
+            .iter()
+            .map(|h| h.item_key.as_str())
+            .collect::<Vec<_>>(),
+        ["fixture-item-2", "fixture-item-1", "fixture-item-3"]
+    );
+    assert_eq!(best.last_at, None);
+    assert_eq!(best.cwd, None);
+    {
+        let db = f.store.writer().unwrap();
+        db.execute(
+            "UPDATE session SET title='Drawer Flicker' WHERE session_key=?1",
+            [&other],
+        )
+        .unwrap();
+    }
+    let found = conversation_search(&f.store, "drawer flicker", 1, Default::default());
+    assert_eq!(found.conversations.len(), 1);
+    assert_eq!(found.conversations[0].session_key, other);
+    assert!(found.conversations[0].title_match);
+    let folded = conversation_search(&f.store, "flicker", 30, Default::default());
+    assert!(
+        folded
+            .conversations
+            .iter()
+            .find(|conversation| conversation.session_key == root)
+            .unwrap()
+            .hits
+            .iter()
+            .any(|hit| hit.agent_thread_id.as_deref() == Some("codex-child") && hit.at.is_none())
+    );
+    {
+        let db = f.store.writer().unwrap();
+        db.execute("UPDATE source SET present=0 WHERE source_id=(SELECT source_id FROM session WHERE session_key=?1)", [&root]).unwrap();
+    }
+    assert!(
+        conversation_search(&f.store, "flicker", 30, Default::default())
+            .conversations
+            .iter()
+            .all(|c| c.session_key != root && c.session_key != child)
+    );
+}
+
+#[test]
+fn sessions_conversations_window_is_per_term_and_counts_unique_items() {
+    let f = fixture();
+    scan(&f);
+    let old = super::session_key(&f.origins[0], "codex-root");
+    let recent = super::session_key(&f.origins[1], "claude_root");
+    {
+        let db = f.store.writer().unwrap();
+        db.execute("DELETE FROM item", []).unwrap();
+        db.execute("UPDATE session SET title=NULL,cwd=NULL", [])
+            .unwrap();
+        conversation_item(&db, &old, 0, "ordinary rareidentifier", "assistant", None);
+        for id in 1..=super::conversations::TERM_WINDOW {
+            conversation_item(&db, &recent, id, "ordinary", "user", None);
+        }
+    }
+    let found = conversation_search(&f.store, "ordinary", 50, Default::default());
+    assert!(found.truncated);
+    assert_eq!(found.conversations.len(), 1);
+    assert_eq!(found.conversations[0].session_key, recent);
+    assert_eq!(
+        found.conversations[0].hit_count,
+        super::conversations::TERM_WINDOW
+    );
+    assert_eq!(found.conversations[0].hits.len(), 3);
+    let found = conversation_search(&f.store, "ordinary rareidentifier", 50, Default::default());
+    assert!(found.truncated);
+    assert_eq!(found.conversations[0].session_key, old);
+    assert_eq!(found.conversations[0].hit_count, 1);
+}
+
+#[test]
+fn sessions_conversations_fold_delegated_chains_and_leave_unknown_owners() {
+    let f = fixture();
+    scan(&f);
+    let root = super::session_key(&f.origins[0], "codex-root");
+    let delegated = super::session_key(&f.origins[1], "claude_root");
+    let native = super::session_key(&f.origins[1], "claude:root:child");
+    {
+        let db = f.store.writer().unwrap();
+        db.execute("DELETE FROM item", []).unwrap();
+        db.execute("UPDATE session SET title=NULL,cwd=NULL", [])
+            .unwrap();
+        conversation_item(&db, &native, 0, "needleflicker", "assistant", None);
+    }
+    let parents = std::collections::HashMap::from([(delegated.clone(), Some(root.clone()))]);
+    let found = conversation_search(&f.store, "needleflicker", 30, parents);
+    assert_eq!(found.conversations[0].session_key, root);
+    assert_eq!(
+        found.conversations[0].hits[0].agent_thread_id.as_deref(),
+        Some("claude:root:child")
+    );
+    assert_eq!(
+        conversation_search(&f.store, "needleflicker", 30, Default::default()).conversations[0]
+            .session_key,
+        delegated
+    );
+}
+
+#[test]
+fn sessions_conversations_short_terms_only_search_metadata_and_unicode_excerpts_are_bounded() {
+    let f = fixture();
+    scan(&f);
+    let root = super::session_key(&f.origins[0], "codex-root");
+    let other = super::session_key(&f.origins[1], "claude_root");
+    {
+        let db = f.store.writer().unwrap();
+        db.execute("DELETE FROM item", []).unwrap();
+        db.execute("UPDATE session SET title=NULL,cwd=NULL", [])
+            .unwrap();
+        db.execute(
+            "UPDATE session SET title='UI ÅÄ',cwd='/ÅÄ/ui' WHERE session_key=?1",
+            [&root],
+        )
+        .unwrap();
+        conversation_item(&db, &other, 0, "ui åä", "user", None);
+        conversation_item(
+            &db,
+            &root,
+            1,
+            &format!("{}ÅNGER{}", "🦀".repeat(300), "å".repeat(300)),
+            "assistant",
+            None,
+        );
+    }
+    let found = conversation_search(&f.store, "ui åä UI", 30, Default::default());
+    assert_eq!(found.conversations.len(), 1);
+    assert!(found.conversations[0].title_match);
+    assert_eq!(found.conversations[0].hit_count, 0);
+    let found = conversation_search(&f.store, "ånger", 30, Default::default());
+    let excerpt = &found.conversations[0].hits[0].excerpt;
+    assert!(excerpt.contains("ÅNGER"));
+    assert!(excerpt.chars().count() <= 240);
+    assert!(excerpt.starts_with('…') && excerpt.ends_with('…'));
+}
+
+#[test]
+fn sessions_conversations_validate_the_pinned_params() {
+    use super::conversations::Request;
+    for value in [
+        json!({"query":"ok"}),
+        json!({"query":"ok","limit":1,"local":true}),
+        json!({"query":"ok","limit":-1}),
+    ] {
+        assert!(serde_json::from_value::<Request>(value).is_err());
+    }
+    for (query, limit) in [
+        (" ".into(), 1),
+        ("a".into(), 0),
+        ("a".into(), 51),
+        ("å".repeat(257), 1),
+        ("a b c d e f g h i".into(), 1),
+    ] {
+        assert!(Request { query, limit }.terms().is_err());
+    }
+    assert_eq!(
+        Request {
+            query: "  ÅÄ åä UI ui  ".into(),
+            limit: 50
+        }
+        .terms()
+        .unwrap(),
+        ["åä", "ui"]
+    );
+    assert!(
+        Request {
+            query: "å".repeat(256),
+            limit: 1
+        }
+        .terms()
+        .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn sessions_conversations_cancellation_interrupts_sql_and_releases_reader_permit() {
+    let f = fixture();
+    let pool = Arc::new(tokio::sync::Semaphore::new(1));
+    let permit = pool.clone().acquire_owned().await.unwrap();
+    let control =
+        super::store::ReadControl::new(Instant::now() + std::time::Duration::from_secs(5));
+    let guard = control.cancel_on_drop();
+    let store = f.store.clone();
+    let (started, running) = tokio::sync::oneshot::channel();
+    let (finished, result) = tokio::sync::oneshot::channel();
+    let request = tokio::spawn(async move {
+        let _guard = guard;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let mut db = store.reader().unwrap();
+            db.interrupt_on(control).unwrap();
+            started.send(()).unwrap();
+            let output = db.query_row("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000000) SELECT sum(x) FROM n", [], |r| r.get::<_, i64>(0));
+            let _ = finished.send(output);
+        }).await.unwrap();
+    });
+    running.await.unwrap();
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    let acquired = tokio::time::timeout(std::time::Duration::from_secs(1), pool.acquire())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(acquired);
+    let error = result.await.unwrap().unwrap_err();
+    assert!(
+        matches!(error, rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ErrorCode::OperationInterrupted)
+    );
+}
+
+#[test]
+fn sessions_conversations_deadline_preserves_only_completed_stages() {
+    let f = fixture();
+    scan(&f);
+    {
+        let db = f.store.writer().unwrap();
+        db.execute(
+            "UPDATE session SET title='drawer flicker' WHERE thread_id='codex-root'",
+            [],
+        )
+        .unwrap();
+    }
+    let control = super::store::ReadControl::new(Instant::now() + super::conversations::DEADLINE);
+    let guard = control.cancel_on_drop();
+    let mut db = f.store.reader().unwrap();
+    db.interrupt_on(control.clone()).unwrap();
+    let found = super::conversations::search(
+        &db,
+        &super::conversations::Request {
+            query: "drawer flicker".into(),
+            limit: 30,
+        },
+        &control,
+        |_| {
+            drop(guard);
+            Default::default()
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    assert!(found.truncated);
+    assert_eq!(found.conversations.len(), 1);
+    assert_eq!(found.conversations[0].hit_count, 0);
+    assert!(found.conversations[0].title_match);
+    let control = super::store::ReadControl::new(Instant::now());
+    db.interrupt_on(control.clone()).unwrap();
+    assert!(
+        super::conversations::search(
+            &db,
+            &super::conversations::Request {
+                query: "drawer".into(),
+                limit: 30
+            },
+            &control,
+            |_| Default::default(),
+            &Default::default()
+        )
+        .is_err()
+    );
+}

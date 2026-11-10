@@ -17,6 +17,14 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Instant, Sleep};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
+pub(super) fn query_deadline(method: &str) -> std::time::Duration {
+    if method == "sessions/conversations/search" {
+        crate::sessions::conversations::DEADLINE
+    } else {
+        QUERY_DEADLINE
+    }
+}
+
 const RUNNING_LIMIT: usize = 8;
 const QUEUE_LIMIT: usize = 64;
 const QUERY_BYTES: usize = 2 * 1024 * 1024;
@@ -141,12 +149,13 @@ impl ConnectionQueries {
         if let Some(resource) = resource {
             return Err(capacity_error(resource));
         }
+        let duration = query_deadline(&request.method);
         self.queued_bytes += bytes;
         self.queued.push_back(QueuedQuery {
             request,
             bytes,
             admission,
-            deadline: Box::pin(tokio::time::sleep_until(received + QUERY_DEADLINE)),
+            deadline: Box::pin(tokio::time::sleep_until(received + duration)),
         });
         Ok(())
     }
@@ -183,10 +192,12 @@ impl ConnectionQueries {
     }
 
     fn poll(&mut self, context: &mut Context<'_>) -> Poll<QueryEvent> {
-        if let Some(query) = self.queued.front_mut()
-            && query.deadline.as_mut().poll(context).is_ready()
+        if let Some(index) = self
+            .queued
+            .iter_mut()
+            .position(|query| query.deadline.as_mut().poll(context).is_ready())
         {
-            return Poll::Ready(QueryEvent::Expired(self.remove_queued(0).info()));
+            return Poll::Ready(QueryEvent::Expired(self.remove_queued(index).info()));
         }
         for index in 0..self.running.len() {
             if let Poll::Ready(result) = self.running[index].work.as_mut().poll(context) {
@@ -296,9 +307,18 @@ async fn run_query(
             )
             .await
     };
+    let duration = query_deadline(&method);
+    let search_deadline = deadline.deadline().into_std();
+    let work = crate::gateway::sessions::CONVERSATION_SEARCH_DEADLINE.scope(search_deadline, work);
     let outcome = if Instant::now() >= deadline.deadline() {
         drop(work);
         None
+    } else if method == "sessions/conversations/search" {
+        tokio::select! {
+            biased;
+            result = work => Some(result),
+            _ = deadline.as_mut() => None,
+        }
     } else {
         tokio::select! {
             biased;
@@ -313,15 +333,11 @@ async fn run_query(
                 "query_timed_out",
                 json!({
                     "clientId": out.id, "method": method, "threadId": thread,
-                    "limitMs": QUERY_DEADLINE.as_millis(),
+                    "limitMs": duration.as_millis(),
                 }),
             );
             gateway
-                .send_error_to(
-                    &out,
-                    Some(&id),
-                    &RpcError::request_timed_out(QUERY_DEADLINE),
-                )
+                .send_error_to(&out, Some(&id), &RpcError::request_timed_out(duration))
                 .await
         }
     }

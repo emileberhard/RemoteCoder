@@ -3,6 +3,10 @@ use crate::storage::private_state;
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OpenFlags, limits::Limit};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
@@ -117,6 +121,44 @@ pub(crate) fn reader(path: &Path) -> Result<Reader> {
 pub(crate) struct Reader {
     db: Connection,
     pub storage: std::sync::Arc<super::storage::Storage>,
+}
+
+impl Reader {
+    pub(crate) fn interrupt_on(&mut self, control: Arc<ReadControl>) -> Result<()> {
+        self.db
+            .progress_handler(1000, Some(move || control.stopped()))?;
+        Ok(())
+    }
+}
+
+pub(crate) struct ReadControl {
+    deadline: Instant,
+    cancelled: AtomicBool,
+}
+
+impl ReadControl {
+    pub(crate) fn new(deadline: Instant) -> Arc<Self> {
+        Arc::new(Self {
+            deadline,
+            cancelled: AtomicBool::new(false),
+        })
+    }
+
+    pub(crate) fn stopped(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed) || Instant::now() >= self.deadline
+    }
+
+    pub(crate) fn cancel_on_drop(self: &Arc<Self>) -> CancelRead {
+        CancelRead(self.clone())
+    }
+}
+
+pub(crate) struct CancelRead(Arc<ReadControl>);
+
+impl Drop for CancelRead {
+    fn drop(&mut self) {
+        self.0.cancelled.store(true, Ordering::Relaxed);
+    }
 }
 
 impl std::ops::Deref for Reader {

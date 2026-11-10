@@ -1,5 +1,6 @@
 pub(crate) mod changes;
 pub(crate) mod cluster;
+pub(crate) mod conversations;
 mod discovery;
 mod hot;
 pub(crate) mod ingest;

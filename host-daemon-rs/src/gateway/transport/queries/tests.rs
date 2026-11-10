@@ -78,7 +78,7 @@ impl Connection {
                 .send_error_to(
                     &self.requests.out_tx,
                     Some(&info.id),
-                    &RpcError::request_timed_out(QUERY_DEADLINE),
+                    &RpcError::request_timed_out(query_deadline(&info.method)),
                 )
                 .await
                 .unwrap(),
@@ -615,4 +615,28 @@ async fn disconnect_drops_running_queries_and_pending_admission() {
     for _ in 0..32 {
         assert!(gateway.request_budgets.query.try_acquire(1).is_some());
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn conversation_search_deadline_expires_behind_older_queued_reads() {
+    let mut connection = Connection::new();
+    let gateway = Arc::clone(&connection.gateway);
+    let permits: Vec<_> = (0..32)
+        .map(|_| gateway.request_budgets.query.try_acquire(1).unwrap())
+        .collect();
+    connection.query(1).await;
+    connection.send(json!({"id":2,"method":"sessions/conversations/search","params":{"query":"needle","limit":30}})).await;
+    connection.drive_ready().await;
+    tokio::time::advance(crate::sessions::conversations::DEADLINE).await;
+    connection.drive_ready().await;
+    let response = connection.response().await;
+    assert_eq!(response["id"], 2);
+    assert_eq!(response["error"]["code"], -32003);
+    assert_eq!(response["error"]["data"]["kind"], "requestTimedOut");
+    assert_eq!(response["error"]["data"]["limitMs"], 1000);
+    assert_eq!(connection.queries.queue_depth(), 1);
+    assert!(connection.admitted.is_empty());
+    drop(permits);
+    connection.drain().await;
+    assert_eq!(connection.response().await["id"], 1);
 }
