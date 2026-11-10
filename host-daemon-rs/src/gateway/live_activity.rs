@@ -963,6 +963,9 @@ mod startup_tests {
                 )),
                 claude_settings: settings,
                 journal: crate::observability::journal::Journal::disabled(),
+                session_catalog: super::super::sessions::CatalogConfig::fixture(
+                    path.with_file_name("catalog-fixture"),
+                ),
                 turn_state_path: Some(path),
                 recovery_path: None,
                 call_delivery: None,

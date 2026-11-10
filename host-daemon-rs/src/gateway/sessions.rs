@@ -167,7 +167,7 @@ impl Gateway {
                 };
                 let mut changes = gateway.jobs.changes();
                 drop(gateway);
-                let mut previous = Arc::default();
+                let mut previous = Arc::<crate::sessions::metadata::Parents>::default();
                 loop {
                     let Some(gateway) = weak.upgrade() else {
                         return;

@@ -605,6 +605,9 @@ async fn user_alert_gate_preserves_roots_and_silences_all_child_events() {
             codex: Arc::new(CodexAppServer::new_for_test_socket(home)),
             claude_settings: claude_test.settings.clone(),
             journal,
+            session_catalog: super::super::sessions::CatalogConfig::fixture(
+                directory.path().join("catalog-fixture"),
+            ),
             turn_state_path: Some(state_path.clone()),
             recovery_path: None,
             call_delivery: None,

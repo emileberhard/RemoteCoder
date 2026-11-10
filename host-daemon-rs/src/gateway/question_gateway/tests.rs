@@ -455,6 +455,9 @@ async fn a_watched_question_marks_its_unread_row_until_its_coverage_is_lost() {
             codex: Arc::new(CodexAppServer::new("/bin/true".into(), HashMap::new())),
             claude_settings: settings.settings.clone(),
             journal: crate::observability::journal::Journal::disabled(),
+            session_catalog: super::super::sessions::CatalogConfig::fixture(
+                root.path().join("catalog-fixture"),
+            ),
             turn_state_path: Some(root.path().join("turn-state.json")),
             recovery_path: None,
             call_delivery: None,
