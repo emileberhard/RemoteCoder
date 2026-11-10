@@ -95,6 +95,7 @@ impl Gateway {
             OwnedRoute::HostInfo => host_info(
                 self.claude_settings.router.is_some(),
                 self.serves_claude_queue(),
+                self.conversation_search_provider.is_some(),
             ),
             OwnedRoute::ModelList => self.model_list(params).await,
             OwnedRoute::Rename => self.rename_thread(&params).await,
@@ -1679,7 +1680,11 @@ pub(super) fn claude_history_error(
     }
 }
 
-fn host_info(speech_available: bool, claude_queue: bool) -> RpcResult {
+fn host_info(
+    speech_available: bool,
+    claude_queue: bool,
+    conversation_search_by_meaning: bool,
+) -> RpcResult {
     let paths = crate::config::HostPaths::from_env()
         .map_err(|error| RpcError::new(RpcCode::Internal, format!("{error:#}")))?;
     let home_directory = paths
@@ -1704,6 +1709,7 @@ fn host_info(speech_available: bool, claude_queue: bool) -> RpcResult {
         speech_available,
         fleet_live_activity: true,
         conversation_search: true,
+        conversation_search_by_meaning,
         claude_queue,
     }))
 }

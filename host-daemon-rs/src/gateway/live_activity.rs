@@ -968,6 +968,7 @@ mod startup_tests {
                 call_delivery: None,
                 external_auth: None,
                 external_providers: None,
+                conversation_search_provider: None,
             },
             probe.service.clone(),
         )

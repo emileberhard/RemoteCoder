@@ -432,6 +432,7 @@ async fn run(
             settings.external_providers.clone(),
             &settings.host_paths.state_directory(),
         )?,
+        settings.conversation_search_provider.clone(),
         settings.user_name.clone(),
     );
     gateway

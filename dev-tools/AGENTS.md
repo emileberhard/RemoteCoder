@@ -35,6 +35,14 @@ advertised capability and a usable connection afterwards. It stops its own
 processes and removes the private root on success; failure retains the root as
 evidence. It never connects to an installed gateway or starts an agent turn.
 
+## Conversation search probe
+
+`bun dev-tools/probes/conversation-search.mjs <candidate>` uses private provider
+homes and a stub meaning command. It checks split-message and diacritic search,
+exact Claude locate, its inclusive history cursor and validation. The owner
+stops its gateway, native daemon and provider, removing private evidence on
+success and retaining it on failure. No installed gateway is contacted.
+
 ## Cluster transport isolation probe
 
 `bun dev-tools/probes/cluster-transport.mjs <candidate> <matched-runtime-package>`

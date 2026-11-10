@@ -23,6 +23,11 @@ enum Operation {
         #[arg(long, default_value_t = 30)]
         limit: usize,
     },
+    Meaning {
+        query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     Locate {
         item_key: String,
     },
@@ -84,6 +89,10 @@ fn request(command: &Command) -> Result<(&'static str, Value)> {
                 query: query.clone(),
                 limit: *limit,
             })?,
+        ),
+        Operation::Meaning { query, limit } => (
+            "sessions/conversations/searchByMeaning",
+            json!({"query":query,"limit":limit}),
         ),
         Operation::Locate { item_key } => ("sessions/locate", json!({"itemKey":item_key})),
         Operation::Search {

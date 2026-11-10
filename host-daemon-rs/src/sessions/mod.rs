@@ -6,6 +6,7 @@ mod hot;
 pub(crate) mod index;
 pub(crate) mod ingest;
 pub(crate) mod locate;
+pub(crate) mod meaning;
 pub(crate) mod metadata;
 pub(crate) mod mirror;
 pub(crate) mod query;

@@ -176,6 +176,7 @@ impl Fixture {
             )),
             fallback.then(|| copilot_fallback(&directory.path().join("state"))),
             None,
+            None,
         );
         Self {
             gateway,

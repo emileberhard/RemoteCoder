@@ -258,6 +258,9 @@ impl Gateway {
         method: &str,
         params: Value,
     ) -> RpcResult {
+        if method == "sessions/conversations/searchByMeaning" {
+            return self.conversation_search_by_meaning(params).await;
+        }
         if method == "sessions/locate" {
             return self.locate_session(grant, params).await;
         }
@@ -267,6 +270,58 @@ impl Gateway {
         self.session_request(grant, method, params)
             .await
             .map_err(session_error)
+    }
+
+    async fn conversation_search_by_meaning(&self, params: Value) -> RpcResult {
+        let request: conversations::Request =
+            serde_json::from_value(params).map_err(|e| session_error(e.into()))?;
+        request.validate().map_err(session_error)?;
+        let provider = self.conversation_search_provider.as_ref().ok_or_else(|| {
+            session_error(anyhow::anyhow!(
+                "unavailable: conversation search provider is not configured"
+            ))
+        })?;
+        let deadline = SESSION_REQUEST_DEADLINE
+            .try_with(|d| *d)
+            .unwrap_or_else(|_| std::time::Instant::now() + crate::sessions::meaning::DEADLINE);
+        let control = ReadControl::new(deadline);
+        let _cancel = control.cancel_on_drop();
+        let work = async {
+            let hits = provider.search(&request).await.map_err(session_error)?;
+            let runtime = self
+                .sessions_runtime()
+                .await
+                .map_err(session_error)?
+                .clone();
+            let permit = runtime
+                .search_readers
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| session_error(e.into()))?;
+            let store = runtime.store.clone();
+            let result = tokio::task::spawn_blocking(move || -> Result<Value> {
+                let _permit = permit;
+                let mut db = store.reader()?;
+                db.interrupt_on(control)?;
+                Ok(serde_json::to_value(crate::sessions::meaning::resolve(
+                    &db,
+                    hits,
+                    request.limit,
+                )?)?)
+            })
+            .await
+            .map_err(|e| session_error(e.into()))?
+            .map_err(session_error)?;
+            Ok(result)
+        };
+        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), work)
+            .await
+            .unwrap_or_else(|_| {
+                Err(RpcError::request_timed_out(
+                    crate::sessions::meaning::DEADLINE,
+                ))
+            })
     }
 
     async fn conversation_search(&self, params: Value) -> RpcResult {

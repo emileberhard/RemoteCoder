@@ -549,6 +549,12 @@ blocks startup or provider journal retirement.
   item verification, never resume/subscription. Two physical native reads retain
   permits until their replies even if the waiter cancels; saturation returns the
   known turn immediately. Catalog and Claude scans share search cancellation.
+- `sessions/conversations/searchByMeaning` runs the operator command selected by
+  `RC_CODEX_GATEWAY_CONVERSATION_SEARCH_PROVIDER_FILE`; only configured gateways
+  advertise `conversationSearchByMeaning`. The Query owns its process group,
+  eight-second deadline, 1 MiB stdout bound and two provider permits. Resolution
+  uses exact present catalog identities and persisted roots, preserving provider
+  rank. The sessions README owns the provider and result shapes.
 - `host/info` returns the gateway process's `homeDirectory`, physical `hostname`,
   `automationsAuthority`, `speechAvailable`, `fleetLiveActivity`, `claudeQueue` and `conversationSearch` capabilities. These are the
   authoritative inputs for client feature availability and physical-host routing.

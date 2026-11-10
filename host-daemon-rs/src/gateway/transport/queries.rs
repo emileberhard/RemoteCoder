@@ -20,7 +20,8 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 pub(super) fn query_deadline(method: &str) -> std::time::Duration {
     if matches!(method, "sessions/conversations/search" | "sessions/locate") {
         crate::sessions::conversations::DEADLINE
-
+    } else if method == "sessions/conversations/searchByMeaning" {
+        crate::sessions::meaning::DEADLINE
     } else {
         QUERY_DEADLINE
     }

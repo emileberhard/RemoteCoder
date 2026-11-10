@@ -485,6 +485,7 @@ async fn job_owner_rejects_invalid_external_claude_starts_and_continuations_befo
         None,
         external_providers,
         None,
+        None,
     );
     let start_id = JobId::for_mutation(Provider::Claude, "valid-external-start").unwrap();
     let admitted = gateway

@@ -234,6 +234,7 @@ async fn both_first_party_unavailable_use_configured_copilot_with_native_codex_a
         None,
         Some(external),
         None,
+        None,
     );
     let mut control = FakeControl::attach(&gateway, 4).await;
     *gateway.control_init_result.lock().await = Some(json!({}));

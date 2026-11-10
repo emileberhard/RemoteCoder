@@ -271,3 +271,30 @@ reads cannot be cancelled: cancelling releases the waiter while the physical
 read finishes. Two native read permits remain held until the actual reply; a
 third locate returns its turn-level answer immediately rather than queueing.
 
+## Search by meaning
+
+`sessions/conversations/searchByMeaning {query,limit}` accepts 1–512 trimmed
+UTF-8 query bytes and 1–50 results, rejecting unknown fields. It returns
+`{schemaVersion:1,conversations:[{sessionKey,hostId,provider,threadId,title,cwd,lastAt,summary}]}`.
+The operator sets `RC_CODEX_GATEWAY_CONVERSATION_SEARCH_PROVIDER_FILE` to a
+regular JSON file of at most 64 KiB containing an absolute `command` and `args`
+array. No shell expansion is performed. Only configured hosts advertise
+`host/info.conversationSearchByMeaning:true`. The debug CLI is
+`sessions meaning QUERY --limit 20` through the gateway.
+
+Each request writes `{query,limit}` JSON to stdin and reads
+`{conversations:[{sessionId,provider,summary,score}]}` from stdout. The provider
+ranks results; the gateway preserves that order, resolves provider/native id
+exactly to one present catalog session, folds its persisted ancestry, dedupes
+roots and drops unresolved or ambiguous identities. Dates and metadata remain
+nullable. The query is never logged. The eight-second deadline includes
+admission and two provider permits. Stdout is capped at 1 MiB; malformed output,
+provider failure and overflow are errors. Cancellation, disconnect and timeout
+kill the provider process group. Catalog resolution uses the same SQLite
+cancellation path as keyword search.
+
+`bun dev-tools/probes/conversation-search.mjs /absolute/candidate` verifies
+search, a split-message query, diacritic folding, exact Claude locate and its
+inclusive history cursor, parameter rejection and a stub meaning provider in
+private state. It removes its root and processes on success, retaining evidence
+on failure.

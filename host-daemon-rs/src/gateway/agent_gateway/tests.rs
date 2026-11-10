@@ -611,6 +611,7 @@ async fn user_alert_gate_preserves_roots_and_silences_all_child_events() {
 
             external_auth: None,
             external_providers: None,
+            conversation_search_provider: None,
         },
         notifier,
     );

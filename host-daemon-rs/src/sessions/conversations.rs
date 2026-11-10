@@ -17,13 +17,19 @@ pub(crate) struct Request {
 }
 
 impl Request {
-    pub(crate) fn terms(&self) -> Result<Vec<String>> {
+    pub(crate) fn validate(&self) -> Result<()> {
         let query = self.query.trim();
         ensure!(
             (1..=512).contains(&query.len()),
             "query must be 1..=512 UTF-8 bytes after trimming"
         );
         ensure!((1..=50).contains(&self.limit), "limit must be 1..=50");
+        Ok(())
+    }
+
+    pub(crate) fn terms(&self) -> Result<Vec<String>> {
+        self.validate()?;
+        let query = self.query.trim();
         let mut terms = Vec::new();
         for word in query.split_whitespace() {
             let word = word.to_lowercase();

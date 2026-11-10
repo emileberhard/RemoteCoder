@@ -250,6 +250,7 @@ struct GatewayConstruction {
     call_delivery: Option<calls::CallDeliveryConfig>,
     external_auth: Option<external_auth::ExternalAuth>,
     external_providers: Option<Arc<ExternalProviders>>,
+    conversation_search_provider: Option<Arc<crate::sessions::meaning::Provider>>,
 }
 
 mod account_context;
@@ -271,6 +272,7 @@ pub(crate) struct Gateway {
     pub(crate) admission: Arc<crate::gateway::admission::ConversationAdmission>,
     external_auth: Option<external_auth::ExternalAuth>,
     external_providers: Option<Arc<ExternalProviders>>,
+    conversation_search_provider: Option<Arc<crate::sessions::meaning::Provider>>,
     questions: question_gateway::Runtime,
     agents: agent_gateway::Runtime,
     pub(crate) jobs: Arc<crate::agents::jobs::owner::JobOwner>,
@@ -371,6 +373,7 @@ impl Gateway {
                 call_delivery,
                 external_auth: None,
                 external_providers: None,
+                conversation_search_provider: None,
             },
             apns,
         )
@@ -392,6 +395,7 @@ impl Gateway {
         call_delivery: Option<calls::CallDeliveryConfig>,
         external_auth: Option<ExternalAuth>,
         external_providers: Option<Arc<ExternalProviders>>,
+        conversation_search_provider: Option<Arc<crate::sessions::meaning::Provider>>,
         user_name: Option<String>,
     ) -> Arc<Self> {
         Self::construct_with_apns(
@@ -405,6 +409,7 @@ impl Gateway {
                 call_delivery,
                 external_auth,
                 external_providers,
+                conversation_search_provider,
             },
             apns,
         )
@@ -424,6 +429,7 @@ impl Gateway {
             call_delivery,
             external_auth,
             external_providers,
+            conversation_search_provider,
         } = configuration;
         claude_settings.external_providers = external_providers.clone();
         let metadata_path = turn_state_path
@@ -492,6 +498,7 @@ impl Gateway {
             side_question_forks: side_question::Forks::default(),
             external_auth,
             external_providers,
+            conversation_search_provider,
             admission: Arc::clone(&admission),
             agents: agent_gateway::Runtime::default(),
             jobs: Arc::new(crate::agents::jobs::owner::JobOwner::new(

@@ -58,6 +58,7 @@ pub(super) async fn run(sources: &ConfigSources) -> Result<()> {
             .map(|config| ExternalAuth::new(codex_router, config.codex_account().to_owned())),
         None,
         None,
+        None,
     );
     gateway.start_runtime().await?;
     tracing::info!("managed Codex runtime started without gateway ingress");

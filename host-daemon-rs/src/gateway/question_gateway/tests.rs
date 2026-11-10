@@ -461,6 +461,7 @@ async fn a_watched_question_marks_its_unread_row_until_its_coverage_is_lost() {
 
             external_auth: None,
             external_providers: None,
+            conversation_search_provider: None,
         },
         probe.service.clone(),
     );
