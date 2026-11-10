@@ -317,10 +317,9 @@ async fn run_query(
                     gateway
                         .sessions_rpc(
                             &out.grant,
-                            &request.method,
+                            method,
                             request.object["params"].clone(),
                             request_deadline,
-                            policy.limit,
                         )
                         .await
                 }
