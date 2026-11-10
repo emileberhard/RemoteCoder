@@ -808,6 +808,20 @@ impl ClaudeSupervisor {
             .await
     }
 
+    pub(crate) async fn record_fork_origin(
+        &self,
+        thread_id: &str,
+        source: &str,
+    ) -> anyhow::Result<()> {
+        self.conversation_index
+            .record_fork_origin(thread_id, source)
+            .await
+    }
+
+    pub(crate) async fn fork_origin(&self, thread_id: &str) -> anyhow::Result<Option<String>> {
+        self.conversation_index.fork_origin(thread_id).await
+    }
+
     pub(crate) fn is_minted(&self, thread_id: &str) -> anyhow::Result<bool> {
         self.conversation_index.is_minted(thread_id)
     }

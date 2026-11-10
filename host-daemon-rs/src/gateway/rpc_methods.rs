@@ -1044,6 +1044,18 @@ impl Gateway {
                 }
             }
         }
+        if let Some(agent) = self.claude_agent() {
+            if let Some(phase) = &mut phase {
+                phase.advance("claudeForkOrigin");
+            }
+            match agent.fork_origin(&thread_id).await {
+                Ok(Some(source)) => thread["forkedFromId"] = json!(source),
+                Ok(None) => {}
+                Err(error) => {
+                    warn!(thread_id, error = %format!("{error:#}"), "claude fork origin unreadable");
+                }
+            }
+        }
         if let Some(phase) = phase {
             phase.complete();
         }

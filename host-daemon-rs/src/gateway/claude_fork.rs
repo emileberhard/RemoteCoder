@@ -77,6 +77,10 @@ impl Gateway {
             .record_fork_note(&thread_id, note)
             .await
             .map_err(failed)?;
+        agent
+            .record_fork_origin(&thread_id, source_thread)
+            .await
+            .map_err(failed)?;
         let target = source_path.with_file_name(format!("{session_uuid}.jsonl"));
         let copy_session = session_uuid.clone();
         tokio::task::spawn_blocking(move || {
@@ -95,11 +99,8 @@ impl Gateway {
                 "turns": kept_turns,
             }),
         );
-        let mut response = self
-            .claude_thread_response(&json!({ "threadId": thread_id }))
-            .await?;
-        response["thread"]["forkedFromId"] = json!(source_thread);
-        Ok(response)
+        self.claude_thread_response(&json!({ "threadId": thread_id }))
+            .await
     }
 
     async fn claude_fork_source(
@@ -490,6 +491,47 @@ mod tests {
             "{argv:?}"
         );
         assert!(!argv.contains(&json!("--session-id")), "{argv:?}");
+    }
+
+    #[tokio::test]
+    async fn later_reads_name_the_immediate_fork_source_and_unrecorded_threads_name_none() {
+        let fixture = Fixture::new().await;
+        let source = fixture
+            .call("thread/read", json!({"threadId": SOURCE_THREAD}))
+            .await;
+        assert!(
+            source["result"]["thread"].get("forkedFromId").is_none(),
+            "{source}"
+        );
+
+        let fork = fixture.fork(None).await["result"]["thread"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for method in ["thread/read", "thread/resume"] {
+            let read = fixture.call(method, json!({"threadId": fork})).await;
+            assert_eq!(
+                read["result"]["thread"]["forkedFromId"], SOURCE_THREAD,
+                "{method}: {read}"
+            );
+        }
+
+        let grandchild = fixture
+            .call(
+                "thread/fork",
+                json!({"threadId": fork, "persistExtendedHistory": false,
+                    "excludeTurns": true, "threadSource": "user"}),
+            )
+            .await;
+        let grandchild = grandchild["result"]["thread"]["id"].as_str().unwrap();
+        let read = fixture
+            .call("thread/read", json!({"threadId": grandchild}))
+            .await;
+        assert_eq!(
+            read["result"]["thread"]["forkedFromId"],
+            json!(fork),
+            "{read}"
+        );
     }
 
     #[tokio::test]

@@ -1785,16 +1785,18 @@ Claude. The `RC_CLAUDE_*` settings are in
     visible history (CLI 2.1.282 kept none of 236 pre-compaction records).
   - The index keeps the kept turns' identities, including reasoning and plan
     rows, through `ClaudeSupervisor::fork_thread_records`. Session metadata copies
-    the source's current model, effort and Fast selection at revision 1. Both
-    and a pending fork note beside `.minted` are written before the transcript,
-    which appears atomically last. The common supervisor input submission admits
-    that note once, covering text, agent messages, voice and restart paths; it
-    deletes the pending file only after queue admission. The admitted input owns
-    the note through restart capture. Never append synthetic provider records. A
+    the source's current model, effort and Fast selection at revision 1. Both,
+    a pending fork note and a `.fork-origin` record naming the source thread
+    are written beside `.minted` before the transcript, which appears
+    atomically last. The common supervisor input submission admits that note
+    once, covering text, agent messages, voice and restart paths; it deletes
+    the pending file only after queue admission. The admitted input owns the
+    note through restart capture. Never append synthetic provider records. A
     failure or cancellation before then leaves no visible thread, only records
-    under the unused id: its creation record and index copy, which nothing
-    reads, and its metadata record, which metadata reads still return. Once
-    the transcript exists the fork is complete, even if the response fails.
+    under the unused id: its creation record, index copy and origin record,
+    which nothing reads, and its metadata record, which metadata reads still
+    return. Once the transcript exists the fork is complete, even if the
+    response fails.
   - A running turn never moves. Forking at or after one is refused, and a
     whole-thread fork stops before it. The fork point is read under the
     source's lifecycle lock, and the fork is refused if the running turn
@@ -1806,9 +1808,13 @@ Claude. The `RC_CLAUDE_*` settings are in
     Subagent transcripts (`<session>/subagents/`), background tasks and the
     `.parent` record (user Stop, parent deliveries) stay with the source. The fork keeps each Agent call and the result it
     returned.
-  - The response is the fork's `thread/read` shape plus `forkedFromId`, which
-    later reads do not return. Its activity time is its last copied record, so
-    the drawer lists it beside its source until its first new turn.
+  - The response, `thread/read` and `thread/resume` carry the `.fork-origin`
+    source as `forkedFromId`, so a fork of a fork names its immediate source.
+    Without the record, including Claude forks made before it existed, the
+    field is absent: the origin is unknown, not proof that the thread is no
+    fork. The record is never removed. The response's activity time is the
+    fork's last copied record, so the drawer lists it beside its source until
+    its first new turn.
 - **User Stop is exact.** `turn/interrupt` requires the running or suspended
   `turnId`: missing is `-32602`, different or ended is `-32600` with
   `data.kind` `turnNotRunning`. A Stop that cannot be saved or checked is

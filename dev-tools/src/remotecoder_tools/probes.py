@@ -107,6 +107,14 @@ async def cmd_e2e_fork_live(args: argparse.Namespace) -> int:
             _assert_e2e(thread.get("forkedFromId") == first.thread_id, "fork did not name its source thread")
             _assert_e2e(thread.get("name") == source_name, f"fork name was {thread.get('name')!r}, expected the source name")
             await mark_purpose(ws, next_id=next_id, thread_id=fork_id, purpose="probe", timeout_s=args.timeout)
+            later, _elapsed, _byte_count = await _timed_rpc(
+                ws, req_id=next_id(), method="thread/read",
+                params={"threadId": fork_id, "includeTurns": False}, timeout_s=args.timeout,
+            )
+            _assert_e2e(
+                (later.get("thread") or {}).get("forkedFromId") == first.thread_id,
+                "a later thread/read did not name the fork's source thread",
+            )
             report("fork", f"thread={fork_id} through={last_turn_id or 'latest'} elapsed={elapsed:.2f}s")
             return thread
 
