@@ -145,9 +145,10 @@ private struct ConversationSearchStatusRow: View {
         }
         .font(.footnote)
         .foregroundStyle(.secondary)
-        .lineLimit(1)
+        .lineLimit(2, reservesSpace: true)
         .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .leading)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

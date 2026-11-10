@@ -12,9 +12,9 @@ private enum SearchFixture {
     static let linux = UUID(uuidString: "2B8E5D10-7A3C-4F6B-8E21-4C9D7B0A5E62") ?? UUID()
     static let macBook = UUID(uuidString: "9A4F7C23-5B1E-4D8A-A6C3-7E2B9D1F0C84") ?? UUID()
 
-    static func hosts(linuxAnswers: Bool) -> [ConversationSearchHost] {
+    static func hosts(rows: Int, linuxAnswers: Bool) -> [ConversationSearchHost] {
         [
-            host(mini, "Mini", answer: .results(response(on: mini))),
+            host(mini, "Mini", answer: .results(response(on: mini, rows: rows))),
             linuxAnswers
                 ? host(linux, "Linux", answer: nil)
                 : ConversationSearchHost(id: linux, name: "Linux", gatewayID: nil, headers: [], marks: marks, availability: .unreachable),
@@ -34,7 +34,7 @@ private enum SearchFixture {
         })
     }
 
-    private static func response(on host: UUID) -> ConversationSearchResponse {
+    private static func response(on host: UUID, rows: Int) -> ConversationSearchResponse {
         let now = Date.now
         func conversation(_ thread: String, _ provider: AgentProvider, title: String?, cwd: String, hoursAgo: Double,
                           titleMatch: Bool, hitCount: Int, excerpt: String?) -> ConversationSearchResponse.Conversation {
@@ -43,7 +43,7 @@ private enum SearchFixture {
                 threadId: thread, title: title, cwd: cwd, lastAt: now.addingTimeInterval(-hoursAgo * 3_600),
                 titleMatch: titleMatch, hitCount: hitCount, hits: excerpt.map { [.init(excerpt: $0)] } ?? [])
         }
-        return ConversationSearchResponse(schemaVersion: 1, conversations: [
+        return ConversationSearchResponse(schemaVersion: 1, conversations: Array([
             conversation("t1", .codex, title: "Drawer flicker on open", cwd: "/Users/emil/RemoteCoder", hoursAgo: 2,
                          titleMatch: true, hitCount: 6,
                          excerpt: "Opening the history panel twice in a row reproduces it every time: the drawer flicker shows up when the list reloads under the finger while it slides open."),
@@ -66,7 +66,7 @@ private enum SearchFixture {
                          excerpt: "drawer flicker reproduced on the iPad with Stage Manager, never on the iPhone"),
             conversation("t9", .codex, title: "Liquid Glass audit", cwd: "/Users/emil/RemoteCoder", hoursAgo: 700, titleMatch: false,
                          hitCount: 4, excerpt: "Every glass surface in the drawer passes except the search capsule, which flickers when the keyboard appears."),
-        ])
+        ].prefix(rows)))
     }
 }
 
@@ -74,8 +74,8 @@ private struct ConversationSearchFixture: View {
     @State private var theme = AppThemeStore()
     @State private var search: ConversationSearchSession
 
-    init(query: String, linuxAnswers: Bool) {
-        let hosts = SearchFixture.hosts(linuxAnswers: linuxAnswers)
+    init(query: String, rows: Int, linuxAnswers: Bool) {
+        let hosts = SearchFixture.hosts(rows: rows, linuxAnswers: linuxAnswers)
         let session = ConversationSearchSession(clock: ImmediateClock()) { hosts }
         session.query = query
         _search = State(initialValue: session)
@@ -100,10 +100,14 @@ private struct ConversationSearchFixture: View {
 }
 
 #Preview("Results") {
-    ConversationSearchFixture(query: "drawer flicker", linuxAnswers: false)
+    ConversationSearchFixture(query: "drawer flicker", rows: 9, linuxAnswers: false)
+}
+
+#Preview("Unavailable hosts") {
+    ConversationSearchFixture(query: "drawer flicker", rows: 2, linuxAnswers: false)
 }
 
 #Preview("Searching") {
-    ConversationSearchFixture(query: "drawer flicker", linuxAnswers: true)
+    ConversationSearchFixture(query: "drawer flicker", rows: 2, linuxAnswers: true)
 }
 #endif

@@ -132,8 +132,8 @@ private struct ConversationSearchStatusRow: View {
         }
         .scaledFont(.footnote)
         .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 22, alignment: .leading)
+        .lineLimit(2, reservesSpace: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
 }
