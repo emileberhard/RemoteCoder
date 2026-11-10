@@ -184,7 +184,7 @@ struct ClaudeAccountSummaryRow: View {
                 .accessibilityLabel("Usage details for \(account.label)")
                 .tooltip("Show usage details")
             }
-            Text([account.plan.capitalized, account.shared ? "Shared" : nil, account.availabilityText].compactMap { $0 }.joined(separator: " · "))
+            Text([account.planTitle, account.shared ? "Shared" : nil, account.availabilityText].compactMap { $0 }.joined(separator: " · "))
                 .scaledFont(.caption).foregroundStyle(.secondary).padding(.leading, 32)
             UsageDetailsContent(rows: account.usageRows(now: .now), notice: account.notice, isLoading: directory.isRefreshing)
                 .padding(.leading, 32)
@@ -220,7 +220,7 @@ struct CopilotAccountSummaryRow: View {
             .accessibilityLabel("GitHub Copilot, \(account.label)")
             .accessibilityValue(isSelected ? "Selected" : "Not selected")
             .accessibilityIdentifier("select-claude-copilot")
-            Text([account.label, account.plan.capitalized, account.availabilityText].joined(separator: " · "))
+            Text([account.label, account.planTitle, account.availabilityText].joined(separator: " · "))
                 .scaledFont(.caption).foregroundStyle(.secondary).padding(.leading, 32)
             UsageDetailsContent(rows: account.usageRows(now: .now), notice: account.notice, isLoading: directory.isRefreshing)
                 .padding(.leading, 32)
@@ -249,7 +249,7 @@ struct ClaudeAccountDetailView: View {
             if let account = directory.accounts.first(where: { $0.id == accountID }) {
                 Section {
                     Text(account.label).scaledFont(.headline).textSelection(.enabled)
-                    Text([account.plan.capitalized, account.shared ? "Shared" : nil, account.availabilityText]
+                    Text([account.planTitle, account.shared ? "Shared" : nil, account.availabilityText]
                         .compactMap { $0 }.joined(separator: " · "))
                         .scaledFont(.subheadline).foregroundStyle(.secondary)
                 }

@@ -16,8 +16,9 @@ and Claude subscriptions from llm-router, deduplicated by router account ID
 across hosts. The newest successful router list replaces every Claude account
 record and its membership, even when usage becomes unknown after a restart.
 The drawer shows the selected Claude and Codex subscriptions in separate usage
-rings. Claude rows show the plan, a shared marker, 5-hour and weekly usage with
-reset times, and availability. **Automatic** follows the router's own choice and
+rings. Claude rows show the plan (the observed tier, such as Max 20x, when the
+router reports it), a shared marker, 5-hour, weekly and model-specific usage
+such as Fable weekly with reset times, and availability. **Automatic** follows the router's own choice and
 marks the account it picks; choosing an account stores RemoteCoder's router
 preference, shared by both hosts, and choosing Automatic clears it. An error
 keeps the prior preference. When the router reports Copilot, a GitHub Copilot

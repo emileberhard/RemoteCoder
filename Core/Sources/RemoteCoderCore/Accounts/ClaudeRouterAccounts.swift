@@ -111,6 +111,7 @@ struct ClaudeRouterAccount: Codable, Equatable, Sendable, Identifiable {
     let label: String
     enum Availability: String, Codable, Sendable { case available, cooling, exhausted, rejected, unavailable }
     let plan: String
+    var tier: String? = nil
     let shared: Bool
     let credential: Credential
     let availability: Availability
@@ -119,10 +120,12 @@ struct ClaudeRouterAccount: Codable, Equatable, Sendable, Identifiable {
     let observedAt: Double?
     var resets: AccountResets? = nil
 
+    var planTitle: String { (tier?.replacingOccurrences(of: "_", with: " ") ?? plan).capitalized }
+
     func usageRows(now: Date) -> [CodexUsageLimitRow] {
         windows.map { window in
-            let kind: UsageWindowKind = window.durationMinutes == 300 ? .fiveHour : .weekly
-            return CodexUsageLimitRow(id: "claude-\(id)-\(window.id)", title: kind.label,
+            let kind = window.kind
+            return CodexUsageLimitRow(id: "claude-\(id)-\(window.id)", title: window.title,
                 usedPercent: 100 - window.remainingPercent, kind: kind,
                 isStale: isUsageStale(now: now),
                 resetText: window.resetText(now: now, calendar: .autoupdatingCurrent),

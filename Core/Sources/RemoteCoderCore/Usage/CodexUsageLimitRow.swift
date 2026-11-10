@@ -1,7 +1,7 @@
 import Foundation
 
 enum UsageWindowKind: Int, CaseIterable, Hashable, Sendable {
-    case fiveHour, weekly, fable, monthly, other
+    case fiveHour, weekly, monthly, other
 }
 
 struct CodexUsageLimitRow: Identifiable, Hashable, Sendable {
@@ -18,6 +18,6 @@ struct CodexUsageLimitRow: Identifiable, Hashable, Sendable {
 
 extension UsageWindowKind {
     var label: String {
-        switch self { case .weekly: "Weekly"; case .fiveHour: "5-hour"; case .fable: "Fable weekly"; case .monthly: "Monthly budget"; case .other: "Limit" }
+        switch self { case .weekly: "Weekly"; case .fiveHour: "5-hour"; case .monthly: "Monthly budget"; case .other: "Limit" }
     }
 }
