@@ -1506,7 +1506,7 @@ fn locate_maps_exact_parts_and_agent_links_to_inclusive_turn_cursors() {
                 None,
                 Some(agent.items_cursor),
                 Some(1),
-                SortDirection::Asc,
+                Some(SortDirection::Asc),
             ),
         )
         .unwrap();
