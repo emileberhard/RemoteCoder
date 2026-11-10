@@ -120,9 +120,10 @@ impl Provider {
             .take(OUTPUT_BYTES + 1);
         let mut bytes = Vec::new();
         let input = serde_json::to_vec(request)?;
-        let write = async {
+        let write = async move {
             stdin.write_all(&input).await?;
-            stdin.shutdown().await
+            drop(stdin);
+            Ok::<_, std::io::Error>(())
         };
         let read = async {
             stdout.read_to_end(&mut bytes).await?;
