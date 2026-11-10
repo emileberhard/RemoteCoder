@@ -217,6 +217,17 @@ final class ConversationList {
         await threadStore.save(snapshot: nextHeaderSnapshot())
     }
 
+    func recordForkOrigin(threadID: String, source: String) async {
+        await loadPersistedThreadsIfNeeded()
+        guard !headerReadsRetired,
+              let index = threads.firstIndex(where: { $0.id == threadID }),
+              threads[index].forkedFromThreadID != source
+        else { return }
+        noteHeaderMutation(threadID)
+        threads[index].forkedFromThreadID = source
+        await threadStore.save(snapshot: nextHeaderSnapshot())
+    }
+
     func recordThreadName(threadID: String, name: String?) async {
         await loadPersistedThreadsIfNeeded()
         guard !headerReadsRetired else { return }

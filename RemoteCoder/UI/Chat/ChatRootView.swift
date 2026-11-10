@@ -544,6 +544,7 @@ private struct ChatScreen: View {
                     workspace: workspace,
                     screen: screen,
                     onReturnToParent: returnToAgentParent,
+                    onOpenConversation: { _ = selectConversation($0) },
                     onOpenConversations: usesPersistentSidebar ? nil : {
                         dismissComposerFocus()
                         drawerPresentation.isOpen = true

@@ -1930,7 +1930,11 @@ threads changes, only newly added threads get a question read; the rest follow
 remain enabled.
 
 Forking a bubble uses its canonical turn identity and never reads the full
-thread or falls back to a different fork boundary. Browsing does not resume a
+thread or falls back to a different fork boundary. A fork's origin comes from
+`forkedFromId` on the `thread/read` the app already makes when it opens a
+conversation (and on fork responses); list rows never carry it, so the header
+cache retains a known origin across list refreshes and an absent one stays
+unknown. Browsing does not resume a
 thread. Both providers page history with the same app-server v2
 `thread/turns/list` and `thread/items/list`; the gateway answers them for
 Claude threads with Codex's wire shape, cursor semantics and error codes. Token

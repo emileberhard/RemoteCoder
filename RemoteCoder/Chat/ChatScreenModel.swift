@@ -1087,7 +1087,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private func loadResumeConversation(_ thread: ConversationHeader, session: ConversationSession, previousOwner: ConversationSession?,
                                         loadID: UUID, settingsRevision: UInt64) async -> ResumeOutcome {
         let operation = AppPerformanceDiagnostics.shared.beginHistory(.opening, threadID: thread.id)
-        async let settings: Void = restoreConversationSettings(thread, loadID: loadID, revision: settingsRevision)
+        async let settings = restoreConversationSettings(thread, loadID: loadID, revision: settingsRevision)
         var failure: (any Error)?
         do {
             try await session.restore()
@@ -1118,7 +1118,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
                 failure = error
             }
         }
-        await settings
+        let refreshed = await settings
         guard isCurrentResumeLoad(loadID, threadID: thread.id) else {
             AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
             return .superseded
@@ -1131,6 +1131,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
         await conversations.evictIdle(keeping: target.presentedConversationIDs)
         target.warmConversationsIfIdle()
+        if let refreshed { await adoptForkOrigin(of: refreshed) }
         return failure.map(ResumeOutcome.failed) ?? .loaded
     }
 
@@ -1638,6 +1639,22 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             parent: parent, parentTitle: parentTitle)
     }
 
+    var forkOrigin: ForkOrigin? {
+        guard let threadID = openThreadID else { return nil }
+        let current = activeConversation?.id == threadID ? activeConversation : nil
+        guard let source = target.conversationList.header(id: threadID)?.forkedFromThreadID ?? current?.forkedFromThreadID
+        else { return nil }
+        return forkOrigin(of: ConversationAddress(hostID: hostID, threadID: source))
+    }
+
+    func forkOrigin(of source: ConversationAddress) -> ForkOrigin {
+        let list = target.conversationList
+        let title = source.hostID == hostID ? list.header(id: source.threadID).map {
+            ConversationSidebarProjection.title(for: $0, pinnedName: list.pinnedName(for: $0.id))
+        } : nil
+        return ForkOrigin(source: source, sourceTitle: title)
+    }
+
     var acceptsAttachments: Bool {
         target.acceptsWork && currentDraft != nil && acceptsConversationInput && currentConversationDispatchBlock != .otherClient
     }
@@ -1762,29 +1779,40 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         refreshReasoningVisibility()
     }
 
-    func restoreConversationSettings(_ thread: ConversationHeader, loadID: UUID, revision: UInt64) async {
+    func restoreConversationSettings(_ thread: ConversationHeader, loadID: UUID, revision: UInt64) async -> ConversationHeader? {
         let isCurrent = { self.isCurrentResumeLoad(loadID, threadID: thread.id) && self.settingsSelectionRevision == revision }
-        guard isCurrent() else { return }
-        if restorePendingConversationSettings(for: thread.id) { return }
+        guard isCurrent() else { return nil }
+        if restorePendingConversationSettings(for: thread.id) { return nil }
         async let current = target.gatewayClient.readThread(threadID: thread.id, includeTurns: false)
         let saved = await target.metadataService.metadata(for: thread.id)
-        guard isCurrent() else { return }
+        guard isCurrent() else { return nil }
         var cachedThread = thread
         cachedThread.extra = nil
         restorePicker(from: cachedThread, saved: saved)
+        var refreshed: ConversationHeader?
         do {
             let response = try await current
-            let refreshed = await ConversationHeader.prepare(response.thread)
-            guard isCurrent() else { return }
-            restorePicker(from: refreshed, saved: saved)
+            let read = await ConversationHeader.prepare(response.thread)
+            refreshed = read
+            guard isCurrent() else { return read }
+            restorePicker(from: read, saved: saved)
         } catch {
-            guard isCurrent() else { return }
+            guard isCurrent() else { return nil }
             logger.notice("Could not refresh conversation settings thread=\(thread.id): \(error.localizedDescription)")
         }
         if isCurrent() {
             pickerSelection.failIfLoading("Could not load this conversation’s model settings. Reopen the conversation to retry.")
         }
         if isCurrent() { refreshReasoningVisibility() }
+        return refreshed
+    }
+
+    private func adoptForkOrigin(of refreshed: ConversationHeader) async {
+        guard let source = refreshed.forkedFromThreadID else { return }
+        if activeConversation?.id == refreshed.id, activeConversation?.forkedFromThreadID != source {
+            activeConversation?.forkedFromThreadID = source
+        }
+        await target.conversationList.recordForkOrigin(threadID: refreshed.id, source: source)
     }
 
     @discardableResult

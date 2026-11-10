@@ -960,6 +960,11 @@ entrypoint linked above.
   - Picking a different working directory immediately starts a fresh
     conversation, so a session never spans repositories. On an unsent draft
     it changes that draft's folder instead.
+  - A fork shows `ForkOriginHeader`, "Forked from" its source's sidebar title
+    ("another conversation" while that header is not cached), below the header
+    on iOS and below the Mac window toolbar. A tap opens the source by exact
+    address through the ordinary conversation switch. Only a known
+    `forkedFromId` shows it; a subagent that is also a fork shows both headers.
 - **Mac window toolbar.** `ChatScreenChrome` is the platform seam for the
   header: the iOS arm keeps `ChatScreenToolbar` as a top inset, and the Mac arm
   puts the chat into the detail column's window toolbar instead.
