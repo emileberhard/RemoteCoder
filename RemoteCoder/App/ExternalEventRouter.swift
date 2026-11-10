@@ -5,7 +5,7 @@ import OSLog
 enum ExternalEvent: Equatable, Sendable {
     case quickAction(RemoteCoderQuickActionRequest)
     case presentVoiceCall(UUID)
-    case open(ConversationWindowValue)
+    case open(ConversationWindowValue, opening: ConversationSearchOpening? = nil)
     case sharedItems(UUID)
     case lockedCameraCaptures
     case completionNotificationTap(payloadJSON: String)
@@ -27,6 +27,7 @@ final class ExternalEventRouter {
     private struct Pending {
         let event: ExternalEvent
         let receivedAt: Date
+        var waitingForWindow = false
     }
 
     static let maximumAge: TimeInterval = 60
@@ -111,14 +112,22 @@ final class ExternalEventRouter {
     func summon(_ event: ExternalEvent) {
         guard let openWindow else { return receive(event) }
         switch event {
-        case .open(.newChat(let slot)):
+        case .open(.newChat(let slot), nil):
             openWindow(.newChat(slot: slot))
-        case .open(let value) where screens.isEmpty:
+        case .open(let value, let opening) where screens.isEmpty:
+            if opening != nil { pending = Pending(event: event, receivedAt: now(), waitingForWindow: true) }
             openWindow(value)
         default:
             receive(event)
             if pending != nil, screens.isEmpty { openWindow(.newChat(slot: UUID())) }
         }
+    }
+
+    func claimOpening(for value: ConversationWindowValue) -> ConversationSearchOpening? {
+        guard let held = pending, held.waitingForWindow,
+              case .open(let requested, let opening) = held.event, requested == value else { return nil }
+        pending = nil
+        return now().timeIntervalSince(held.receivedAt) <= Self.maximumAge ? opening : nil
     }
 
     func focusWindow(presenting value: ConversationWindowValue, besides id: UUID) -> Bool {
@@ -147,6 +156,11 @@ final class ExternalEventRouter {
         case .screen(let id):
             screens[id]?.perform(held.event)
         case .newWindow(let value):
+            if case .open(_, .some) = held.event {
+                var waiting = held
+                waiting.waitingForWindow = true
+                pending = waiting
+            }
             openWindow?(value)
         }
     }
@@ -158,10 +172,11 @@ final class ExternalEventRouter {
 
     private func destination(for event: ExternalEvent) -> Destination? {
         if case .completionNotificationTap = event, !isNavigationReady { return nil }
-        guard case .open(let value) = event else { return keyScreen.map { .screen($0) } }
+        guard case .open(let value, _) = event else { return keyScreen.map { .screen($0) } }
         if let presenting = activeScreens.first(where: { screens[$0]?.presents(value) == true }) {
             return .screen(presenting)
         }
+        if pending?.waitingForWindow == true { return nil }
         if screens.count == 1, let only = screens.keys.first, activeScreens.contains(only) { return .screen(only) }
         if openWindow != nil, !activeScreens.isEmpty { return .newWindow(value) }
         return keyScreen.map { .screen($0) }
@@ -175,7 +190,8 @@ final class ExternalEventRouter {
 extension ExternalEvent {
     init?(url: URL) {
         if let link = RemoteCoderDeepLinks.conversation(from: url) {
-            self = .open(.conversation(ConversationAddress(hostID: link.hostID, threadID: link.threadID)))
+            self = .open(.conversation(ConversationAddress(hostID: link.hostID, threadID: link.threadID)),
+                         opening: link.itemKey.map { ConversationSearchOpening(itemKey: $0, findTerm: nil) })
         } else if let request = RemoteCoderDeepLinks.request(from: url) {
             self = .quickAction(request)
         } else if let id = RemoteCoderDeepLinks.sharedItems(from: url) {

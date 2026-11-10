@@ -22,6 +22,7 @@ struct ChatRootView: View {
     @State private var openingEvent: ChatOpeningEvent?
     @State private var eventPreparation: (id: UUID, task: Task<Void, Never>)?
     @State private var eventError: String?
+    @State private var deepLinkRead: Task<Void, Never>?
     @State private var eventPresenter = ChatScreenEvents()
     @State private var window: ChatWindowModel?
     @State private var composerSafeAreaOverlap: CGFloat = 0
@@ -81,12 +82,12 @@ struct ChatRootView: View {
                     .onAppear {
                         registerWithEventRouter(window)
                         if scenePhase == .active, case .initial(let value) = openingEvent {
-                            perform(.open(value), in: window)
+                            perform(.open(value, opening: workspace.events.claimOpening(for: value)), in: window)
                         }
                     }
                     .onChange(of: scenePhase) { _, phase in
                         if phase == .active, eventPreparation == nil, case .initial(let value) = openingEvent {
-                            perform(.open(value), in: window)
+                            perform(.open(value, opening: workspace.events.claimOpening(for: value)), in: window)
                         }
                     }
                     .modifier(WindowActivity(workspace: workspace, window: window))
@@ -99,6 +100,8 @@ struct ChatRootView: View {
             }
         }
         .onDisappear {
+            deepLinkRead?.cancel()
+            deepLinkRead = nil
             eventPreparation?.task.cancel()
             eventPreparation = nil
             eventPresenter.clear()
@@ -126,15 +129,34 @@ struct ChatRootView: View {
         }
         .onChange(of: workspace.settings.hosts) { _, _ in workspace.reconcileHosts() }
         .onOpenURL { url in
-            guard let event = ExternalEvent(url: url) else { return }
-            logger.notice("Received deep link: \(url.absoluteString)")
-            workspace.events.receive(event)
+            deepLinkRead?.cancel()
+            deepLinkRead = Task {
+                let event = await Self.decodeDeepLink(url)
+                guard !Task.isCancelled else { return }
+                deepLinkRead = nil
+                guard let event else { return }
+                if case .open(.conversation(let address), let opening) = event {
+                    guard let hostID = workspace.hostIDForConversationLink(address.hostID) else {
+                        eventError = "This link doesn't name a unique configured host."
+                        return
+                    }
+                    let resolved = ConversationAddress(hostID: hostID, threadID: address.threadID)
+                    workspace.events.receive(.open(.conversation(resolved), opening: opening))
+                } else {
+                    workspace.events.receive(event)
+                }
+            }
         }
         #if os(iOS)
         .onContinueUserActivity(NSUserActivityTypeLockedCameraCapture) { _ in
             workspace.events.receive(.lockedCameraCaptures)
         }
         #endif
+    }
+
+    @concurrent
+    nonisolated private static func decodeDeepLink(_ url: URL) async -> ExternalEvent? {
+        ExternalEvent(url: url)
     }
 
     private func registerWithEventRouter(_ window: ChatWindowModel) {
@@ -435,13 +457,13 @@ private struct ChatScreen: View {
         case .presentVoiceCall:
             break
         #endif
-        case .open(.conversation(let address)):
+        case .open(.conversation(let address), let opening):
             workspace.setWindowActive(window, isActive: true)
-            selectConversation(address)
-        case .open(.newChat):
+            selectConversation(address, opening: opening)
+        case .open(.newChat, _):
             workspace.setWindowActive(window, isActive: true)
             openNewChatInHomeFolder()
-        case .open(.unsentDraft(let address)):
+        case .open(.unsentDraft(let address), _):
             workspace.setWindowActive(window, isActive: true)
             openUnsentDraft(address)
         case .sharedItems(let id):
@@ -599,6 +621,7 @@ private struct ChatScreen: View {
                                    onDismissComposerFocus: dismissComposerFocus, showsAgents: $showsAgents,
                                    onOpenAgent: { _ = selectConversation($0) }, onReviewChanges: reviewChanges,
                                    onEditAsFork: editAsFork)
+            .background { TranscriptSearchFindReceiver(find: find, screen: screen) }
             #if os(macOS)
             .safeAreaInset(edge: .top, spacing: 0) {
                 if find.isPresented { TranscriptFindBar(find: find, screen: screen) }
@@ -786,7 +809,14 @@ private struct ChatScreen: View {
             isVisible: isWindowVisible && isHistorySettledOpen && !isVoiceModePresented,
             layout: $drawerLayout,
             notice: $drawerNotice,
-            onSelect: selectConversation,
+            onSelect: { selectConversation($0) },
+            onSelectSearch: { row in
+                selectConversation(row.address, opening: row.itemKey.map { ConversationSearchOpening(itemKey: $0, findTerm: row.findTerm) })
+            },
+            onAskSearch: {
+                let query = window.search.query
+                openNewChatWithKeyboard()?.askConversationSearch(query)
+            },
             onOpenDraft: openUnsentDraft,
             onStartNew: startNewChat(onHostID:),
             onShowSettings: {
@@ -813,13 +843,13 @@ private struct ChatScreen: View {
     }
 
     @discardableResult
-    private func selectConversation(_ address: ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome {
+    private func selectConversation(_ address: ConversationAddress, opening: ConversationSearchOpening? = nil) -> ChatWorkspaceModel.ConversationSwitchOutcome {
         #if RC_PERF_HARNESS
         #if os(iOS)
         PerfHarness.shared.willSelectRow(address)
         #endif
         #endif
-        let outcome = workspace.switchConversation(to: address)
+        let outcome = workspace.switchConversation(to: address, opening: opening)
         #if RC_PERF_HARNESS
         #if os(iOS)
         if outcome != .changed { PerfHarness.shared.cancelRowSelection() }

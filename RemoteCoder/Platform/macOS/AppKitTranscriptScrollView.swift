@@ -411,7 +411,7 @@ final class AppKitTranscriptContainer: NSScrollView, TranscriptReadingPositionCa
     private func updateHost(_ host: TranscriptRowHost) {
         guard let row = logicalRows[host.inputs.row.id], let environment, let rowContent else { return }
         host.update(inputs: row.inputs,
-                    content: rowContent(row.inputs).environment(\.transcriptRowPresentation, row.presentation)
+                    content: rowContent(row.inputs).modifier(TranscriptSearchHighlight(isHighlighted: row.inputs.isSearchHighlighted)).environment(\.transcriptRowPresentation, row.presentation)
                         .environment(\.transcriptSurfaceActivity, presentation.activity),
                     environment: environment)
         dirtyHosts.insert(row.inputs.row.id)

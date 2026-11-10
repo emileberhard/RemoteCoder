@@ -29,7 +29,7 @@ struct ConversationHistoryList: View, Equatable {
             ThemedSheetBackground()
             ZStack {
                 if selection == nil, window.search.isActive {
-                    ConversationSearchList(search: window.search, open: actions.open)
+                    ConversationSearchList(search: window.search, open: actions.openSearch, ask: actions.askSearch)
                 } else {
                     content
                 }

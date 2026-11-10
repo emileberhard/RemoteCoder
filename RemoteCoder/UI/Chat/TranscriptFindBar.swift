@@ -9,17 +9,28 @@ final class TranscriptFind {
     var query = ""
     private(set) var matches: [String] = []
     private(set) var currentIndex: Int?
-    private(set) var focusRequest = 0
+    private(set) var focusRequest: UUID?
+    @ObservationIgnored private var preferredRowID: String?
 
     var hasMatches: Bool { !matches.isEmpty }
 
     func present() {
         isPresented = true
-        focusRequest += 1
+        focusRequest = UUID()
+    }
+
+    func present(term: String, rowID: String?) {
+        if query == term, let rowID, let index = matches.firstIndex(of: rowID) { currentIndex = index }
+        query = term
+        preferredRowID = rowID
+        focusRequest = nil
+        isPresented = true
     }
 
     func dismiss() {
         isPresented = false
+        focusRequest = nil
+        preferredRowID = nil
         query = ""
         matches = []
         currentIndex = nil
@@ -27,8 +38,9 @@ final class TranscriptFind {
 
     func show(_ matches: [String], in screen: ChatScreenModel) {
         self.matches = matches
-        currentIndex = matches.indices.last
-        revealCurrentMatch(in: screen)
+        currentIndex = preferredRowID.flatMap { matches.firstIndex(of: $0) } ?? matches.indices.last
+        if preferredRowID == nil { revealCurrentMatch(in: screen) }
+        preferredRowID = nil
     }
 
     func move(_ direction: Direction, in screen: ChatScreenModel) {
@@ -108,7 +120,7 @@ struct TranscriptFindBar: View {
         #else
         .appGlass(.standard, in: .capsule)
         #endif
-        .onChange(of: find.focusRequest, initial: true) { isFieldFocused = true }
+        .onChange(of: find.focusRequest, initial: true) { isFieldFocused = find.focusRequest != nil }
         .task(id: SearchKey(query: find.query, screen: ObjectIdentifier(screen), transcript: screen.transcriptIdentity)) {
             let query = find.query
             if !query.isEmpty {
@@ -124,5 +136,17 @@ struct TranscriptFindBar: View {
     private var matchStatus: String {
         guard let currentIndex = find.currentIndex else { return "No matches" }
         return "\(currentIndex + 1) of \(find.matches.count)"
+    }
+}
+
+struct TranscriptSearchFindReceiver: View {
+    let find: TranscriptFind
+    let screen: ChatScreenModel
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .onChange(of: screen.searchFindTerm) { _, term in
+                if let term { find.present(term: term, rowID: screen.pendingTranscriptRequest?.rowID) }
+            }
     }
 }

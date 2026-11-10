@@ -71,3 +71,18 @@ extension EnvironmentValues {
     @Entry var transcriptRowPresentation: TranscriptRowPresentation?
     @Entry var transcriptBlockIndex: Int?
 }
+
+struct TranscriptSearchHighlight: ViewModifier {
+    let isHighlighted: Bool
+
+    func body(content: Content) -> some View {
+        content.background {
+            if isHighlighted {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.tint.opacity(0.12))
+                    .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.tint.opacity(0.45), lineWidth: 1) }
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+}

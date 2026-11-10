@@ -9,7 +9,7 @@ import SwiftUI
 final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private enum OwnedTask: Hashable {
         case snapshots, resume, settingsUpdate, compaction, compactionStatus, draftLoad, sharedItems(UUID)
-        case cameraCaptures
+        case cameraCaptures, searchAsk
     }
 
     private(set) var currentDraft: ComposerDraft?
@@ -65,11 +65,13 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private(set) var pendingQuestion: QuestionPrompt?
     private(set) var questionPrompts: [String: QuestionPrompt] = [:]
     private(set) var pendingTranscriptRequest: TranscriptRowRequest?
+    private(set) var searchFindTerm: String?
     @ObservationIgnored private(set) var selectedConversation: ConversationSession?
     @ObservationIgnored private var presentedRevision: UInt64 = 0
     @ObservationIgnored private var presentedCompletionAt: Int64?
     @ObservationIgnored private var markedCompletion: SeenCompletion?
     @ObservationIgnored private(set) var resumeLoadID: UUID?
+    @ObservationIgnored private var searchResumeID: UUID?
     @ObservationIgnored private var showsRecentPresentation = false
     @ObservationIgnored private(set) var draftDestination: ComposerDraftStore.Destination
     private(set) var newChatDraftID: UUID
@@ -182,13 +184,13 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     // MARK: - Presented conversation
 
-    func revealTranscriptRow(_ rowID: String) {
-        requestTranscriptRow(rowID, anchor: .center, motion: .instant)
+    func revealTranscriptRow(_ rowID: String, highlighted: Bool = false) {
+        requestTranscriptRow(rowID, anchor: .center, motion: .instant, highlighted: highlighted)
     }
 
-    func requestTranscriptRow(_ rowID: String, anchor: UnitPoint, motion: TranscriptRowRequest.Motion) {
+    func requestTranscriptRow(_ rowID: String, anchor: UnitPoint, motion: TranscriptRowRequest.Motion, highlighted: Bool = false) {
         pendingTranscriptRequest = TranscriptRowRequest(rowID: rowID,
-            token: (pendingTranscriptRequest?.token ?? 0) + 1, anchor: anchor, motion: motion)
+            token: (pendingTranscriptRequest?.token ?? 0) + 1, anchor: anchor, motion: motion, highlighted: highlighted)
     }
 
     /// Internal so busy-state tests can place the conversation the user has open.
@@ -306,6 +308,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func resetRendering() {
+        ownedTasks.cancel(.searchAsk)
+        searchFindTerm = nil
         htmlVisualPreparation.cancelDemand()
         htmlVisualReplies.update(.unknown, threadID: nil)
         compaction = nil
@@ -435,7 +439,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         if presented {
             dictation.refreshRecoverable()
         } else {
-            headerNavigation.cancel()
+            cancelPendingConversationOpen()
+            ownedTasks.cancel(.searchAsk)
             historyOpenSignpost.abandon(.cancelled)
             dictation.finishForHandOff()
         }
@@ -475,6 +480,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     func finishResumeLoad() {
         loadingTranscriptID = nil
         resumeLoadID = nil
+        searchResumeID = nil
     }
 
     func cancelResumeLoad() {
@@ -660,6 +666,16 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private struct MessageSaveError: LocalizedError {
         let underlying: Error
         var errorDescription: String? { "Could not save the message: \(underlying.localizedDescription)" }
+    }
+
+    func askConversationSearch(_ query: String) {
+        let draftID = newChatDraftID
+        ownedTasks.start(.searchAsk) { [weak self] in
+            guard let self, await self.prepareDraft(), !Task.isCancelled, self.newChatDraftID == draftID,
+                  self.activeSessionID == nil, !self.isRetired, !self.showsUnsentContent else { return }
+            self.input = ConversationSearchQuery.agentPrompt(for: query)
+            _ = await self.send()
+        }
     }
 
     func send() async -> Bool {
@@ -1035,25 +1051,27 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     @discardableResult
-    func openConversation(threadID: String) -> Task<Void, Never> {
+    func openConversation(threadID: String, opening: ConversationSearchOpening? = nil) -> Task<Void, Never> {
         target.onConversationNavigation?()
         let gateway = target.gatewayClient
         return headerNavigation.open(threadID: threadID, read: {
             let response = try await gateway.readThread(threadID: $0, includeTurns: false)
             return await ConversationHeader.prepare(response.thread)
-        }, present: { [weak self] in self?.resumeConversation($0) },
+        }, present: { [weak self] in self?.resumeConversation($0, opening: opening) },
             failed: { [weak self] in self?.present(.conversation($0.localizedDescription)) })
     }
 
     func cancelPendingConversationOpen() {
         headerNavigation.cancel()
+        if searchResumeID != nil { cancelResumeConversationLoad() }
     }
 
-    func resumeConversation(_ thread: ConversationHeader) {
+    func resumeConversation(_ thread: ConversationHeader, opening: ConversationSearchOpening? = nil) {
         headerNavigation.cancel()
         let span = PerfBuild.span("switch.resume"); defer { span.end() }
         target.onConversationNavigation?()
         let identity = "\(executionTarget.id)|\(thread.id)"
+        let revisiting = opening != nil && openThreadID == thread.id && selectedConversation != nil
         if transcriptIdentity != identity { historyOpenSignpost.begin() }
         dictation.finishForHandOff()
         selectDraft(.thread(thread.id))
@@ -1066,7 +1084,10 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         adoptModelProvider(thread.modelProvider, threadID: thread.id)
         showRecentSettings(threadID: thread.id)
         if transcriptIdentity != identity { showTranscript(identity: identity, threadID: thread.id) }
+        searchFindTerm = nil
+        if pendingTranscriptRequest?.highlighted == true { pendingTranscriptRequest = nil }
         let loadID = beginResumeLoad(threadID: thread.id)
+        searchResumeID = opening == nil ? nil : loadID
         if !thread.cwd.isEmpty { updateWorkingDirectory(thread.cwd) }
         let settingsRevision = settingsSelectionRevision
         startResumeLoad { [weak self] in
@@ -1093,12 +1114,12 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             await self.adopt(session)
             guard self.isCurrentResumeLoad(loadID, threadID: thread.id) else { return .superseded }
             return await self.loadResumeConversation(thread, session: session, previousOwner: previous,
-                loadID: loadID, settingsRevision: settingsRevision)
+                loadID: loadID, settingsRevision: settingsRevision, opening: opening, revisiting: revisiting)
         }
     }
 
     private func loadResumeConversation(_ thread: ConversationHeader, session: ConversationSession, previousOwner: ConversationSession?,
-                                        loadID: UUID, settingsRevision: UInt64) async -> ResumeOutcome {
+                                        loadID: UUID, settingsRevision: UInt64, opening: ConversationSearchOpening?, revisiting: Bool) async -> ResumeOutcome {
         let operation = AppPerformanceDiagnostics.shared.beginHistory(.opening, threadID: thread.id)
         async let settings = restoreConversationSettings(thread, loadID: loadID, revision: settingsRevision)
         var failure: (any Error)?
@@ -1110,17 +1131,43 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             }
             await publish(await session.snapshot())
             let stored = await session.beginHistoryRead()
-            if let cached = await historyService.cachedConversation(header: thread) {
+            if !revisiting, let cached = await historyService.cachedConversation(header: thread) {
                 await applyConversationSnapshot(cached, read: stored, from: session, source: "disk")
             }
             let observed = target.conversationWarmer.observation(threadID: thread.id, revision: thread.updatedAt)
             let read = await session.beginHistoryRead()
-            let snapshot = try await historyService.openTail(header: thread, base: read.base,
-                bypassCache: target.conversationWarmer.needsRead(threadID: thread.id, revision: thread.updatedAt))
-            logger.notice("Conversation opening thread=\(thread.id) retained=\(previousOwner === session) source=\(String(describing: snapshot.source))")
-            await applyConversationSnapshot(snapshot, read: read, from: session, source: String(describing: snapshot.source))
+            let snapshot: GatewayHistoryService.ConversationSnapshot?
+            var location: ConversationSearchLocation?
+            let bypassCache = target.conversationWarmer.needsRead(threadID: thread.id, revision: thread.updatedAt)
+            if let opening {
+                let fallback: GatewayHistoryService.SearchFallback = revisiting ? .keepCurrentWindow
+                    : .openTail(base: read.base, bypassCache: bypassCache)
+                let opened = try await historyService.openSearchHit(header: thread, itemKey: opening.itemKey, fallback: fallback)
+                snapshot = opened.snapshot
+                location = opened.location
+            } else {
+                snapshot = try await historyService.openTail(header: thread, base: read.base, bypassCache: bypassCache)
+            }
+            guard isCurrentResumeLoad(loadID, threadID: thread.id), !Task.isCancelled else { throw CancellationError() }
+            if let snapshot {
+                logger.notice("Conversation opening thread=\(thread.id) retained=\(previousOwner === session) source=\(String(describing: snapshot.source))")
+                await applyConversationSnapshot(snapshot, read: read, from: session, source: String(describing: snapshot.source))
+                if snapshot.window.newer == nil {
+                    target.conversationWarmer.readSucceeded(threadID: thread.id, observation: observed)
+                }
+            }
+            if let location, let reveal = await location.reveal(in: streamItems) {
+                guard isCurrentResumeLoad(loadID, threadID: thread.id) else { throw CancellationError() }
+                if let group = reveal.groupToExpand {
+                    let expanded = await session.expandGroupForSearch(group)
+                    guard isCurrentResumeLoad(loadID, threadID: thread.id) else { throw CancellationError() }
+                    await publish(expanded)
+                    guard isCurrentResumeLoad(loadID, threadID: thread.id) else { throw CancellationError() }
+                }
+                revealTranscriptRow(reveal.rowID, highlighted: true)
+                searchFindTerm = opening?.findTerm
+            }
             target.dispatcher.reconcileQueue(threadID: thread.id)
-            target.conversationWarmer.readSucceeded(threadID: thread.id, observation: observed)
             if isCurrentResumeLoad(loadID, threadID: thread.id), contextWindowUsage == nil {
                 recordTokenUsage(await session.validTokenUsage(), threadID: thread.id)
             }

@@ -847,13 +847,15 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         case .content(.message(let message)):
             TranscriptRowInputs(row: row, isForkable: forkableMessageIDs.contains(message.id), isEditable: editBases[message.id] != nil,
                                 countsChanges: countsChanges(from: message), edgeStatus: nil,
-                                canSendQueuedMessage: message.delivery == .queued && deliveryActions.sendNow != nil)
+                                canSendQueuedMessage: message.delivery == .queued && deliveryActions.sendNow != nil,
+                                isSearchHighlighted: scrollToRow?.highlightedRowID == row.id)
         case .content(.historyEdge(let edge)):
             TranscriptRowInputs(row: row, isForkable: false, isEditable: false, countsChanges: false,
                                 edgeStatus: historyEdgeStatus[edge.kind], canSendQueuedMessage: false)
         default:
             TranscriptRowInputs(row: row, isForkable: false, isEditable: false, countsChanges: false, edgeStatus: nil,
-                                canSendQueuedMessage: false)
+                                canSendQueuedMessage: false,
+                                isSearchHighlighted: scrollToRow?.highlightedRowID == row.id)
         }
     }
 
@@ -995,6 +997,9 @@ struct TranscriptRowRequest: Equatable {
     let token: Int
     let anchor: UnitPoint
     let motion: Motion
+    var highlighted = false
+
+    var highlightedRowID: String? { highlighted ? rowID : nil }
 
     enum Motion: Equatable { case animated, instant }
 }
@@ -1413,11 +1418,12 @@ struct TranscriptRowInputs: Equatable {
     let countsChanges: Bool
     let edgeStatus: HistoryEdge.Status?
     let canSendQueuedMessage: Bool
+    var isSearchHighlighted = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.row.id == rhs.row.id && lhs.row.revision == rhs.row.revision && lhs.isForkable == rhs.isForkable
             && lhs.isEditable == rhs.isEditable && lhs.countsChanges == rhs.countsChanges && lhs.edgeStatus == rhs.edgeStatus
-            && lhs.canSendQueuedMessage == rhs.canSendQueuedMessage
+            && lhs.canSendQueuedMessage == rhs.canSendQueuedMessage && lhs.isSearchHighlighted == rhs.isSearchHighlighted
     }
 }
 
@@ -1445,7 +1451,7 @@ private struct TranscriptRowContent<Content: View>: View, Equatable {
     var body: some View {
         let _ = PerfBuild.count("transcriptRowBody")
         let _ = presentation.bind(to: presentations)
-        content().environment(\.transcriptRowPresentation, presentation)
+        content().modifier(TranscriptSearchHighlight(isHighlighted: inputs.isSearchHighlighted)).environment(\.transcriptRowPresentation, presentation)
     }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {

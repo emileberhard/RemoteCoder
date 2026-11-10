@@ -2,7 +2,8 @@ import SwiftUI
 
 struct ConversationSearchList: View {
     let search: ConversationSearchSession
-    let open: (ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome
+    let open: (ConversationSearchRow) -> ChatWorkspaceModel.ConversationSwitchOutcome
+    let ask: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -12,11 +13,23 @@ struct ConversationSearchList: View {
                 section(results.titles, title: "Titles", systemImage: "textformat", isFirst: true)
                 section(results.messages, title: "Messages", systemImage: "text.bubble",
                         isFirst: results.titles.rows.isEmpty)
+                section(results.meaning, title: "By meaning", systemImage: "sparkles",
+                        isFirst: results.titles.rows.isEmpty && results.messages.rows.isEmpty)
                 if results.isPainted, results.isEmpty, !results.status.isSearching {
                     ContentUnavailableView.search
                         .padding(.vertical, 20)
                 }
                 ConversationSearchStatusRow(status: results.status)
+                Button(action: ask) {
+                    Label("Ask an agent", systemImage: "sparkle.magnifyingglass")
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .appContentSurface(.standard, in: .rect(cornerRadius: 14))
+                .accessibilityIdentifier("ask-conversation-search")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -36,7 +49,7 @@ struct ConversationSearchList: View {
             ForEach(section.visibleRows) { row in
                 ConversationSearchCard(row: row) {
                     search.recordOpening(row)
-                    _ = open(row.address)
+                    _ = open(row)
                 }
                 .equatable()
                 .accessibilityIdentifier("search-result-\(row.id)")
@@ -104,7 +117,7 @@ private struct ConversationSearchCard: View, Equatable {
                 if let excerpt = row.excerpt {
                     Text(excerpt)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(row.section == .meaning ? AnyShapeStyle(themeStore.theme.colors.accentTint) : AnyShapeStyle(.secondary))
                         .lineLimit(2, reservesSpace: true)
                         .multilineTextAlignment(.leading)
                 }

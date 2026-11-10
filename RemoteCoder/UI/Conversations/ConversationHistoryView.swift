@@ -29,6 +29,8 @@ struct ConversationHistoryView: View {
     @State private var visibility = SurfaceVisibilityState(isVisible: false)
 
     let onSelect: (ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome
+    let onSelectSearch: (ConversationSearchRow) -> ChatWorkspaceModel.ConversationSwitchOutcome
+    let onAskSearch: () -> Void
     let onOpenDraft: (UnsentDraftAddress) -> Void
     let onStartNew: (UUID) -> Void
     let onShowSettings: () -> Void
@@ -166,7 +168,7 @@ struct ConversationHistoryView: View {
 
     private var actions: ConversationHistoryActions {
         ConversationHistoryActions(
-            open: onSelect,
+            open: onSelect, openSearch: onSelectSearch, askSearch: onAskSearch,
             pin: pin,
             rename: { renamingChat = ChatRenameRequest(address: $0.address, title: $0.title) },
             regenerateName: { address in

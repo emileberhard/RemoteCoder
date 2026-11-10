@@ -36,6 +36,7 @@ struct RemoteCoderVoiceConfiguration: Codable, Equatable, Sendable {
 struct RemoteCoderConversationLink: Equatable, Sendable {
     let hostID: UUID
     let threadID: String
+    var itemKey: String? = nil
 }
 
 /// The `remotecoder://` vocabulary the app accepts.
@@ -51,11 +52,12 @@ enum RemoteCoderDeepLinks {
         var components = URLComponents()
         components.scheme = "remotecoder"
         components.host = "chat"
-        components.path = "/conversation"
+        components.path = "/open"
         components.queryItems = [
             URLQueryItem(name: "host", value: link.hostID.uuidString),
             URLQueryItem(name: "thread", value: link.threadID),
         ]
+        if let itemKey = link.itemKey { components.queryItems?.append(URLQueryItem(name: "item", value: itemKey)) }
         guard let url = components.url else {
             preconditionFailure("Invalid RemoteCoder conversation URL")
         }
@@ -89,11 +91,16 @@ enum RemoteCoderDeepLinks {
     }
 
     static func conversation(from url: URL) -> RemoteCoderConversationLink? {
-        guard url.scheme == "remotecoder", url.host == "chat", url.path == "/conversation",
+        guard url.scheme == "remotecoder", url.host == "chat", ["/conversation", "/open"].contains(url.path),
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
               let hostID = items.first(where: { $0.name == "host" })?.value.flatMap(UUID.init(uuidString:)),
               let threadID = items.first(where: { $0.name == "thread" })?.value, !threadID.isEmpty else { return nil }
-        return RemoteCoderConversationLink(hostID: hostID, threadID: threadID)
+        guard items.filter({ $0.name == "host" }).count == 1,
+              items.filter({ $0.name == "thread" }).count == 1,
+              items.filter({ $0.name == "item" }).count <= 1 else { return nil }
+        let itemKey = items.first { $0.name == "item" }?.value
+        guard itemKey?.isEmpty != true else { return nil }
+        return RemoteCoderConversationLink(hostID: hostID, threadID: threadID, itemKey: itemKey)
     }
 
     static func request(from url: URL) -> RemoteCoderQuickActionRequest? {

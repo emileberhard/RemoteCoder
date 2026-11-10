@@ -12,6 +12,7 @@ struct ConversationHistoryList: View {
     let onUndo: () -> Void
     let onInteractionChanged: (Bool) -> Void
 
+    @FocusState private var isSearchFocused: Bool
     @State private var selection: Set<ConversationAddress> = []
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -19,12 +20,16 @@ struct ConversationHistoryList: View {
     var body: some View {
         ZStack {
             if window.search.isActive {
-                ConversationSearchList(search: window.search, open: actions.open)
+                ConversationSearchList(search: window.search, open: actions.openSearch, ask: actions.askSearch)
             } else {
                 conversationList
             }
         }
         .searchable(text: Bindable(window.search).query, placement: .sidebar, prompt: "Search")
+        .searchFocused($isSearchFocused)
+        .onChange(of: window.search.focusRequest, initial: true) { _, request in
+            if request > 0 { isSearchFocused = true }
+        }
         .safeAreaBar(edge: .bottom) { statusBar }
     }
 

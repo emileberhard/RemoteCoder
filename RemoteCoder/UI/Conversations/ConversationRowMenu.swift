@@ -3,6 +3,8 @@ import Foundation
 @MainActor
 struct ConversationHistoryActions {
     let open: (ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome
+    let openSearch: (ConversationSearchRow) -> ChatWorkspaceModel.ConversationSwitchOutcome
+    let askSearch: () -> Void
     let pin: (ConversationSidebarRow) -> Void
     let rename: (ConversationSidebarRow) -> Void
     let regenerateName: (ConversationAddress) -> Void

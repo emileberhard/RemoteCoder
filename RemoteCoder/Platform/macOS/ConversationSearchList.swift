@@ -3,24 +3,24 @@ import SwiftUI
 
 struct ConversationSearchList: View {
     let search: ConversationSearchSession
-    let open: (ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome
+    let open: (ConversationSearchRow) -> ChatWorkspaceModel.ConversationSwitchOutcome
+    let ask: () -> Void
 
     var body: some View {
         let results = search.results
         List {
             section(results.titles, title: "Titles")
             section(results.messages, title: "Messages")
+            section(results.meaning, title: "By meaning")
+            if results.isPainted, results.isEmpty, !results.status.isSearching { ContentUnavailableView.search }
             ConversationSearchStatusRow(status: results.status)
+            Button(action: ask) { Label("Ask an agent", systemImage: "sparkle.magnifyingglass") }
+                .accessibilityIdentifier("ask-conversation-search")
         }
         .listStyle(.sidebar)
         .transaction { transaction in
             transaction.animation = nil
             transaction.disablesAnimations = true
-        }
-        .overlay {
-            if results.isPainted, results.isEmpty, !results.status.isSearching {
-                ContentUnavailableView.search
-            }
         }
     }
 
@@ -31,7 +31,7 @@ struct ConversationSearchList: View {
                 ForEach(section.visibleRows) { row in
                     ConversationSearchSourceRow(row: row) {
                         search.recordOpening(row)
-                        _ = open(row.address)
+                        _ = open(row)
                     }
                     .equatable()
                     .accessibilityIdentifier("search-result-\(row.id)")
@@ -96,7 +96,7 @@ private struct ConversationSearchSourceRow: View, Equatable {
                 if let excerpt = row.excerpt {
                     Text(excerpt)
                         .scaledFont(rowSize.detailFont)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(row.section == .meaning ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                         .lineLimit(2, reservesSpace: true)
                 }
             }

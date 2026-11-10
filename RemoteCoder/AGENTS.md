@@ -1461,24 +1461,15 @@ entrypoint linked above.
   action on iOS and a context menu on the Mac; it shares the drawer's undo bar.
   Mac draft rows are plain buttons outside the `List` selection, and iOS draft
   rows have no lifted row menu.
-- Conversation search has one owner per window, `ChatWindowModel.search`
-  (`ConversationSearchSession` in Core `Conversations/Search/`). The iOS drawer's
-  bottom field (`DrawerSearchField`, replaced by the selection bar) and the Mac
-  `.searchable` field write its `query`; while it has terms,
-  `ConversationSearchList` replaces the list on each platform. It asks only
-  connected hosts whose `host/info` reports `conversationSearch`, through
-  `GatewayClient.searchConversations`, and never pages the header window or
-  filters the drawer projection. Matching, mapping and merging stay off the main
-  actor, every publication is generation-fenced, and after the first paint rows
-  only append. Section and retained row limits live on
-  `ConversationSearchSection.Kind`. Cards are fixed height (two excerpt lines
-  reserved); iOS uses content surfaces like drawer rows, the Mac plain sidebar
-  buttons like draft rows. Opening logs section and rank, never the query.
-  Unused search costs the drawer nothing: its list reads only `isActive`, the
-  field is an opaque content surface so scrolling composites no extra glass, and
-  it observes drawer visibility only while focused.
+- Conversation search has one owner per window, `ChatWindowModel.search`.
+  Preparation, result mapping and merging run off the main actor. Generations
+  fence both keyword and meaning replies. The drawer reads `isActive`, and only
+  its search results view reads the result snapshot. ⇧⌘F focuses the Mac sidebar
+  field through `ChatCommand`. Message hits and item links use the screen's
+  resume task, history window and transcript scroll request. A highlight changes
+  the inputs of its target row and adds no row observation.
   [System architecture](../docs/system-architecture.md#conversation-search)
-  holds the contract.
+  owns the search, locate and Ask contracts.
 - Opening the drawer captures a `ConversationDrawerLayout`: every row's
   `ConversationDrawerRank`. Captured rows keep it until the next opening, so a
   completing turn or a changing badge never moves a row under the finger.

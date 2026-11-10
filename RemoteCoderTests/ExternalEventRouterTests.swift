@@ -100,6 +100,26 @@ struct ExternalEventRouterTests {
         #expect(window.performed == [newChat])
     }
 
+    @Test func aNewConversationWindowClaimsItsItemOnlyOnce() {
+        let router = router()
+        let value = ConversationWindowValue.conversation(address)
+        let opening = ConversationSearchOpening(itemKey: "key", findTerm: nil)
+        var opened: [ConversationWindowValue] = []
+        router.attach(openWindow: { opened.append($0) })
+        let first = Window()
+        let second = Window()
+        for window in [first, second] {
+            router.register(window.screen, id: window.id)
+            router.setActive(true, screen: window.id)
+        }
+        router.receive(.open(value, opening: opening))
+        #expect(opened == [value])
+        #expect(first.performed.isEmpty && second.performed.isEmpty)
+        #expect(router.claimOpening(for: .newChat(slot: UUID())) == nil)
+        #expect(router.claimOpening(for: value) == opening)
+        #expect(router.claimOpening(for: value) == nil)
+    }
+
     @Test func anOpenedMacWindowKeepsTheFocusedWindowKey() {
         let router = router()
         let focused = Window()

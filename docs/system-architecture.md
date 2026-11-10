@@ -3062,41 +3062,46 @@ or the current time.
 
 ### Conversation search
 
-Typing in the drawer's search field (a bottom capsule on iOS, the sidebar's
-`.searchable` field on the Mac) searches every past conversation on every
-connected host by title and message text. `ConversationSearchSession`
-(`Core/Conversations/Search/`), held per window as `ChatWindowModel.search`, is
-the one owner of the query, its generation and the published
-`ConversationSearchResults`. While the query has terms, `ConversationSearchList`
-replaces the drawer list; on iOS selection mode shows the drawer list instead.
-The ⌘K palette is separate.
+The iOS drawer capsule and the Mac sidebar search every connected host.
+`ChatWindowModel.search` owns the query, cancellation and result publication
+through `ConversationSearchSession` in Core. ⇧⌘F opens and focuses the Mac
+sidebar field through `ChatCommand`. The ⌘K palette stays separate.
 
-The query follows the gateway's term rule (whitespace-separated, deduplicated
-case-insensitively, at most 8 terms and 512 UTF-8 bytes). After a 200 ms
-debounce the session asks every host whose route is up with
-`sessions/conversations/search` (limit 30), resolving `host/info`'s
-`conversationSearch` first; a host without it is reported, not asked. Each new
-query cancels the previous task, whose child requests send `$/cancelRequest`.
-Title matching over local headers, mapping answers to cards and merging run
-`@concurrent`; the main actor applies results only when their generation is
-still current, so a superseded answer never publishes.
+After a 200 ms debounce, the session prepares the query and local title matches
+off the main actor. The keyword request uses at most eight distinct terms and
+512 UTF-8 bytes. A host whose `host/info` advertises `conversationSearchByMeaning`
+gets a parallel request with up to 512 UTF-8 bytes of the original phrasing and
+a limit of 20. Preparation, card mapping and merging run off the main actor.
+A superseded generation cancels its requests and cannot publish a late answer.
+The window retains the query and results when the drawer closes and cancels
+its search when it detaches.
 
-Results form two sections. Titles holds local headers whose title contains every
-term plus the gateway's `titleMatch` rows; Messages holds the rest, in host
-order. The first paint waits up to 150 ms for the first host's answer, so title
-matches and that answer land together; otherwise title matches paint alone.
-After it, rows never move or disappear while the query is unchanged: later
-answers append at the end of their section, deduplicated by address and session
-key against listed rows. Rows from an unknown origin host (matched by host id,
-then gateway id) and probe-marked rows are dropped. A missing gateway title falls
-back to the local header's title, else the excerpt is the headline. The card
-re-centres the excerpt about 24 characters before the first matching term and
-emphasises every term of at least three characters, following the gateway's
-trigram rule. "+N more" counts hits beyond the one shown.
+Titles and Messages use the first paint hold of up to 150 ms. An early meaning
+answer joins that paint. Later answers append in provider order inside By
+meaning and use the provider summary as a tinted excerpt. Rows keep their order
+within each section and deduplicate by address and session key. Unknown or
+ambiguous origin hosts and probe conversations are omitted. Sections initially
+show 4, 10 and 10 rows and retain at most 50, 100 and 100. The status stays
+searching until all requests settle. Opening a card logs only its section and
+rank.
 
-Sections show 4 and 10 rows until "Show N more" and retain at most 50 and 100.
-One fixed-height status row reads Searching… while requests are open, then names
-hosts that did not answer or cannot search messages yet, and nothing when every
-host answered. Opening a card goes through the ordinary selection path, and
-`recordOpening` logs only its section and rank, never the query. The query and
-results stay while the drawer closes; detaching the window cancels the search.
+A message hit sends its exact item key to `sessions/locate` on its own host.
+`GatewayHistoryService` reads the inclusive item cursor ascending through the
+ordinary scheduler and cache, with metadata from the supplied turn cursor.
+It resets one `HistoryWindow` at the located page and leaves the provider's
+older and newer cursors in charge of subsequent paging. For Codex's turn-start
+cursor, the service checks up to four more pages for a verified item and retains
+only the chosen page. It can reveal a known turn when an item is unavailable.
+Failed, expired and unknown locations use the normal conversation opening. A
+cursorless turn can be revealed only when loaded. The resume task and history
+read fences reject stale replies. The existing transcript scroll request centres
+and highlights the target. An exact tool hit expands its existing action group,
+and the find bar is seeded with the best matching term without taking keyboard
+focus or issuing a competing jump.
+
+Ask an agent starts an ordinary new chat with the query and asks for verified
+links. `ChatRootView` accepts
+`remotecoder://chat/open?host=<hostId>&thread=<threadId>&item=<itemKey>` through
+`ExternalEventRouter`. The optional `item` uses the same locate path. The
+configured host must resolve uniquely. A new window claims its matching item
+once from the router's existing pending event.
