@@ -3035,6 +3035,6 @@ fn sessions_meaning_resolves_exact_native_id_and_folds_roots() -> Result<()> {
     assert_eq!(result["conversations"][0]["threadId"], "codex-root");
     assert_eq!(result["conversations"][0]["summary"], "child evidence");
     assert_eq!(result["conversations"][1]["threadId"], "claude_root");
-    assert_eq!(result["conversations"][1]["title"], "Inspect fixture");
+    assert!(result["conversations"][1]["title"].is_null());
     Ok(())
 }

@@ -87,7 +87,9 @@ admit each chunk within headroom. Coverage reports `budget` below 64 KiB of
 headroom, and each full reconcile replaces
 `~/.local/state/disk-cap-status/remotecoder-sessions.json` for the shared
 disk-pressure owner. SQLite temporary query state stays in memory. The ingest worker is one
-utility-QoS thread, separate from the live agent runtime.
+utility-QoS thread, separate from the live agent runtime. Unit stores explicitly
+inject free capacity, so host disk reserves cannot fail fixtures; the same
+production reserve calculation is tested below its free-space floor.
 
 Mirroring requires an explicit host role, off by default. Private operations
 projects `sessions/mirror-role.json` with `{"enabled":true}` on the always-on
