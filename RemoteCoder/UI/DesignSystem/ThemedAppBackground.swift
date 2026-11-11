@@ -12,7 +12,7 @@ struct ThemedSheetBackground: View {
         ThemedSheetLayers { color in
             color
         }
-            .ignoresSafeArea()
+        .ignoresSafeArea()
     }
 }
 
@@ -27,9 +27,9 @@ struct ThemedSheetBottomBarBackground: View {
                 color
             }
         }
-            .padding(.top, -fadeHeight)
-            .ignoresSafeArea(edges: .bottom)
-            .allowsHitTesting(false)
+        .padding(.top, -fadeHeight)
+        .ignoresSafeArea(edges: .bottom)
+        .allowsHitTesting(false)
     }
 }
 

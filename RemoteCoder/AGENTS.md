@@ -1484,7 +1484,9 @@ entrypoint linked above.
   hides the bottom scroll edge effect. The bar extends that blurred edge under
   the field, which costs about four offscreen passes per frame whenever the
   drawer is on screen (`DrawerMovement` on the test iPhone: 32.9 without it,
-  37.2 with the automatic or the hard style). Keep it hidden unless a device
+  37.2 with the automatic or the hard style). `ThemedSheetBottomBarBackground`
+  draws the fade under the bar as plain gradients in the sheet's colors, which
+  measures the same as no fade. Keep the system effect hidden unless a device
   trace shows the pass count unchanged.
   [System architecture](../docs/system-architecture.md#conversation-search)
   owns the search, locate and Ask contracts.
