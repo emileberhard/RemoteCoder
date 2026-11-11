@@ -34,7 +34,7 @@ struct OnlyMinePresentationTests {
         let draft = try #require(screen.currentDraft)
         try await screen.drafts.appendDictation(.filtered("Please review the capture pipeline.",
             everyone: "Please review the capture pipeline. A background speaker mentions lunch."), recordingID: UUID(), to: draft)
-        try await capture(SyntheticComposer(screen: screen)
+        try await capture(SyntheticComposer(screen: screen).reasoningPickerOverlay()
             .environment(fixture.workspace.modelPickerPreferences)
             .environment(AppThemeStore()), named: "only-mine-restore.png")
     }
