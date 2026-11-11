@@ -648,7 +648,7 @@ mod tests {
             },
         )
         .unwrap();
-        super::super::index::open(&*store.writer().unwrap()).unwrap();
+        super::super::index::open(&store.writer().unwrap()).unwrap();
         (directory, store, origin, path)
     }
 
