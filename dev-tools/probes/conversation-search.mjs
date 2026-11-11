@@ -31,7 +31,7 @@ try {
   const codexSessions=join(lab.nativeDefault,'sessions','2026','11','01');
   await mkdir(codexSessions,{recursive:true});
   const rollout=[
-    {timestamp:codexAt,type:'session_meta',payload:{id:codexThread,session_id:codexThread,timestamp:codexAt,cwd:lab.root,originator:'codex_cli_rs',cli_version:'0.0.0',source:'cli',model_provider:'openai'}},
+    {timestamp:codexAt,type:'session_meta',payload:{id:codexThread,session_id:codexThread,timestamp:codexAt,cwd:lab.root,originator:'codex_cli_rs',cli_version:'0.0.0',source:'cli',model_provider:'openai',history_mode:'paginated'}},
     codexEvent('task_started',{turn_id:'fixture-turn-1',model_context_window:8192}),
     codexUser(codexThread,'fixture-turn-1','item-1',codexNeedle),
     codexEvent('task_complete',{turn_id:'fixture-turn-1',last_agent_message:null}),
