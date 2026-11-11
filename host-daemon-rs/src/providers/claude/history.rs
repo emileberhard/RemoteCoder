@@ -61,7 +61,7 @@ impl ClaudeHistory {
         let path = find_session_path(session_uuid, &self.home)?
             .ok_or_else(|| HistoryError::InvalidRequest("Claude source is unavailable".into()))?;
         self.projections
-            .read_cancellable(
+            .read(
                 &self.home,
                 thread_id,
                 &path,
@@ -97,6 +97,7 @@ impl ClaudeHistory {
                 &thread_id,
                 &path,
                 active_turn.as_deref(),
+                &|| Ok(()),
                 |projection, file| read(projection, file, &path),
             )
         })

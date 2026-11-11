@@ -204,8 +204,8 @@ full message text.
 Schema-version-1 responses contain `truncated` and ranked `conversations`. Each
 conversation carries its root `sessionKey`, origin `hostId`, `provider`,
 `threadId`, nullable `title`, `cwd` and `lastAt`, `titleMatch`, `hitCount`, and up
-to three `hits`. A hit contains its exact `itemKey`, catalog `kind`, nullable
-`at`, an excerpt of at most 240 Unicode characters, and nullable `agentThreadId`.
+to one `hits` entry. A hit contains its exact `itemKey`, an excerpt of at most
+240 Unicode characters, and nullable `agentThreadId`.
 A hit opens in `agentThreadId` when present and the conversation's `threadId`
 otherwise. `sessions/locate` returns that same destination for the item key.
 A delegated child opens in its own thread. A native Claude child opens in the
@@ -219,15 +219,16 @@ Explicit promotion overrides native ancestry.
 At most 128 ranked document candidates are fetched. The scoped item word index
 uses the same user and assistant kinds as the document. It covers
 at most 128 member sessions and finds 64 newest hits per term per
-candidate, with lookaheads setting `truncated`. Ranking reads metadata. The
-gateway applies SQLite's tokenizer to the selected text of at most three hits
-per result to build excerpts. Items larger than 1 MiB set `truncated` and still
-count toward `hitCount`. A conversation can match with zero excerpts.
+candidate. Ranking reads metadata. The gateway applies SQLite's tokenizer to
+the selected text of one hit per result to build its excerpt. Items larger than
+1 MiB still count toward `hitCount`. A conversation can match with zero excerpts.
 Hits prefer distinct-term coverage, then recency. `hitCount`
-counts unique items inside these bounded windows. Candidate or hit-window
-lookahead sets `truncated`. The app can present completed results while indicating
-that additional conversations or hits may exist. Limiting the final list alone
-leaves `truncated` false.
+counts unique items inside these bounded windows. The app clamps this displayed
+count. Candidate, member and hit windows are ordinary result bounds.
+`truncated` means catalog or derived backfill is unfinished, the mirror is
+rebuilding, or the deadline cut the work. Coverage staleness is reported by
+`sessions/sql`. The app can show finished results while indicating unfinished
+search work through this flag.
 Two dedicated reader permits isolate typing from the 16 inventory/mirror readers.
 The one-second deadline includes FIFO, admission and execution. Completed
 snapshots survive timeout with `truncated: true`, including when publishing the
@@ -271,8 +272,8 @@ Ordinary changes reuse the existing ancestry. A document refresh over 10 ms
 defers the next refresh of that root for nine times the observed refresh cost.
 The worker wakes at the next due refresh even if appends stop. The previous
 document can supply candidates while a refresh waits. That freshness lag does
-not set `truncated`. Initial catalog work, the derived rebuild backlog and
-incomplete coverage do set it.
+not set `truncated`. Initial catalog work, the derived rebuild backlog and mirror
+rebuilds do set it.
 
 Documents retain the entire title and folder. The typed-user and assistant
 columns each use the newest whole items up to 2 MiB of catalog text across
@@ -320,9 +321,9 @@ pages and one exact `thread/items/read` verify a unique text/item identity. One
 of the turn. Tool output and reasoning can use that turn anchor while `itemId`
 remains null. Locate never resumes or subscribes a thread. Its one-second Query
 deadline and cancel-on-drop path interrupt catalog and Claude work. Native Codex
-reads cannot be cancelled: cancelling releases the waiter while the physical
-read finishes. Two native read permits remain held until the actual reply; a
-third locate returns its turn-level answer immediately rather than queueing.
+reads share the request's absolute deadline. Cancelling releases the waiter,
+and a stalled native read releases its permit at that deadline with its known
+turn-level fallback. A third locate returns its turn-level answer immediately.
 
 ## Search by meaning
 
@@ -336,14 +337,15 @@ array. No shell expansion is performed. Only configured hosts advertise
 `sessions meaning QUERY --limit 20` through the gateway.
 
 Each request writes `{query,limit}` JSON to stdin and reads
-`{conversations:[{sessionId,provider,excerpt,score}]}` from stdout. The provider
+`{conversations:[{sessionId,provider,excerpt}]}` from stdout. The provider
 ranks results; the gateway preserves that order, resolves provider/native id
 exactly to one present catalog session, folds its persisted ancestry, dedupes
 roots and drops unresolved or ambiguous identities. Dates and metadata remain
 nullable. The query is never logged. The eight-second deadline includes
 admission and two provider permits. Stdout is capped at 1 MiB; malformed output,
 provider failure and overflow are errors. Cancellation, disconnect and timeout
-kill the provider process group. Catalog resolution uses the same SQLite
+kill the unreaped provider process group. Reaping disarms that signal owner.
+Catalog resolution uses the same SQLite
 cancellation path as keyword search.
 
 `bun dev-tools/probes/conversation-search.mjs /absolute/candidate` verifies

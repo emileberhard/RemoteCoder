@@ -1,4 +1,4 @@
-use super::{companions, file_identity, identity, normalize};
+use super::{InvalidHeader, companions, file_identity, identity, normalize};
 use crate::providers::claude::records::{LineKind, MAX_SESSION_RECORD_BYTES, read_bounded_line};
 use crate::sessions::{Origin, metadata};
 use crate::storage::file_revision::FileRevision;

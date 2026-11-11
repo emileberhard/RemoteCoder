@@ -2891,7 +2891,12 @@ fn sessions_conversations_share_document_and_hit_kinds() -> Result<()> {
     }
     let result = conversation_search(&f.store, "reasoningfixture", 30, Default::default());
     assert_eq!(result.conversations[0].hit_count, 1);
-    assert_eq!(result.conversations[0].hits[0].kind, "assistant");
+    let kind: String = f.store.reader()?.query_row(
+        "SELECT kind FROM item WHERE item_key=?1",
+        [&result.conversations[0].hits[0].item_key],
+        |r| r.get(0),
+    )?;
+    assert_eq!(kind, "assistant");
     Ok(())
 }
 
@@ -2910,18 +2915,59 @@ fn sessions_conversations_bound_hits_and_exclude_folder_only_matches() {
         }
     }
     let result = conversation_search(&f.store, "needle", 30, Default::default());
-    assert!(result.truncated);
+    assert!(!result.truncated);
     assert_eq!(result.conversations.len(), 1);
     assert_eq!(
         result.conversations[0].hit_count,
         super::conversations::TERM_WINDOW
     );
-    assert_eq!(result.conversations[0].hits.len(), 3);
+    assert_eq!(result.conversations[0].hits.len(), 1);
     assert!(
         conversation_search(&f.store, "absent needle", 30, Default::default())
             .conversations
             .is_empty()
     );
+}
+
+#[test]
+fn sessions_conversations_truncation_reports_backfill_instead_of_result_windows() -> Result<()> {
+    let f = fixture();
+    for number in 0..130 {
+        write(
+            &f.claude.with_file_name(format!("window-{number}.jsonl")),
+            &[json!({"type":"user","uuid":format!("prompt-{number}"),
+                "message":{"role":"user","content":format!("CommonWindowNeedle {}",if number==0 {"RareWindowNeedle"} else {""})}})],
+        );
+    }
+    scan(&f);
+    f.store.writer()?.execute(
+        "UPDATE coverage SET stale_reason='incomplete_evidence',complete_through=NULL",
+        [],
+    )?;
+    for query in ["CommonWindowNeedle", "RareWindowNeedle"] {
+        let result = conversation_search(&f.store, query, 30, Default::default());
+        assert!(!result.truncated);
+        assert!(!result.conversations.is_empty());
+    }
+    f.store
+        .writer()?
+        .execute("UPDATE meta SET value='old' WHERE key='search_version'", [])?;
+    super::index::open(&*f.store.writer()?)?;
+    for query in ["CommonWindowNeedle", "RareWindowNeedle"] {
+        let control =
+            super::store::ReadControl::new(Instant::now() + super::conversations::DEADLINE);
+        let result = super::conversations::search(
+            &f.store.reader()?,
+            &super::conversations::Request {
+                query: query.into(),
+                limit: 30,
+            },
+            &control,
+            &Default::default(),
+        )?;
+        assert!(result.truncated);
+    }
+    Ok(())
 }
 
 #[test]
@@ -3068,7 +3114,7 @@ fn sessions_conversations_cap_both_document_text_columns() -> Result<()> {
             );
         }
     }
-    let search = |query| conversation_search(&f.store, query, 1, Default::default());
+    let search = |query: &str| conversation_search(&f.store, query, 1, Default::default());
     for kind in ["assistant", "user"] {
         assert!(search(&format!("Old{kind}Anchor")).conversations.is_empty());
         assert_eq!(
@@ -3092,7 +3138,7 @@ fn sessions_conversations_index_pasted_payload_and_skip_injected_prompt_text() -
         json!([{"id":"11111111-2222-4333-8444-555555555555","text":"PastedPayloadAnchor"}]),
         crate::prompt_summary::ATTACHED_FILES_HEADER,
     );
-    conversation_item(&f.store.writer()?, &root, 1000, &prompt, "user", None);
+    conversation_item(&*f.store.writer()?, &root, 1000, &prompt, "user", None);
     let found = conversation_search(
         &f.store,
         "CaptionAnchor PastedPayloadAnchor",
@@ -3466,7 +3512,7 @@ fn sessions_conversations_count_matches_without_bounded_excerpts() -> Result<()>
         )?;
     }
     let result = conversation_search(&f.store, "oversizematch", 1, Default::default());
-    assert!(result.truncated);
+    assert!(!result.truncated);
     assert_eq!(result.conversations.len(), 1);
     let conversation = &result.conversations[0];
     assert!(!conversation.title_match);
@@ -3508,10 +3554,10 @@ fn sessions_meaning_resolves_exact_native_id_and_folds_roots() -> Result<()> {
     scan(&f);
     let db = f.store.reader()?;
     let hits = serde_json::from_value(json!([
-        {"sessionId":"unknown","provider":"claude","excerpt":"skip","score":9},
-        {"sessionId":"codex-child","provider":"codex","excerpt":"child evidence","score":8},
-        {"sessionId":"codex-root","provider":"codex","excerpt":"duplicate root","score":7},
-        {"sessionId":"root","provider":"claude","excerpt":"Claude evidence","score":6}
+        {"sessionId":"unknown","provider":"claude","excerpt":"skip"},
+        {"sessionId":"codex-child","provider":"codex","excerpt":"child evidence"},
+        {"sessionId":"codex-root","provider":"codex","excerpt":"duplicate root"},
+        {"sessionId":"root","provider":"claude","excerpt":"Claude evidence"}
     ]))?;
     let result = serde_json::to_value(super::meaning::resolve(&db, hits, 30)?)?;
     assert_eq!(result["conversations"].as_array().unwrap().len(), 2);

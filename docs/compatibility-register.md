@@ -45,6 +45,7 @@ one launch on the phone has logged that each condition below holds.
 
 | Path | Owner | Reason | Removal condition |
 |---|---|---|---|
+| `searchTerm` on `claude/thread/list` | Claude thread listing and its filtered cursor | Released apps send this filter when searching conversation headers | Every supported app and rollback uses `sessions/conversations/search` on capable hosts and has retired the header filter |
 | Legacy `name` on `pin` | `conversation_marks.rs`, pending rename drain | Older clients and persisted changes submit a name; schema 5 pins immediately and durably queues its carry-over instead of blocking later marks | No supported client or persisted replica sends named pins and no queued carry-over remains |
 | Discovery-only `changes/checkouts` | `Gateway::changes_rpc` and shared checkout discovery | Apps before multi-checkout summaries still make the two-call discovery/read sequence | Every supported app and rollback uses `changes/summary` |
 | Metadata reads without `knownRevision` always return full `entries`, with an added `revision` | `ConversationMetadataStore::read`, `Gateway::metadata_rpc` | Older apps require a full map and ignore the extra field; only a matching opaque validator opts into explicit `unchanged` | Every supported client and rollback sends conditional validators and handles explicit unchanged snapshots; unconditional reads may remain useful for cold starts |

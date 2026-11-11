@@ -687,6 +687,21 @@ async fn conversation_search_publishes_partial_results_after_its_deadline() {
     })
     .await
     .expect("fixture search has a windowed result");
+    assert_eq!(warm["truncated"], false);
+    rusqlite::Connection::open(root.path().join("sessions/v1/catalog.sqlite3"))
+        .unwrap()
+        .execute("UPDATE meta SET value='0' WHERE key='catalog_ready'", [])
+        .unwrap();
+    let warm = connection
+        .gateway
+        .sessions_rpc(
+            &connection.requests.out_tx.grant,
+            CatalogMethod::Search,
+            params.clone(),
+            Instant::now() + CatalogMethod::Search.deadline(),
+        )
+        .await
+        .unwrap();
     assert_eq!(warm["truncated"], true);
 
     tokio::time::pause();

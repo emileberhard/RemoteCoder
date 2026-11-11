@@ -48,7 +48,7 @@ try {
   ];
   await writeFile(childRollout,childRecords.map(row=>JSON.stringify(row)+'\n').join(''),{mode:0o600});
   const provider = lab.path('meaning.sh');
-  await writeFile(provider,`cat >/dev/null\nprintf '%s' '${JSON.stringify({conversations:[{sessionId:'unknown',provider:'claude',excerpt:'omit',score:2},{sessionId:root,provider:'claude',excerpt:'Drawer reveal stutter',score:1}]})}'\n`);
+  await writeFile(provider,`cat >/dev/null\nprintf '%s' '${JSON.stringify({conversations:[{sessionId:'unknown',provider:'claude',excerpt:'omit'},{sessionId:root,provider:'claude',excerpt:'Drawer reveal stutter'}]})}'\n`);
   const config=lab.path('meaning.json');
   await writeFile(config,JSON.stringify({command:'/bin/sh',args:[provider]}));
   await lab.writeGatewayEnv(['RC_CLAUDE_ENABLED=false',`RC_CLAUDE_HOME=${home}`,`RC_CODEX_GATEWAY_CONVERSATION_SEARCH_PROVIDER_FILE=${config}`]);
@@ -64,7 +64,7 @@ try {
     return result.result?.conversations?.length===1;
   },30);
   assert.equal(result.result.conversations[0].threadId,`claude_${root}`);
-  const hit=result.result.conversations[0].hits.find(v=>v.kind==='assistant');
+  const hit=result.result.conversations[0].hits[0];
   assert.ok(hit?.excerpt.includes('flicker'));
   const located=await rpc('sessions/locate',{itemKey:hit.itemKey});
   assert.equal(located.result.threadId,`claude_${root}`);

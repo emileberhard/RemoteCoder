@@ -580,13 +580,20 @@ async fn the_cache_rebuilds_on_every_input_change_and_serves_unchanged_reads() {
     let cache = ProjectionCache::new(PROJECTION_CACHE_BUDGET_BYTES);
     let read = |active: Option<&str>| {
         cache
-            .read(home.path(), thread, &path, active, |projection, file| {
-                let page = projection.items_page(
-                    file,
-                    &items_params(thread, None, None, Some(100), Some(SortDirection::Desc)),
-                )?;
-                Ok(ids(page["data"].as_array().unwrap()))
-            })
+            .read(
+                home.path(),
+                thread,
+                &path,
+                active,
+                &|| Ok(()),
+                |projection, file| {
+                    let page = projection.items_page(
+                        file,
+                        &items_params(thread, None, None, Some(100), Some(SortDirection::Desc)),
+                    )?;
+                    Ok(ids(page["data"].as_array().unwrap()))
+                },
+            )
             .unwrap()
     };
 
@@ -615,12 +622,19 @@ async fn the_cache_rebuilds_on_every_input_change_and_serves_unchanged_reads() {
     fs::rename(&replacement, &path).unwrap();
     assert_eq!(fs::metadata(&path).unwrap().len(), original.len() as u64);
     let (rewritten, outcome) = cache
-        .read(home.path(), thread, &path, None, |projection, file| {
-            projection.items_page(
-                file,
-                &items_params(thread, None, None, Some(1), Some(SortDirection::Desc)),
-            )
-        })
+        .read(
+            home.path(),
+            thread,
+            &path,
+            None,
+            &|| Ok(()),
+            |projection, file| {
+                projection.items_page(
+                    file,
+                    &items_params(thread, None, None, Some(1), Some(SortDirection::Desc)),
+                )
+            },
+        )
         .unwrap();
     assert_eq!(outcome, CacheOutcome::Built);
     assert_eq!(rewritten["data"][0]["item"]["text"], "MORE");
@@ -649,7 +663,7 @@ fn the_cache_evicts_the_least_recently_used_projection_and_never_holds_one_over_
     let cache = ProjectionCache::new(large_bytes + small_bytes - 1);
     let read = |thread: &str, path: &Path| {
         cache
-            .read(home.path(), thread, path, None, |_, _| Ok(()))
+            .read(home.path(), thread, path, None, &|| Ok(()), |_, _| Ok(()))
             .unwrap()
             .1
     };
@@ -667,6 +681,7 @@ fn the_cache_evicts_the_least_recently_used_projection_and_never_holds_one_over_
             "claude_small",
             &small,
             None,
+            &|| Ok(()),
             |projection, file| {
                 projection.items_page(file, &items_params("claude_small", None, None, None, None))
             },
@@ -675,9 +690,16 @@ fn the_cache_evicts_the_least_recently_used_projection_and_never_holds_one_over_
     assert_eq!(outcome, CacheOutcome::Uncached);
     assert_eq!(entries["data"].as_array().unwrap().len(), 3);
     assert_eq!(
-        tiny.read(home.path(), "claude_small", &small, None, |_, _| Ok(()))
-            .unwrap()
-            .1,
+        tiny.read(
+            home.path(),
+            "claude_small",
+            &small,
+            None,
+            &|| Ok(()),
+            |_, _| Ok(())
+        )
+        .unwrap()
+        .1,
         CacheOutcome::Uncached
     );
 }

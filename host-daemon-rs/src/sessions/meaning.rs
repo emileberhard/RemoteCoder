@@ -37,7 +37,6 @@ pub(crate) struct Hit {
     session_id: String,
     provider: String,
     excerpt: String,
-    score: f64,
 }
 
 #[derive(Deserialize)]
@@ -103,7 +102,7 @@ impl Provider {
             .kill_on_drop(true)
             .spawn()
             .context("search provider could not start")?;
-        let _group = Group(
+        let mut group = Group(
             child
                 .id()
                 .and_then(|id| i32::try_from(id).ok())
@@ -141,7 +140,7 @@ impl Provider {
             async { write.await.map_err(anyhow::Error::from) },
             read,
             async { stderr_tail(stderr).await.map_err(anyhow::Error::from) },
-            async { child.wait().await.map_err(anyhow::Error::from) }
+            async { group.wait(&mut child).await.map_err(anyhow::Error::from) }
         )?;
         if !status.success() {
             let diagnostic = redact_stderr(&stderr, &request.query);
@@ -182,6 +181,18 @@ fn redact_stderr(stderr: &[u8], query: &str) -> String {
 }
 
 struct Group(Option<Pid>);
+
+impl Group {
+    async fn wait(
+        &mut self,
+        child: &mut tokio::process::Child,
+    ) -> std::io::Result<std::process::ExitStatus> {
+        let status = child.wait().await?;
+        self.0 = None;
+        Ok(status)
+    }
+}
+
 impl Drop for Group {
     fn drop(&mut self) {
         if let Some(pid) = self.0 {
@@ -195,7 +206,7 @@ pub(crate) fn resolve(db: &Reader, hits: Vec<Hit>, limit: usize) -> Result<Respo
     let mut conversations = Vec::new();
     let mut seen = HashSet::new();
     for hit in hits {
-        if !matches!(hit.provider.as_str(), "claude" | "codex") || !hit.score.is_finite() {
+        if !matches!(hit.provider.as_str(), "claude" | "codex") {
             continue;
         }
         let keys: Vec<String> = tx.prepare("SELECT session_key FROM session JOIN source USING(source_id) WHERE session.provider=?1 AND thread_id=?2 AND present=1 LIMIT 2")?.query_map(params![hit.provider,if hit.provider=="claude" { crate::providers::claude::claude_thread_id(&hit.session_id) } else { hit.session_id }], |r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -239,6 +250,24 @@ mod tests {
             },
             permits: Arc::new(Semaphore::new(2)),
         }
+    }
+
+    #[tokio::test]
+    async fn meaning_provider_disarms_the_process_group_when_its_child_is_reaped() -> Result<()> {
+        let mut child = tokio::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()?;
+        let mut group = Group(
+            child
+                .id()
+                .and_then(|id| i32::try_from(id).ok())
+                .map(Pid::from_raw),
+        );
+        group.wait(&mut child).await?;
+        assert!(group.0.is_none());
+        drop(group);
+        Ok(())
     }
 
     #[tokio::test]

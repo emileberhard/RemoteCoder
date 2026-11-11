@@ -155,6 +155,10 @@ impl ReadControl {
         self.cancelled.load(Ordering::Relaxed) || Instant::now() >= self.deadline
     }
 
+    pub(crate) fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
     pub(crate) fn cancel_on_drop(self: &Arc<Self>) -> CancelRead {
         CancelRead(self.clone())
     }
