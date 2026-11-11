@@ -3441,15 +3441,15 @@ fn sessions_meaning_resolves_exact_native_id_and_folds_roots() -> Result<()> {
     scan(&f);
     let db = f.store.reader()?;
     let hits = serde_json::from_value(json!([
-        {"sessionId":"unknown","provider":"claude","summary":"skip","score":9},
-        {"sessionId":"codex-child","provider":"codex","summary":"child evidence","score":8},
-        {"sessionId":"codex-root","provider":"codex","summary":"duplicate root","score":7},
-        {"sessionId":"root","provider":"claude","summary":"Claude evidence","score":6}
+        {"sessionId":"unknown","provider":"claude","excerpt":"skip","score":9},
+        {"sessionId":"codex-child","provider":"codex","excerpt":"child evidence","score":8},
+        {"sessionId":"codex-root","provider":"codex","excerpt":"duplicate root","score":7},
+        {"sessionId":"root","provider":"claude","excerpt":"Claude evidence","score":6}
     ]))?;
     let result = serde_json::to_value(super::meaning::resolve(&db, hits, 30)?)?;
     assert_eq!(result["conversations"].as_array().unwrap().len(), 2);
     assert_eq!(result["conversations"][0]["threadId"], "codex-root");
-    assert_eq!(result["conversations"][0]["summary"], "child evidence");
+    assert_eq!(result["conversations"][0]["excerpt"], "child evidence");
     assert_eq!(result["conversations"][1]["threadId"], "claude_root");
     assert!(result["conversations"][1]["title"].is_null());
     Ok(())
