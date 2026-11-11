@@ -679,7 +679,7 @@ async fn conversation_search_publishes_partial_results_after_its_deadline() {
                 )
                 .await
                 .unwrap();
-            if reply["conversations"][0]["hitCount"] == 64 {
+            if reply["conversations"][0]["hitCount"] == 64 && reply["truncated"] == false {
                 break reply;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
