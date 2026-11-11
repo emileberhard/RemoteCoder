@@ -38,13 +38,17 @@ private struct TouchDownMenuButton: UIViewRepresentable {
         var items: [ContextMenuItem] = [] {
             didSet {
                 guard !items.elementsEqual(oldValue, by: { $0.title == $1.title && $0.systemImage == $1.systemImage }) else { return }
-                menu = UIMenu(children: items.indices.map { index in
-                    UIAction(title: items[index].title, image: UIImage(systemName: items[index].systemImage)) { [weak self] _ in
-                        guard let self, self.items.indices.contains(index) else { return }
-                        self.items[index].perform()
+                menu = items.isEmpty ? nil : UIMenu(children: items.map { item in
+                    UIAction(title: item.title, image: UIImage(systemName: item.systemImage)) { [weak self, id = item.id] _ in
+                        guard let self, self.isEnabled else { return }
+                        self.items.first { $0.id == id }?.perform()
                     }
                 })
             }
+        }
+
+        override var isEnabled: Bool {
+            didSet { if !isEnabled { contextMenuInteraction?.dismissMenu() } }
         }
 
         init() {
