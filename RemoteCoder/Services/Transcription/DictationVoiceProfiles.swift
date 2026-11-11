@@ -94,7 +94,16 @@ final class DictationVoiceProfiles {
 
     func failed(_ error: any Error, stage: VoiceFilterStage = .filter) {
         if stage == .filter, Self.routeRefused(error) { routeUnavailable = true }
-        logger.error("Optional voice check failed stage=\(stage.rawValue) error=\(String(reflecting: type(of: error)))")
+        logger.error("Optional voice check failed stage=\(stage.rawValue) error=\(Self.failureDescription(error))")
+    }
+
+    private static func failureDescription(_ error: any Error) -> String {
+        switch error {
+        case SpeechKitError.relayRejected(let kind): "relayRejected(\(kind))"
+        case SpeechKitError.httpFailure(let status, _): "HTTP \(status)"
+        case let error as URLError: "URL error \(error.code.rawValue)"
+        default: String(reflecting: type(of: error))
+        }
     }
 
     private static func routeRefused(_ error: any Error) -> Bool {
