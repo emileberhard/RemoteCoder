@@ -85,7 +85,7 @@ struct GatewaySpeechAccess: Sendable {
     }
 }
 
-private enum GatewaySpeechRejection: String {
+enum GatewaySpeechRejection: String {
     case unauthorized
     case unavailable
     case authenticationUnavailable
@@ -99,6 +99,14 @@ private enum GatewaySpeechRejection: String {
     case upstreamUnreachable
     case upstreamRejected
     case upstreamFailed
+
+    var refusesRoute: Bool {
+        switch self {
+        case .unavailable, .unauthorized, .authenticationUnavailable, .notPermitted,
+             .operationNotAllowed, .credentialsUnavailable, .upstreamRejected: true
+        case .capacity, .draining, .requestTooLarge, .clientStalled, .upstreamUnreachable, .upstreamFailed: false
+        }
+    }
 
     func detail(provider: GatewaySpeechProvider) -> String {
         switch self {

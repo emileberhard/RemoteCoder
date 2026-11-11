@@ -109,7 +109,7 @@ final class DictationVoiceProfiles {
     private static func routeRefused(_ error: any Error) -> Bool {
         switch error {
         case SpeechKitError.relayRejected(let kind):
-            ["unavailable", "unauthorized", "authenticationUnavailable", "notPermitted", "operationNotAllowed", "credentialsUnavailable", "upstreamRejected"].contains(kind)
+            GatewaySpeechRejection(rawValue: kind)?.refusesRoute == true
         case SpeechKitError.httpFailure(let status, _): [401, 403, 404].contains(status)
         case is GatewaySpeechFailure: true
         default: false
