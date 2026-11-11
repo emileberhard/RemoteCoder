@@ -547,7 +547,7 @@ impl Projection {
             check()?;
             let matches = match &item.source {
                 Source::Prompt(span) | Source::Queued(span) => span.offset == offset,
-                Source::Text { record, block } => record.offset == offset && *block == part,
+                Source::Text { record, block, .. } => record.offset == offset && *block == part,
                 Source::Tool {
                     record,
                     block,
