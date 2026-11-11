@@ -136,7 +136,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         let launchHost = settings.activeHostID.flatMap { id in settings.hosts.first { $0.id == id } } ?? settings.hosts.first
         windows = [ChatWindowModel(
             id: UUID(), isPrimary: true,
-            selectedTarget: launchHost.map { ExecutionTarget(hostID: $0.id) })]
+            selectedTarget: launchHost.map { ExecutionTarget(hostID: $0.id) }, search: Self.conversationSearch(over: targets))]
         notifications = CompletionNotificationCenter(defaults: defaults, authorization: notificationAuthorization)
         pushTokens = PushTokenSources(defaults: defaults)
         self.voiceCalls = voiceCalls
@@ -476,7 +476,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     private func addWindow(id: UUID) -> ChatWindowModel {
-        let window = ChatWindowModel(id: id, isPrimary: false, selectedTarget: keyWindow.selectedTarget)
+        let window = ChatWindowModel(id: id, isPrimary: false, selectedTarget: keyWindow.selectedTarget,
+                                     search: Self.conversationSearch(over: targets))
         for model in models { installScreen(of: model, in: window) }
         windows.append(window)
         return window
@@ -1027,7 +1028,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             waitingSinceByThreadID: model.waitingSinceByThreadID(in: activity),
             projects: model.conversationList.projects,
             settlementEdits: model.conversationList.settlementEdits,
-            canLoadMore: model.conversationList.canLoadOlder(query: window.drawerQuery),
+            canLoadMore: model.conversationList.canLoadOlder,
             hasDiscardedHeaders: model.conversationList.hasDiscardedHeaders,
             unloadedPins: model.conversationList.unloadedPinnedThreads
         )
@@ -1063,8 +1064,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         let inputs = sidebarInputs(in: window)
         let admitted = ConversationSidebarProjection.admittingLayout(hosts: inputs, layout: layout)
         let drafts = unsentDraftRows(in: window, now: now)
-        let shownDraftCount = window.revealsAllDrafts || !window.drawerQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? drafts.count : min(drafts.count, UnsentDraftRow.collapsedLimit)
+        let shownDraftCount = window.revealsAllDrafts ? drafts.count : min(drafts.count, UnsentDraftRow.collapsedLimit)
         let snapshot = ConversationSidebarSnapshot(
             drafts: Array(drafts.prefix(shownDraftCount)), hiddenDraftCount: drafts.count - shownDraftCount,
             items: sidebarItems(inputs, in: window, layout: admitted, arrangement: drawerArrangement(in: window), now: now),
@@ -1093,7 +1093,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
         return UnsentDraftRow.rows(from: inputs, selected: shown,
                                    showsHostLabels: ConversationSidebarProjection.showsHostLabels(targetCount: models.count),
-                                   query: window.drawerQuery, condensedPaths: condensedPaths, now: now)
+                                   condensedPaths: condensedPaths, now: now)
     }
 
     func isShowingUnsentDraft(_ address: UnsentDraftAddress, in window: ChatWindowModel) -> Bool {
@@ -1168,24 +1168,20 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             condensedPaths: condensedPaths, now: now, dateLabels: sidebarDateLabels)
     }
 
+    private static func conversationSearch(over targets: ExecutionTargetRegistry) -> ConversationSearchSession {
+        ConversationSearchSession { [weak targets] in
+            targets?.models.filter { !$0.isRetired }.map(\.conversationSearchHost) ?? []
+        }
+    }
+
     func captureDrawerOpening(at date: Date, in window: ChatWindowModel) -> ConversationDrawerLayout {
         ConversationSidebarProjection.layout(hosts: sidebarInputs(in: window), at: date)
     }
 
-    func loadOlderHistory(on target: ExecutionTarget, in window: ChatWindowModel) async {
-        guard let owner = model(for: target.hostID), !owner.isRetired else { return }
-        let query = window.drawerQuery
-        let showsHostLabel = ConversationSidebarProjection.showsHostLabels(targetCount: models.count)
-        await owner.conversationList.loadOlder(query: query) { header in
-            ConversationSidebarProjection.matches(title: owner.conversationList.pinnedName(for: header.id) ?? header.displayTitle,
-                workingDirectory: condensedPaths.condensedPath(header.cwd, remoteHomePath: owner.remoteHomePath),
-                hostName: showsHostLabel ? targetName(of: owner) : nil, query: query)
-        }
-    }
-
-    func loadOlderHistory(in window: ChatWindowModel) async {
+    func loadOlderHistory() async {
         await withHostConcurrency(models) { model in
-            await self.loadOlderHistory(on: model.target, in: window)
+            guard !model.isRetired else { return }
+            await model.conversationList.loadOlder()
         }
     }
 
@@ -1200,8 +1196,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             revealedProjects: window.revealedProjects,
             projectRowLimit: SidebarPresentation.projectRowLimit,
             automationRowLimit: window.revealsAllAutomations ? nil : ConversationDrawerArrangement.initialAutomationRowLimit,
-            settledRowLimit: window.settledRowLimit,
-            query: window.drawerQuery
+            settledRowLimit: window.settledRowLimit
         )
     }
 
@@ -1304,11 +1299,11 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     /// Selecting a row selects its owning host. Re-selecting the conversation
     /// that host already has open only switches the visible model.
     @discardableResult
-    func selectConversation(at address: ConversationAddress) -> Task<Void, Never>? {
+    func selectConversation(at address: ConversationAddress, opening: ConversationSearchOpening? = nil) -> Task<Void, Never>? {
         guard let screen = screen(for: address.hostID) else { return nil }
         let alreadyOpen = screen.openThreadID == address.threadID
         select(target: address.target)
-        guard alreadyOpen == false else { return nil }
+        guard alreadyOpen == false || opening != nil else { return nil }
         #if os(macOS) && RC_PERF_HARNESS
         if let fixture = screen.target.switchFixtures[address.threadID] {
             screen.resumeConversation(fixture.header)
@@ -1316,9 +1311,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
         #endif
         guard let thread = screen.target.conversationList.threads.first(where: { $0.id == address.threadID }) else {
-            return screen.openConversation(threadID: address.threadID)
+            return screen.openConversation(threadID: address.threadID, opening: opening)
         }
-        screen.resumeConversation(thread)
+        screen.resumeConversation(thread, opening: opening)
         return nil
     }
 
@@ -1386,23 +1381,31 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     var refusesSwitchWhileDictating: Bool { selectedModel?.voice.isRecording == true }
 
-    func switchConversation(to address: ConversationAddress) -> ConversationSwitchOutcome {
+    func switchConversation(to address: ConversationAddress, opening: ConversationSearchOpening? = nil) -> ConversationSwitchOutcome {
         let address = ConversationAddress(hostID: settings.canonicalHostID(address.hostID), threadID: address.threadID)
         let span = PerfBuild.span("switch.request"); defer { span.end() }
         let isShowing = isShowingConversation(at: address, on: selectedScreen)
-        if !isShowing, refusesSwitchWhileDictating { return .refusedWhileDictating }
+        if (!isShowing || opening != nil), refusesSwitchWhileDictating { return .refusedWhileDictating }
         supersedePendingNavigation()
         if !isShowing, events.focusWindow(presenting: .conversation(address), besides: keyWindow.id) {
+            if let opening { events.receive(.open(.conversation(address), opening: opening)) }
             return .shownInAnotherWindow
         }
         conversationSwitch = Task { [weak self] in
             guard let self, !Task.isCancelled else { return }
             let span = PerfBuild.span("switch.commit"); defer { span.end() }
             conversationSwitch = nil
-            guard isShowingConversation(at: address, on: selectedScreen) || !refusesSwitchWhileDictating else { return }
-            selectConversation(at: address)
+            guard !refusesSwitchWhileDictating || (opening == nil && isShowingConversation(at: address, on: selectedScreen)) else { return }
+            selectConversation(at: address, opening: opening)
         }
         return isShowing ? .unchanged : .changed
+    }
+
+    func hostIDForConversationLink(_ id: UUID) -> UUID? {
+        let matches = settings.hosts.filter {
+            $0.id == id || $0.configuration.gatewayID == id || $0.configuration.legacyIDs.contains(id)
+        }
+        return matches.count == 1 ? matches.first?.id : nil
     }
 
     func isShowingConversation(at address: ConversationAddress, on screen: ChatScreenModel?) -> Bool {
@@ -1538,10 +1541,10 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         guard !isQuiescing, window.isAttached, navigationGeneration == generation else { throw CancellationError() }
         guard let destination, destination.acceptsWork else {
             if case .presentVoiceCall = event { throw CancellationError() }
-            if case .open(.conversation) = event {
+            if case .open(.conversation, _) = event {
                 throw WindowEventUnavailable(message: "This conversation's host is unavailable.")
             }
-            if case .open(.unsentDraft) = event {
+            if case .open(.unsentDraft, _) = event {
                 throw WindowEventUnavailable(message: "This draft's host is unavailable.")
             }
             if let failure = draftRetirementFailure(for: window.selectedTarget) {
@@ -1559,11 +1562,11 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     private func readyTarget(for event: ExternalEvent, in window: ChatWindowModel) -> ChatTargetModel? {
-        if case .open(.conversation(let address)) = event {
+        if case .open(.conversation(let address), _) = event {
             guard let target = model(for: address.hostID), target.acceptsWork else { return nil }
             return target
         }
-        if case .open(.unsentDraft(let address)) = event {
+        if case .open(.unsentDraft(let address), _) = event {
             guard let target = model(for: address.target.hostID),
                   target.acceptsWork else { return nil }
             return target
@@ -1862,6 +1865,30 @@ struct VoiceCallUnavailable: LocalizedError, CustomLocalizedStringResourceConver
 }
 
 private extension ChatTargetModel {
+    var conversationSearchHost: ConversationSearchHost {
+        let directories = directories
+        let gateway = gatewayClient
+        let meaning: ConversationSearchHost.Search<ConversationMeaningResponse> = { params in
+            guard let information = await directories.resolveInformation() else {
+                throw GatewayClient.ClientError.notConnected
+            }
+            guard information.conversationSearchByMeaning == true else { return .unsupported }
+            return .results(try await gateway.searchConversationsByMeaning(params))
+        }
+        let supportsMeaning = directories.information.map { $0.conversationSearchByMeaning == true }
+        return ConversationSearchHost(
+            id: hostID, name: hostDisplayName, gatewayID: host.gatewayID,
+            headers: conversationList.threads, marks: conversationList.marks,
+            availability: gatewayConnectivity.route == nil ? .unreachable : .connected(keyword: { params in
+                guard let information = await directories.resolveInformation() else {
+                    throw GatewayClient.ClientError.notConnected
+                }
+                guard information.conversationSearch == true else { return .unsupported }
+                return .results(try await gateway.searchConversations(params))
+            }, meaning: supportsMeaning == false ? nil : meaning)
+        )
+    }
+
     var fleetLiveActivityHost: FleetLiveActivityService.Host {
         let directories = directories
         let gateway = gatewayClient

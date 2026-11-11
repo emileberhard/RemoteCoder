@@ -1872,16 +1872,12 @@ the browsed page outranks every unprotected, unpinned row, so its roots are
 admitted before the cursor advances. Recent coverage leaves an unconsumed
 provider at not-loaded if admission dropped eligible rows.
 
-Search scans metadata pages using the same title, path and execution-target
-label matcher as visible rows; native Codex's case-sensitive search does not
-narrow that coverage. Search has its own continuation, and query changes cancel
-or fence old results. Incremental refresh preserves in-progress browsing and its
-admission priority; an explicit manual refresh (pull-to-refresh or Refresh) resets it. An
-exhausted provider reopens when fresh partial coverage proves there is more,
-and an exhausted query can restart after its admitted page is evicted. A visible nonempty query starts one discovery pass after
-500 ms; further history remains an explicit action: the footer's one
-Load Older Chats (Search More History while filtering) loads the next page on
-every target that has one. List reads never resume
+Incremental refresh preserves in-progress browsing and its admission priority;
+an explicit manual refresh (pull-to-refresh or Refresh) resets it. An exhausted
+provider reopens when fresh partial coverage proves there is more. Older history
+is an explicit action: the footer's one Load Older Chats loads the next page on
+every target that has one. [Conversation search](#conversation-search) never
+pages this window; it asks each gateway's catalog. List reads never resume
 threads or fetch transcripts. Retained exact ancestry is inherited before
 classification, and only unresolved retained headers rotate through retries.
 Selection and screen membership update protected headers synchronously. Exact
@@ -2852,7 +2848,7 @@ sections:
   closes; the Mac shows every row.
 
 The Pinned section folds in both views, like a project section, and pinning a
-chat unfolds it. Searching ignores every fold and offers no disclosure.
+chat unfolds it.
 
 Activity is `latestActivityAt`: the later of the provider's `recencyAt` (the
 creation time when absent) and the last finished turn. Tool calls, streamed
@@ -2885,17 +2881,14 @@ Date labels are projected once per snapshot using a day-keyed cache bounded to
 2,048 entries.
 Unread Only keeps rows unread at opening or since, plus the selected row, so a row read in the meantime does not vanish. A row captured as settled that turns unread shows in Chats at its captured rank; other settled rows stay hidden. The Mac sidebar is open whenever it is
 visible and recaptures each time its window becomes key or returns from
-occlusion. Searching (the Mac's
-filter field) matches every whitespace-separated term against the title, folder
-and, while shown, the host name, without reordering, and ignores folding and row
-limits.
+occlusion.
 
 Rows whose purpose is `probe` are hidden unless live or selected. Unpinned
 `automation` rows appear in their own collapsible Automations section after
 Pinned and before Chats/projects, with an automation symbol that remains when
 pinned. Pinned membership takes precedence and each row appears once.
 Automation membership takes precedence over settlement; the stored settlement
-and its actions remain intact. Search reveals matches through a folded section.
+and its actions remain intact.
 The Automations fold is a device preference and starts expanded; expanded, it
 shows its first five rows plus the selected row until "Show N more" reveals the
 rest for that drawer opening. Collapse and
@@ -3070,3 +3063,51 @@ receipt timestamp cannot disagree with the persisted provider event. History rea
 recover completions missed while the app was disconnected. Failed completion reads keep a
 known cached date and report incomplete coverage instead of substituting activity
 or the current time.
+
+### Conversation search
+
+The iOS drawer capsule and the Mac sidebar search every connected host.
+`ChatWindowModel.search` owns the query, cancellation and result publication
+through `ConversationSearchSession` in Core. ⇧⌘F opens and focuses the Mac
+sidebar field through `ChatCommand`. The ⌘K palette stays separate.
+
+After a 200 ms debounce, the session prepares the query and local title matches
+off the main actor. The keyword request uses at most eight distinct terms and
+512 UTF-8 bytes. After 600 ms without another keystroke, hosts whose
+`host/info` advertises `conversationSearchByMeaning` start their meaning requests
+with up to 512 UTF-8 bytes of the original phrasing and a limit of 20.
+`ConversationSearchProgress` applies answers and the first-paint deadline as
+value transitions off the main actor, alongside query and card preparation.
+A superseded generation cancels its delays and requests and cannot publish a late answer.
+The window retains the query and results when the drawer closes and cancels
+its search when it detaches.
+
+Titles and Messages use the first paint hold of up to 150 ms. An early meaning
+answer joins that paint. Later answers append in provider order inside By
+meaning and use the provider summary as a tinted excerpt. Rows keep their order
+within each section and deduplicate by address and session key. Unknown or
+ambiguous origin hosts and probe conversations are omitted. Sections initially
+show 4, 10 and 10 rows and retain at most 50, 100 and 100. The status stays
+searching until all requests settle. Opening a card logs only its section and
+rank.
+
+A message hit sends its exact item key to `sessions/locate` on its own host.
+`GatewayHistoryService` reads the inclusive item cursor ascending through the
+ordinary scheduler and cache, with metadata from the supplied turn cursor.
+It resets one `HistoryWindow` at the located page and leaves the provider's
+older and newer cursors in charge of subsequent paging. For Codex's turn-start
+cursor, the service checks up to four more pages for a verified item and retains
+only the chosen page. It can reveal a known turn when an item is unavailable.
+Failed, expired and unknown locations use the normal conversation opening. A
+cursorless turn can be revealed only when loaded. The resume task and history
+read fences reject stale replies. The existing transcript scroll request centres
+and highlights the target. An exact tool hit expands its existing action group,
+and the find bar is seeded with the best matching term without taking keyboard
+focus or issuing a competing jump.
+
+Ask an agent starts an ordinary new chat with the query and asks for verified
+links. `ChatRootView` accepts
+`remotecoder://chat/conversation?host=<hostId>&thread=<threadId>&item=<itemKey>` through
+`ExternalEventRouter`. The optional `item` uses the same locate path. The
+configured host must resolve uniquely. A new window claims its matching item
+once from the router's existing pending event.

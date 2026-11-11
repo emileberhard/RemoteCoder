@@ -99,7 +99,7 @@ struct UnsentDraftRow: Identifiable, Equatable, Sendable {
     }
 
     static func rows(from targets: [TargetInput], selected: UnsentDraftAddress?, showsHostLabels: Bool,
-                     query: String, condensedPaths: CondensedPathCache, now: Date) -> [UnsentDraftRow] {
+                     condensedPaths: CondensedPathCache, now: Date) -> [UnsentDraftRow] {
         targets.flatMap { input in input.drafts.map { (input, $0) } }
             .sorted { UnsentDraftSummary.newestFirst($0.1, $1.1) }
             .map { input, draft in
@@ -114,10 +114,6 @@ struct UnsentDraftRow: Identifiable, Equatable, Sendable {
                     modifiedAt: draft.modifiedAt,
                     ageLabel: draft.modifiedAt.map { ConversationSidebarDate.age(of: $0, now: now) },
                     isSelected: address == selected)
-            }
-            .filter { row in
-                ConversationSidebarProjection.matches(title: row.title, workingDirectory: row.workingDirectory,
-                                                      hostName: row.showsHostLabel ? row.hostName : nil, query: query)
             }
     }
 }

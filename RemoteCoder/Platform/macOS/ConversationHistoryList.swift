@@ -12,11 +12,29 @@ struct ConversationHistoryList: View {
     let onUndo: () -> Void
     let onInteractionChanged: (Bool) -> Void
 
+    @FocusState private var isSearchFocused: Bool
     @State private var selection: Set<ConversationAddress> = []
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        ZStack {
+            if window.search.isActive {
+                ConversationSearchList(search: window.search, open: actions.openSearch, ask: actions.askSearch)
+            } else {
+                conversationList
+            }
+        }
+        .searchable(text: Bindable(window.search).query, placement: .sidebar, prompt: "Search")
+        .searchFocused($isSearchFocused)
+        .onChange(of: window.search.focusRequest, initial: true) { _, request in
+            if request > 0 { isSearchFocused = true }
+        }
+        .safeAreaBar(edge: .bottom) { statusBar }
+    }
+
+    @ViewBuilder
+    private var conversationList: some View {
         let items = snapshot?.items ?? []
         let sections = ConversationSidebarSections.sections(of: items)
         let hostNames = workspace.hasMultipleHosts
@@ -63,7 +81,7 @@ struct ConversationHistoryList: View {
                     }
                 }
             }
-            ConversationHistoryLoadingFooter(workspace: workspace, window: window, states: snapshot?.hostStates ?? [], open: actions.open)
+            ConversationHistoryLoadingFooter(workspace: workspace, states: snapshot?.hostStates ?? [], open: actions.open)
                 .buttonStyle(.link)
         }
         .listStyle(.sidebar)
@@ -71,7 +89,6 @@ struct ConversationHistoryList: View {
             transaction.animation = nil
             transaction.disablesAnimations = true
         }
-        .searchable(text: Bindable(window).drawerQuery, placement: .sidebar, prompt: "Filter")
         .contextMenu(forSelectionType: ConversationAddress.self) { addresses in
             if let row = singleRow(in: addresses, of: items) {
                 menu(for: row)
@@ -91,7 +108,6 @@ struct ConversationHistoryList: View {
             }
         }
         .overlay { placeholder(isEmpty: snapshot != nil && items.isEmpty && drafts.isEmpty) }
-        .safeAreaBar(edge: .bottom) { statusBar }
         .task(id: shownConversation) {
             await Task.yield()
             guard !Task.isCancelled else { return }
@@ -114,24 +130,13 @@ struct ConversationHistoryList: View {
         return nil
     }
 
-    @ViewBuilder
     private func foldableSection(_ summary: ConversationSectionSummary, setFolded: @escaping (Bool) -> Void,
                                  @ViewBuilder content: () -> some View,
                                  @ViewBuilder title: () -> some View) -> some View {
-        let header = sectionHeader(summary, title: title)
-        switch summary.fold {
-        case .searching:
-            Section {
-                content()
-            } header: {
-                header
-            }
-        case .expanded, .folded:
-            Section(isExpanded: Binding(get: { summary.fold == .expanded }, set: { setFolded(!$0) })) {
-                content()
-            } header: {
-                header
-            }
+        Section(isExpanded: Binding(get: { summary.fold == .expanded }, set: { setFolded(!$0) })) {
+            content()
+        } header: {
+            sectionHeader(summary, title: title)
         }
     }
 
@@ -149,12 +154,6 @@ struct ConversationHistoryList: View {
         let isExpanded = Binding(get: { summary.fold == .expanded },
                                  set: { workspace.drawerPreferences.isSettledFolded = !$0 })
         switch summary.fold {
-        case .searching:
-            Section {
-                rows(sectionRows, hostNames: hostNames)
-            } header: {
-                header
-            }
         case .expanded:
             Section(isExpanded: isExpanded) {
                 rows(sectionRows, hostNames: hostNames)
@@ -300,8 +299,6 @@ struct ConversationHistoryList: View {
                 .accessibilityLabel("Loading history")
         } else if isEmpty, snapshot?.hostStates.contains(where: { $0.canLoadMore || $0.hasDiscardedHeaders || !$0.unloadedPins.isEmpty }) == true {
             EmptyView()
-        } else if isEmpty, !window.drawerQuery.isEmpty {
-            ContentUnavailableView.search(text: window.drawerQuery)
         } else if isEmpty, workspace.drawerPreferences.unreadOnly {
             ContentUnavailableView("All Caught Up", systemImage: "checkmark.circle")
         } else if isEmpty {
@@ -415,7 +412,7 @@ private struct ConversationSourceRow: View, Equatable {
                 Image(provider.markImage)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: markSize, height: markSize)
+                    .frame(width: rowSize.markSize * scale, height: rowSize.markSize * scale)
                     .accessibilityLabel("\(provider.displayName) conversation")
                 if row.isAutomation {
                     Image(systemName: "clock.arrow.circlepath")
@@ -449,15 +446,6 @@ private struct ConversationSourceRow: View, Equatable {
 
     private var dotDiameter: CGFloat { 7 * scale }
     private var dotSpacing: CGFloat { 5 * scale }
-
-    private var markSize: CGFloat {
-        let base: CGFloat = switch rowSize {
-        case .small: 10
-        case .large: 13
-        default: 11
-        }
-        return base * scale
-    }
 }
 
 private struct UnsentDraftSourceRow: View, Equatable {
@@ -490,7 +478,7 @@ private struct UnsentDraftSourceRow: View, Equatable {
                         Image(provider.markImage)
                             .resizable()
                             .scaledToFit()
-                            .frame(width: markSize, height: markSize)
+                            .frame(width: rowSize.markSize * scale, height: rowSize.markSize * scale)
                             .accessibilityLabel("\(provider.displayName) draft")
                     }
                     Text((row.workingDirectory as NSString).lastPathComponent)
@@ -510,15 +498,6 @@ private struct UnsentDraftSourceRow: View, Equatable {
         .buttonStyle(.plain)
         .help(row.workingDirectory.isEmpty ? row.hostName : "\(row.hostName) · \(row.workingDirectory)")
         .accessibilityAddTraits(row.isSelected ? .isSelected : [])
-    }
-
-    private var markSize: CGFloat {
-        let base: CGFloat = switch rowSize {
-        case .small: 10
-        case .large: 13
-        default: 11
-        }
-        return base * scale
     }
 }
 
@@ -564,7 +543,7 @@ private struct ConversationRowStatus: View {
     }
 }
 
-private extension SidebarRowSize {
+extension SidebarRowSize {
     var titleFont: Font {
         switch self {
         case .small: .subheadline
@@ -580,6 +559,14 @@ private extension SidebarRowSize {
         case .medium: .subheadline
         case .large: .callout
         @unknown default: .subheadline
+        }
+    }
+
+    var markSize: CGFloat {
+        switch self {
+        case .small: 10
+        case .large: 13
+        default: 11
         }
     }
 }

@@ -85,7 +85,7 @@ private struct ChatWindowFocusPublication: View, Equatable {
 
 enum ChatCommand: String, CaseIterable, Hashable, Sendable {
     case newChat, newChatInHomeFolder, newWindow, fork, chooseFolder
-    case findInConversation, findNext, findPrevious
+    case searchConversations, findInConversation, findNext, findPrevious
     case commandPalette, toggleSidebar, toggleInspector, reviewChanges, refresh
     case send, stop, focusComposer, attachFile, toggleFastMode
     case togglePin, rename, regenerateName, copyReference, showAgents, settle, markUnread
@@ -98,6 +98,7 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
         case .newWindow: KeyboardShortcut("n", modifiers: [.command, .shift])
         case .newChatInHomeFolder: KeyboardShortcut("n", modifiers: [.command, .option])
         case .chooseFolder: KeyboardShortcut("o")
+        case .searchConversations: KeyboardShortcut("f", modifiers: [.command, .shift])
         case .findInConversation: KeyboardShortcut("f")
         case .findNext: KeyboardShortcut("g")
         case .findPrevious: KeyboardShortcut("g", modifiers: [.command, .shift])
@@ -134,7 +135,7 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
         case .newWindow: "macwindow.badge.plus"
         case .fork: "arrow.triangle.branch"
         case .chooseFolder: "folder"
-        case .findInConversation, .findNext, .findPrevious: "magnifyingglass"
+        case .searchConversations, .findInConversation, .findNext, .findPrevious: "magnifyingglass"
         case .commandPalette: "command"
         case .toggleSidebar: "sidebar.leading"
         case .toggleInspector: "sidebar.trailing"
@@ -169,6 +170,7 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
         case .newWindow: "New Window"
         case .fork: "Fork Conversation"
         case .chooseFolder: "Choose Folder…"
+        case .searchConversations: "Search Conversations…"
         case .findInConversation: "Find in Conversation…"
         case .findNext: "Find Next"
         case .findPrevious: "Find Previous"
@@ -390,6 +392,9 @@ fileprivate struct ChatWindowActionContext {
         case .fork:
             if let address = screen.openAddress { fork(address) }
         case .chooseFolder: chooseFolder()
+        case .searchConversations:
+            if !isSidebarOpen { toggleSidebar() }
+            window.search.requestFocus()
         case .findInConversation: find.present()
         case .findNext: find.move(.next, in: screen)
         case .findPrevious: find.move(.previous, in: screen)

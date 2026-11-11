@@ -41,7 +41,6 @@ struct ConversationSidebarRow: Identifiable, Equatable, Sendable {
 enum ConversationSectionFold: Equatable, Sendable {
     case expanded
     case folded
-    case searching
 }
 
 struct ConversationSectionSummary: Equatable, Sendable {
@@ -278,7 +277,6 @@ enum ConversationSidebarProjection {
         dateLabels: ConversationSidebarDateCache = ConversationSidebarDateCache()
     ) -> [ConversationSidebarItem] {
         let showsHostLabel = showsHostLabels(targetCount: hosts.count)
-        let terms = arrangement.query.split(whereSeparator: \.isWhitespace).map(String.init)
         let dateLabel = dateLabels.labeler(now: now, calendar: .current, locale: .current)
         var slots: [Slot] = []
         slots.reserveCapacity(hosts.reduce(0) { $0 + $1.threads.count })
@@ -327,7 +325,6 @@ enum ConversationSidebarProjection {
                     isProbablyDone: !live.isLive && !isSettled && host.marks.isProbablyDone(thread),
                     needsInput: live.tier == .needsYou
                 )
-                guard matches(row, terms: terms) else { continue }
                 slots.append(Slot(
                     row: row,
                     rank: rank,
@@ -341,36 +338,34 @@ enum ConversationSidebarProjection {
 
         var items: [ConversationSidebarItem] = []
         items.reserveCapacity(slots.count + 8)
-        let searching = !terms.isEmpty
         let pinned = slots.prefix { $0.row.isPinned }
         if !pinned.isEmpty {
-            let fold = fold(isFolded: arrangement.isPinnedFolded, searching: searching)
+            let fold = fold(isFolded: arrangement.isPinnedFolded)
             items.append(.pinnedHeader(ConversationSectionSummary(pinned.map(\.row), fold: fold)))
             if fold != .folded { items.append(contentsOf: pinned.map { .row($0.row) }) }
         }
         let unpinned = slots.dropFirst(pinned.count)
         let automations = unpinned.prefix { $0.row.isAutomation }
-        appendAutomations(automations, to: &items, arrangement: arrangement, searching: searching)
+        appendAutomations(automations, to: &items, arrangement: arrangement)
         let remaining = unpinned.dropFirst(automations.count)
         let chats = remaining.prefix { !$0.isSettled }
         if arrangement.mode == .projects {
-            appendProjects(of: chats, to: &items, arrangement: arrangement, searching: searching, showsHostLabel: showsHostLabel)
+            appendProjects(of: chats, to: &items, arrangement: arrangement, showsHostLabel: showsHostLabel)
         } else {
             if !items.isEmpty, !chats.isEmpty { items.append(.chatsHeader) }
             items.append(contentsOf: chats.map { .row($0.row) })
         }
-        appendSettled(remaining.dropFirst(chats.count), to: &items, arrangement: arrangement, searching: searching)
+        appendSettled(remaining.dropFirst(chats.count), to: &items, arrangement: arrangement)
         return items
     }
 
     private static func appendAutomations(_ automations: ArraySlice<Slot>, to items: inout [ConversationSidebarItem],
-                                          arrangement: ConversationDrawerArrangement, searching: Bool) {
+                                          arrangement: ConversationDrawerArrangement) {
         guard !automations.isEmpty else { return }
-        let fold = fold(isFolded: arrangement.isAutomationsFolded, searching: searching)
+        let fold = fold(isFolded: arrangement.isAutomationsFolded)
         items.append(.automationsHeader(ConversationSectionSummary(automations.map(\.row), fold: fold)))
         let shown: [ConversationSidebarRow] = switch fold {
         case .folded: []
-        case .searching: automations.map(\.row)
         case .expanded: limited(automations, to: arrangement.automationRowLimit)
         }
         items.append(contentsOf: shown.map { .row($0) })
@@ -380,7 +375,7 @@ enum ConversationSidebarProjection {
     }
 
     private static func appendProjects(of chats: ArraySlice<Slot>, to items: inout [ConversationSidebarItem],
-                                       arrangement: ConversationDrawerArrangement, searching: Bool, showsHostLabel: Bool) {
+                                       arrangement: ConversationDrawerArrangement, showsHostLabel: Bool) {
         var groups: [String: [Slot]] = [:]
         var projects: [String: Project] = [:]
         for slot in chats {
@@ -393,7 +388,7 @@ enum ConversationSidebarProjection {
             .sorted { lhs, rhs in lhs.latest != rhs.latest ? lhs.latest > rhs.latest : lhs.key < rhs.key }
         for group in ordered {
             guard let project = projects[group.key] else { continue }
-            let fold = fold(isFolded: arrangement.foldedProjects.contains(group.key), searching: searching)
+            let fold = fold(isFolded: arrangement.foldedProjects.contains(group.key))
             items.append(.project(ConversationProjectHeader(
                 key: group.key,
                 title: project.title,
@@ -401,7 +396,7 @@ enum ConversationSidebarProjection {
                 summary: ConversationSectionSummary(group.slots.map(\.row), fold: fold)
             )))
             guard fold != .folded else { continue }
-            let limit = searching || arrangement.revealedProjects.contains(group.key)
+            let limit = arrangement.revealedProjects.contains(group.key)
                 ? group.slots.count : arrangement.projectRowLimit ?? group.slots.count
             items.append(contentsOf: group.slots.prefix(limit).map { .row($0.row) })
             if group.slots.count > limit {
@@ -411,12 +406,11 @@ enum ConversationSidebarProjection {
     }
 
     private static func appendSettled(_ settled: ArraySlice<Slot>, to items: inout [ConversationSidebarItem],
-                                      arrangement: ConversationDrawerArrangement, searching: Bool) {
+                                      arrangement: ConversationDrawerArrangement) {
         guard !settled.isEmpty else { return }
-        let fold = fold(isFolded: arrangement.isSettledFolded, searching: searching)
+        let fold = fold(isFolded: arrangement.isSettledFolded)
         items.append(.settledHeader(ConversationSectionSummary(settled.map(\.row), fold: fold)))
         let limit: Int? = switch fold {
-        case .searching: nil
         case .folded: 0
         case .expanded: arrangement.settledRowLimit
         }
@@ -432,8 +426,8 @@ enum ConversationSidebarProjection {
         return slots.enumerated().filter { $0.offset < limit || $0.element.row.isSelected }.map(\.element.row)
     }
 
-    private static func fold(isFolded: Bool, searching: Bool) -> ConversationSectionFold {
-        searching ? .searching : isFolded ? .folded : .expanded
+    private static func fold(isFolded: Bool) -> ConversationSectionFold {
+        isFolded ? .folded : .expanded
     }
 
     private struct Project {
@@ -459,24 +453,6 @@ enum ConversationSidebarProjection {
             Project(key: "\(hostScope)|directory|\(identity.key)",
                     title: condensedPaths.condensedPath(identity.root, remoteHomePath: host.remoteHomePath),
                     hostName: host.hostName)
-        }
-    }
-
-    static func matches(title: String?, workingDirectory: String, hostName: String?, query: String) -> Bool {
-        matches(title: title, workingDirectory: workingDirectory, hostName: hostName,
-                terms: query.split(whereSeparator: \.isWhitespace).map(String.init))
-    }
-
-    private static func matches(_ row: ConversationSidebarRow, terms: [String]) -> Bool {
-        matches(title: row.title, workingDirectory: row.workingDirectory,
-                hostName: row.showsHostLabel ? row.hostName : nil, terms: terms)
-    }
-
-    private static func matches(title: String?, workingDirectory: String, hostName: String?, terms: [String]) -> Bool {
-        terms.allSatisfy { term in
-            title?.localizedStandardContains(term) == true
-                || workingDirectory.localizedStandardContains(term)
-                || hostName?.localizedStandardContains(term) == true
         }
     }
 

@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ConversationHistoryLoadingFooter: View {
     let workspace: ChatWorkspaceModel
-    let window: ChatWindowModel
     let states: [ConversationSidebarHostState]
     let open: (ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome
     @State private var loading: Task<Void, Never>?
@@ -11,10 +10,7 @@ struct ConversationHistoryLoadingFooter: View {
         let older = states.filter(\.canLoadMore)
         VStack(alignment: .leading, spacing: 8) {
             ForEach(states) { state in
-                let pins = state.unloadedPins.filter { pin in
-                    ConversationSidebarProjection.matches(title: pin.title, workingDirectory: "",
-                        hostName: state.showsHostLabel ? state.hostName : nil, query: window.drawerQuery)
-                }
+                let pins = state.unloadedPins
                 if !pins.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         if state.showsHostLabel { Text(state.hostName).foregroundStyle(.secondary) }
@@ -32,9 +28,9 @@ struct ConversationHistoryLoadingFooter: View {
                 }
             }
             if !older.isEmpty {
-                Button(window.drawerQuery.isEmpty ? "Load older chats" : "Search more history") {
+                Button("Load older chats") {
                     loading?.cancel()
-                    loading = Task { await workspace.loadOlderHistory(in: window) }
+                    loading = Task { await workspace.loadOlderHistory() }
                 }
                 .disabled(older.allSatisfy(\.isLoading))
             }

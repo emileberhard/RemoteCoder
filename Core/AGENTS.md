@@ -23,7 +23,7 @@ owner.
 | `Storage`, `Hosts` | `HostStorage` and `StorageScope`; `HostStore`, credentials, `GatewayRoutes`, LAN endpoint, `LocalConfiguration`, `HostPreferences`, `HostDirectories` |
 | `Gateway` | The connection actor, `GatewayEventPump`, `ReplayProgress`, `DispatchPolicy`, notification routing |
 | `Conversations` | `ConversationAddress`, `ConversationSession`/`ConversationState`, projection, checkpoints, drafts, `TranscriptRecovery`, `ConversationWarmer`, `RecentConversationCache` |
-| `Conversations/{History,Metadata,Activity,Agents,Sidebar}` | History window, cache and scheduler, conversation index and header store; metadata DTOs and store; busy reconciliation; agents model; sidebar projection, pin and attention stores, drawer placement |
+| `Conversations/{History,Metadata,Activity,Agents,Sidebar,Search}` | History window, cache and scheduler, conversation index and header store; metadata DTOs and store; busy reconciliation; agents model; sidebar projection, pin and attention stores, drawer placement; conversation search session, query and merge |
 | `Workspace` | `TargetLifecycle`, `TargetPresentation`, owned-task tracking |
 | `Turns`, `Questions` | `TurnRegistry`, `ActiveJob`, `TurnDispatcher`, `TurnStops`; `QuestionReplica`, question flow and editor logic |
 | `Accounts`, `Models`, `Usage` | Account models and names; `AgentProvider`, model and reasoning catalogs, `NewChatDefaults`, `ModelPickerPreferences`; usage rows |

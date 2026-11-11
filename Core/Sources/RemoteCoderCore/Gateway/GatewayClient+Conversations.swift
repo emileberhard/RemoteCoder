@@ -39,3 +39,28 @@ extension GatewayClient: QuestionRemote {
         return response
     }
 }
+
+extension GatewayClient {
+    func searchConversations(_ params: ConversationSearchParams) async throws -> ConversationSearchResponse {
+        let data = try await callRaw(method: "sessions/conversations/search", params: encodeToJSONValue(params),
+                                     timeout: .seconds(5))
+        let response = try await GatewayFrameDecoder.decodeResult(ConversationSearchResponse.self, from: data,
+            dateDecodingStrategy: ConversationSearchResponse.dateDecoding)
+        guard response.schemaVersion == ConversationSearchResponse.schemaVersion else { throw ClientError.invalidMessage }
+        return response
+    }
+
+    func searchConversationsByMeaning(_ params: ConversationSearchParams) async throws -> ConversationMeaningResponse {
+        let data = try await callRaw(method: "sessions/conversations/searchByMeaning", params: encodeToJSONValue(params),
+                                     timeout: .seconds(10))
+        let response = try await GatewayFrameDecoder.decodeResult(ConversationMeaningResponse.self, from: data,
+            dateDecodingStrategy: ConversationSearchResponse.dateDecoding)
+        guard response.schemaVersion == ConversationMeaningResponse.schemaVersion else { throw ClientError.invalidMessage }
+        return response
+    }
+
+    func locateConversationItem(_ itemKey: String) async throws -> ConversationSearchLocation {
+        try await callDecodable(method: "sessions/locate", params: .object(["itemKey": .string(itemKey)]),
+                                timeout: .seconds(2))
+    }
+}

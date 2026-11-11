@@ -216,7 +216,7 @@ struct UnsentDraftTests {
         #expect(try await storedDrafts(in: directory).isEmpty)
     }
 
-    @Test func rowsMatchTheQueryAndListNewestFirstAcrossTargets() {
+    @Test func rowsListNewestFirstAcrossTargets() {
         let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
         let mini = ExecutionTarget(hostID: UUID())
         let macBook = ExecutionTarget(hostID: UUID())
@@ -229,7 +229,7 @@ struct UnsentDraftTests {
         ]
         let selected = UnsentDraftAddress(target: mini, draftID: older.id)
 
-        let rows = UnsentDraftRow.rows(from: inputs, selected: selected, showsHostLabels: true, query: "",
+        let rows = UnsentDraftRow.rows(from: inputs, selected: selected, showsHostLabels: true,
                                        condensedPaths: CondensedPathCache(), now: now)
         #expect(rows.map(\.title) == ["Plan the release", "Fix the drawer", "Imported"])
         #expect(rows.map(\.isSelected) == [false, true, false])
@@ -237,10 +237,6 @@ struct UnsentDraftTests {
         #expect(rows.map(\.ageLabel) == ["1m", "2h", nil])
         #expect(rows[0].workingDirectory.isEmpty)
         #expect(rows[1].workingDirectory == "~/RemoteCoder")
-
-        let filtered = UnsentDraftRow.rows(from: inputs, selected: nil, showsHostLabels: true, query: "mini drawer",
-                                           condensedPaths: CondensedPathCache(), now: now)
-        #expect(filtered.map(\.address) == [selected])
     }
 
     private func storedDestinations(in directory: URL) throws -> [String] {

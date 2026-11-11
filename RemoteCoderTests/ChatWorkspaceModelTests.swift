@@ -19,12 +19,12 @@ struct ChatWorkspaceModelTests {
         _ = await screen.target.conversationList.knownThread(id: kept.id)
         try await gateway.setListedThreads([late])
         await gateway.holdThreadList()
-        let loading = Task { await fixture.workspace.loadOlderHistory(on: screen.executionTarget, in: fixture.workspace.keyWindow) }
+        let loading = Task { await fixture.workspace.loadOlderHistory() }
         await gateway.waitForHeldThreadList()
         screen.target.beginRetirement()
         #expect(!loading.isCancelled)
         #expect(!screen.target.conversationList.isLoadingOlder)
-        #expect(!screen.target.conversationList.canLoadOlder(query: ""))
+        #expect(!screen.target.conversationList.canLoadOlder)
         await gateway.releaseHeldThreadList()
         await loading.value
         #expect(screen.target.conversationList.threads == [kept])

@@ -29,6 +29,8 @@ struct ConversationHistoryView: View {
     @State private var visibility = SurfaceVisibilityState(isVisible: false)
 
     let onSelect: (ConversationAddress) -> ChatWorkspaceModel.ConversationSwitchOutcome
+    let onSelectSearch: (ConversationSearchRow) -> ChatWorkspaceModel.ConversationSwitchOutcome
+    let onAskSearch: () -> Void
     let onOpenDraft: (UnsentDraftAddress) -> Void
     let onStartNew: (UUID) -> Void
     let onShowSettings: () -> Void
@@ -65,11 +67,6 @@ struct ConversationHistoryView: View {
                     if arranged.admittedLayout != layout { layout = arranged.admittedLayout }
                     receive(arranged.snapshot)
                 }
-            }
-            .task(id: SearchRequest(isVisible: isVisible, query: window.drawerQuery)) {
-                guard isVisible, !window.drawerQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
-                await workspace.loadOlderHistory(in: window)
             }
             .task(id: notice) {
                 guard notice != nil else { return }
@@ -165,18 +162,13 @@ struct ConversationHistoryView: View {
         let windowActivations: Int
     }
 
-    private struct SearchRequest: Equatable {
-        let isVisible: Bool
-        let query: String
-    }
-
     private var presented: ConversationSidebarSnapshot? {
         sidebar ?? (isVisible ? workspace.sidebarSnapshot(arrangedBy: .live(at: .now), in: window) : nil)
     }
 
     private var actions: ConversationHistoryActions {
         ConversationHistoryActions(
-            open: onSelect,
+            open: onSelect, openSearch: onSelectSearch, askSearch: onAskSearch,
             pin: pin,
             rename: { renamingChat = ChatRenameRequest(address: $0.address, title: $0.title) },
             regenerateName: { address in

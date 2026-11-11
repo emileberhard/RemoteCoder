@@ -15,6 +15,21 @@ struct RemoteCoderDeepLinksTests {
         #expect(RemoteCoderDeepLinks.conversation(from: try #require(components.url)) == link)
     }
 
+    @Test func aSearchLinkRoundTripsItsExactItemKeyAndRejectsDuplicateIdentities() throws {
+        let itemKey = "host:claude:home:thread@item:1/2 & 3"
+        let link = RemoteCoderConversationLink(hostID: hostID, threadID: "thread/1 a", itemKey: itemKey)
+        let url = RemoteCoderDeepLinks.url(for: link)
+        #expect(url.path == "/conversation")
+        #expect(ExternalEvent(url: url) == .open(.conversation(.init(hostID: hostID, threadID: link.threadID)),
+            opening: .init(itemKey: itemKey, findTerm: nil)))
+        var components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        components.path = "/open"
+        #expect(ExternalEvent(url: try #require(components.url)) == nil)
+        components.path = url.path
+        components.queryItems?.append(URLQueryItem(name: "host", value: UUID().uuidString))
+        #expect(ExternalEvent(url: try #require(components.url)) == nil)
+    }
+
     @Test func aVoiceCallLinkPresentsOnlyThatCall() {
         let callID = UUID()
         let url = RemoteCoderDeepLinks.url(forVoiceCall: callID)

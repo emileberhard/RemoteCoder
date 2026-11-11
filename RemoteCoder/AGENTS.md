@@ -483,8 +483,8 @@ entrypoint linked above.
   `ConversationList` owns that policy; the store applies the count bound when
   it loads a file. Previews keep at most 512 characters at the header boundary, which
   bounds each row. Eviction persists incomplete coverage, never a complete or empty
-  list. Older/search discovery advances each provider's own cursor and promotes
-  the fetched page into the window; a manual refresh returns to newer coverage.
+  list. Older discovery (Load Older Chats) advances each provider's own cursor
+  and promotes the fetched page into the window; a manual refresh returns to newer coverage.
   Missing pins remain exact-address open controls while their headers are unread.
   Protected-header recovery reads at most 32 addresses per pass and backs off
   failed admissions from 30 s to 10 min in a bounded 1,024-entry map; explicit
@@ -1375,8 +1375,7 @@ entrypoint linked above.
   Pinned automations stay in Pinned; automation rows carry a small clock-arrow
   symbol on both platforms. Membership comes only from the authoritative purpose.
   A scheduled follow-up in a user-created conversation does not change its purpose.
-  Automations starts expanded, persists its fold per device and reveals matching
-  rows while searching, like Pinned. Expanded, it lists its first five rows in
+  Automations starts expanded and persists its fold per device, like Pinned. Expanded, it lists its first five rows in
   drawer rank plus the selected row, and a "Show N more" item reveals the rest.
 - One drawer lists every gateway's conversations together, addressed by
   `ConversationAddress`, with cwd badges, relative timestamps and
@@ -1437,13 +1436,9 @@ entrypoint linked above.
     that are not running, with Undo, or unsettles them when every selected row is
     settled. Hovering a row that can be settled replaces its date with a
     checkmark button that settles it.
-  - The sidebar filter field (`.searchable`, sidebar placement) writes
-    `ChatWindowModel.drawerQuery`, which the projection applies: every
-    whitespace-separated term must match the title, folder or, while it is
-    shown, the host name. It never reorders rows, ignores every fold (its
-    sections show no disclosure while filtering), and a section without
-    matches disappears. `ConversationSidebarSections`
-    regroups the flat items into `Section`s.
+  - The sidebar search field (`.searchable`, sidebar placement) binds
+    `ConversationSearchSession.query`; see conversation search below.
+    `ConversationSidebarSections` regroups the flat items into `Section`s.
   - Selecting several rows gives the context menu batch Mark as Read and
     Settle N Chats, or Unsettle N Chats when every selected row is settled;
     only a single selection opens a conversation.
@@ -1467,13 +1462,22 @@ entrypoint linked above.
   regroups the items into `Section`s.
 - Unsent drafts sit outside that item list in `ConversationSidebarSnapshot.drafts`,
   so they never take a rank, join ⌘K or move rows. A Drafts section leads the
-  drawer, newest first, three until "Show N more" or a search reveals the rest,
+  drawer, newest first, three until "Show N more" reveals the rest,
   and labels the rows below it Chats. A draft row opens on tap through
   `ChatWorkspaceModel.openUnsentDraft`, which commits on its own main-actor turn
   like `switchConversation`. Discard is a trailing swipe and an accessibility
   action on iOS and a context menu on the Mac; it shares the drawer's undo bar.
   Mac draft rows are plain buttons outside the `List` selection, and iOS draft
   rows have no lifted row menu.
+- Conversation search has one owner per window, `ChatWindowModel.search`.
+  Preparation, result mapping and merging run off the main actor. Generations
+  fence both keyword and meaning replies. The drawer reads `isActive`, and only
+  its search results view reads the result snapshot. ⇧⌘F focuses the Mac sidebar
+  field through `ChatCommand`. Message hits and item links use the screen's
+  resume task, history window and transcript scroll request. A highlight changes
+  the inputs of its target row and adds no row observation.
+  [System architecture](../docs/system-architecture.md#conversation-search)
+  owns the search, locate and Ask contracts.
 - Opening the drawer captures a `ConversationDrawerLayout`: every row's
   `ConversationDrawerRank`. Captured rows keep it until the next opening, so a
   completing turn or a changing badge never moves a row under the finger.

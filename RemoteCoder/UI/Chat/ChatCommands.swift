@@ -20,6 +20,7 @@ struct ChatCommands: Commands {
             command(.chooseFolder)
         }
         CommandGroup(before: .textEditing) {
+            command(.searchConversations)
             command(.findInConversation)
             command(.findNext)
             command(.findPrevious)

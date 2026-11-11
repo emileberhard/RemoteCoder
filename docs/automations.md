@@ -92,7 +92,8 @@ It shows its five highest-ranked rows (live or marked unread first, then most
 recent activity) and the selected row until "Show N more" reveals the rest.
 Their rows carry an automation symbol. Explicitly pinned automations appear
 once in Pinned and retain the symbol. Automation membership takes precedence
-over settlement; search reveals matching rows in folded sections. The section
+over settlement; the browser drawer's filter reveals matching rows in folded
+sections. The section
 starts expanded and its fold is a device preference, like Pinned. The Mac Quick
 Entry panel keeps unpinned automation runs out of its limited recents; explicitly
 pinned automations remain eligible. Collapse and Expand All change the currently

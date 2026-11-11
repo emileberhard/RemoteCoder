@@ -1,5 +1,11 @@
 import SwiftUI
 
+struct TranscriptSearchFindRequest: Equatable {
+    let id = UUID()
+    let term: String
+    let rowID: String
+}
+
 @MainActor
 @Observable
 final class TranscriptFind {
@@ -9,17 +15,30 @@ final class TranscriptFind {
     var query = ""
     private(set) var matches: [String] = []
     private(set) var currentIndex: Int?
-    private(set) var focusRequest = 0
+    private(set) var focusRequest: UUID?
+    private(set) var locatedRequestID: UUID?
+    @ObservationIgnored private var preferredRowID: String?
 
     var hasMatches: Bool { !matches.isEmpty }
 
     func present() {
         isPresented = true
-        focusRequest += 1
+        focusRequest = UUID()
+    }
+
+    func present(_ request: TranscriptSearchFindRequest) {
+        query = request.term
+        preferredRowID = request.rowID
+        locatedRequestID = request.id
+        focusRequest = nil
+        isPresented = true
     }
 
     func dismiss() {
         isPresented = false
+        focusRequest = nil
+        locatedRequestID = nil
+        preferredRowID = nil
         query = ""
         matches = []
         currentIndex = nil
@@ -27,8 +46,9 @@ final class TranscriptFind {
 
     func show(_ matches: [String], in screen: ChatScreenModel) {
         self.matches = matches
-        currentIndex = matches.indices.last
-        revealCurrentMatch(in: screen)
+        currentIndex = preferredRowID.flatMap { matches.firstIndex(of: $0) } ?? matches.indices.last
+        if preferredRowID == nil { revealCurrentMatch(in: screen) }
+        preferredRowID = nil
     }
 
     func move(_ direction: Direction, in screen: ChatScreenModel) {
@@ -57,6 +77,7 @@ struct TranscriptFindBar: View {
         let query: String
         let screen: ObjectIdentifier
         let transcript: String
+        let location: UUID?
     }
 
     var body: some View {
@@ -108,8 +129,8 @@ struct TranscriptFindBar: View {
         #else
         .appGlass(.standard, in: .capsule)
         #endif
-        .onChange(of: find.focusRequest, initial: true) { isFieldFocused = true }
-        .task(id: SearchKey(query: find.query, screen: ObjectIdentifier(screen), transcript: screen.transcriptIdentity)) {
+        .onChange(of: find.focusRequest, initial: true) { isFieldFocused = find.focusRequest != nil }
+        .task(id: SearchKey(query: find.query, screen: ObjectIdentifier(screen), transcript: screen.transcriptIdentity, location: find.locatedRequestID)) {
             let query = find.query
             if !query.isEmpty {
                 try? await Task.sleep(for: .milliseconds(120))
@@ -124,5 +145,19 @@ struct TranscriptFindBar: View {
     private var matchStatus: String {
         guard let currentIndex = find.currentIndex else { return "No matches" }
         return "\(currentIndex + 1) of \(find.matches.count)"
+    }
+}
+
+struct TranscriptSearchFindReceiver: View {
+    let find: TranscriptFind
+    let screen: ChatScreenModel
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .onChange(of: screen.searchFindRequest, initial: true) { _, request in
+                guard let request else { return }
+                find.present(request)
+                screen.consumeSearchFindRequest(request.id)
+            }
     }
 }
