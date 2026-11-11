@@ -220,11 +220,15 @@ def _group_pids(group: int) -> list[int]:
         capacity *= 4
 
 
-def _in_group(pid: int, group: int) -> bool:
-    try:
-        return os.getpgid(pid) == group
-    except ProcessLookupError:
+def _is_live_member(pid: int, group: int) -> bool:
+    short_info = (ctypes.c_uint32 * 16)()
+    if _libproc().proc_pidinfo(pid, 13, 1, short_info, ctypes.sizeof(short_info)):
+        _pid, _parent, member_group, status = short_info[:4]
+        return member_group == group and status != 5
+    error = ctypes.get_errno()
+    if error == errno.ESRCH:
         return False
+    raise OSError(error, "Cannot read process group member", pid)
 
 
 def group_has_live_members(group: int, exclude_pid: int = 0) -> bool:
@@ -239,12 +243,14 @@ def group_has_live_members(group: int, exclude_pid: int = 0) -> bool:
             for line in rows.splitlines()
             if len(parts := line.split()) == 3
         )
-    not_live = {exclude_pid}
-    while unchecked := set(_group_pids(group)) - not_live:
-        if any(_in_group(pid, group) for pid in unchecked):
+    settled = set()
+    while True:
+        members = set(_group_pids(group)) - {exclude_pid}
+        if any(_is_live_member(pid, group) for pid in members):
             return True
-        not_live |= unchecked
-    return False
+        if members <= settled:
+            return False
+        settled = members
 
 
 def terminate_group(identity: dict, grace_seconds: float):
@@ -263,7 +269,7 @@ def terminate_group(identity: dict, grace_seconds: float):
         raise ValueError("Measurement command must own its process group")
     with suspended_processes([identity]):
         deadline = time.monotonic() + grace_seconds
-        while audit_alive(identity):
+        while True:
             members = []
             for pid in _group_pids(identity["pgid"]):
                 if pid != identity["pid"]:
