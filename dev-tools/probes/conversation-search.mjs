@@ -39,7 +39,7 @@ try {
     codexUser(codexThread,'fixture-turn-2','item-2','The second turn follows.'),
     codexEvent('task_complete',{turn_id:'fixture-turn-2',last_agent_message:null}),
   ];
-  await writeFile(join(codexSessions,`rollout-2026-11-01T10-00-00-${codexThread}.jsonl`),rollout.map(row=>JSON.stringify(row)+'\n').join(''),{mode:0o600});
+  await writeFile(join(codexSessions,`rollout-2026-11-01T10-00-00-${codexThread}.jsonl`),rollout.map((row,ordinal)=>JSON.stringify({...row,ordinal})+'\n').join(''),{mode:0o600});
   const childRollout=join(codexSessions,`rollout-2026-11-01T10-00-00-${delegatedChild}.jsonl`);
   const childRecords=[
     {...rollout[0],payload:{...rollout[0].payload,id:delegatedChild,session_id:delegatedChild}},
@@ -47,7 +47,7 @@ try {
     codexUser(delegatedChild,'delegated-turn','item-1',delegatedNeedle),
     codexEvent('task_complete',{turn_id:'delegated-turn',last_agent_message:null}),
   ];
-  await writeFile(childRollout,childRecords.map(row=>JSON.stringify(row)+'\n').join(''),{mode:0o600});
+  await writeFile(childRollout,childRecords.map((row,ordinal)=>JSON.stringify({...row,ordinal})+'\n').join(''),{mode:0o600});
   const provider = lab.path('meaning.sh');
   await writeFile(provider,`cat >/dev/null\nprintf '%s' '${JSON.stringify({conversations:[{sessionId:'unknown',provider:'claude',excerpt:'omit'},{sessionId:root,provider:'claude',excerpt:'Drawer reveal stutter'}]})}'\n`);
   const config=lab.path('meaning.json');
