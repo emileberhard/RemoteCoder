@@ -11,15 +11,16 @@ const MEMBER_LIMIT: usize = 128;
 const IMMEDIATE_REFRESH_MS: i64 = 10;
 const COOLDOWN_MULTIPLIER: i64 = 9;
 
+pub(super) fn ready(db: &Connection) -> Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM meta WHERE key='search_version' AND value=?1)",
+        [VERSION],
+        |r| r.get(0),
+    )?)
+}
+
 pub(super) fn open(db: &Connection) -> Result<()> {
-    let version: Option<String> = db
-        .query_row(
-            "SELECT value FROM meta WHERE key='search_version'",
-            [],
-            |r| r.get(0),
-        )
-        .optional()?;
-    if version.as_deref() == Some(VERSION) {
+    if ready(db)? {
         return Ok(());
     }
     let tx = db.unchecked_transaction()?;
@@ -305,10 +306,13 @@ fn other_text(db: &Connection, root: &str) -> Result<(String, bool)> {
     Ok((text, capped))
 }
 
-pub(super) fn capped_roots(db: &Connection) -> Result<i64> {
-    Ok(db.query_row(
+pub(super) fn capped_roots(db: &Connection) -> Result<Option<i64>> {
+    if !ready(db)? {
+        return Ok(None);
+    }
+    Ok(Some(db.query_row(
         "SELECT count(*) FROM search_document WHERE capped=1",
         [],
         |r| r.get(0),
-    )?)
+    )?))
 }

@@ -124,6 +124,13 @@ pub(crate) fn search(
         ensure!(!control.stopped(), "conversation search interrupted");
         let snapshot = db.unchecked_transaction()?;
         let db = &snapshot;
+        if !super::index::ready(db)? {
+            return Ok(Response {
+                schema_version: 1,
+                truncated: true,
+                conversations: Vec::new(),
+            });
+        }
         let incomplete: bool = db.query_row("SELECT (SELECT value FROM meta WHERE key='catalog_ready')<>'1' OR EXISTS(SELECT 1 FROM meta WHERE key='mirror_rebuilding') OR EXISTS(SELECT 1 FROM search_dirty WHERE backfill=1) OR EXISTS(SELECT 1 FROM coverage WHERE stale_reason IS NOT NULL OR complete_through IS NULL)", [], |r| r.get(0))?;
         let mut statement = db.prepare("SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid JOIN session s ON s.session_key=d.session_key JOIN source src USING(source_id) WHERE conversation_fts MATCH ?1 AND src.present=1 ORDER BY bm25(conversation_fts,8,4,1,0),s.last_at DESC,s.session_key LIMIT 129")?;
         let candidates: Vec<_> = statement

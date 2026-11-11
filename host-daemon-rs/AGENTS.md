@@ -535,7 +535,8 @@ blocks startup or provider journal retirement.
   indexes match all terms across root conversation documents, with final-term
   prefixes and diacritic folding. The worker persists origin titles and delegated
   parents, mirrors them in optional page metadata, and rebuilds derived indexes
-  from catalog rows. Requests never scan every header, read the job store or
+  from catalog rows after the listener is bound. Search treats a pending schema
+  reset as initial backfill. Requests never scan every header, read the job store or
   fetch full message text to rank. Native and persisted delegated children fold
   into roots with ranked excerpts. Its one-second deadline includes FIFO and admission;
   completed stages survive timeout with `truncated`, and no completed stage uses

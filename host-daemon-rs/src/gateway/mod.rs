@@ -694,10 +694,6 @@ impl Gateway {
         self.start_control().await;
 
         self.start_activity_publisher().await;
-        if let Err(error) = self.start_sessions().await {
-            warn!(%error, "Session history is unavailable");
-        }
-
         if self.claude_settings.enabled {
             let claude_auth_task = {
                 let gw = Arc::clone(self);

@@ -225,6 +225,7 @@ pub(crate) fn scan_scope(
     scope: Scope<'_>,
     stop: &AtomicBool,
 ) -> Result<Value> {
+    super::index::open(&*store.writer()?)?;
     let outcome = scan_serving(store, origins, scope, stop, &|| false, &mut |_| Ok(()))?;
     let mut db = store.writer()?;
     while !stop.load(Ordering::Acquire) && super::index::rebuild_one(&mut db)? {}

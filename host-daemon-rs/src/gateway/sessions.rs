@@ -181,7 +181,7 @@ impl Gateway {
             .await
     }
 
-    pub(super) async fn start_sessions(self: &Arc<Self>) -> Result<()> {
+    pub(crate) async fn start_sessions(self: &Arc<Self>) -> Result<()> {
         let runtime = self.sessions_runtime().await?.clone();
         let mut task = runtime.mirror_task.lock().await;
         if task.is_some() {

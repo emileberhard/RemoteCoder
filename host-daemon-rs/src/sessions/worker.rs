@@ -33,7 +33,7 @@ struct MirrorRequest {
 pub(super) struct Mailbox {
     stop: Arc<AtomicBool>,
     wake: Arc<(Mutex<Pending>, Condvar)>,
-    discovery: Mutex<Option<(Vec<Origin>, Discovery)>>,
+    discovery: Mutex<(Vec<Origin>, Discovery)>,
 }
 
 impl Mailbox {
@@ -66,9 +66,8 @@ impl Mailbox {
             !self.stop.load(Ordering::Acquire),
             "unavailable: session worker stopped"
         );
-        if let Ok(mut current) = self.discovery.try_lock()
-            && let Some((origins, discovery)) = current.as_mut()
-        {
+        if let Ok(mut current) = self.discovery.try_lock() {
+            let (origins, discovery) = &mut *current;
             discovery.refresh(origins, Some(deadline))?;
             if !discovery.has_pending()
                 || discovery.headers_present(&*store.reader()?, origins, deadline)?
@@ -121,8 +120,7 @@ impl Mailbox {
 
     fn reconcile(&self, db: &mut rusqlite::Connection, origins: &[Origin]) -> Result<()> {
         let mut current = self.discovery.lock().expect("Session discovery poisoned");
-        let (stored_origins, discovery) =
-            current.get_or_insert_with(|| (Vec::new(), Discovery::default()));
+        let (stored_origins, discovery) = &mut *current;
         stored_origins.clear();
         stored_origins.extend_from_slice(origins);
         discovery.reconcile();
@@ -149,8 +147,7 @@ impl Mailbox {
         };
         let result = (|| -> Result<()> {
             let mut current = self.discovery.lock().expect("Session discovery poisoned");
-            let (_, discovery) =
-                current.get_or_insert_with(|| (origins.to_vec(), Discovery::default()));
+            let (_, discovery) = &mut *current;
             discovery.refresh(origins, Some(deadline))?;
             discovery.headers(db, origins, &self.stop, Some(deadline))
         })()
@@ -376,7 +373,7 @@ impl Worker {
         let mailbox = Arc::new(Mailbox {
             stop: stop.clone(),
             wake: wake.clone(),
-            discovery: Mutex::new(None),
+            discovery: Mutex::new((origins.clone(), Discovery::default())),
         });
         let endpoint = mailbox.clone();
         let registration = store.worker.clone();
@@ -405,6 +402,7 @@ impl Worker {
                 }
                 let mut next_reconcile = Instant::now();
                 let mut next_document: Option<Instant> = None;
+                let mut search_installed = false;
                 let mut retry_delay = Duration::from_secs(2);
                 while !flag.load(Ordering::Acquire) {
                     let mut pending = signal.0.lock().expect("Session worker wake poisoned");
@@ -434,6 +432,10 @@ impl Worker {
                     drop(pending);
                     let mut paths: Vec<_> = batches.into_iter().flatten().collect();
                     let result: Result<serde_json::Value> = (|| {
+                        if !search_installed {
+                            super::index::open(&*store.writer()?)?;
+                            search_installed = true;
+                        }
                         if !hot.is_empty() && Instant::now() >= next_hot {
                             paths.extend(hot.changed()?);
                             next_hot = Instant::now() + Duration::from_secs(1);
@@ -499,6 +501,10 @@ impl Worker {
                     })();
                     if let Some(MirrorRequest { projection, reply }) = mirror {
                         let result = (|| {
+                            anyhow::ensure!(
+                                search_installed,
+                                "unavailable: session search indexes are initializing"
+                            );
                             let projected = projection.apply(
                                 &store,
                                 &flag,
@@ -642,6 +648,7 @@ mod tests {
             },
         )
         .unwrap();
+        super::super::index::open(&*store.writer().unwrap()).unwrap();
         (directory, store, origin, path)
     }
 
@@ -849,7 +856,7 @@ mod tests {
         let mailbox = Arc::new(Mailbox {
             stop,
             wake: wake.clone(),
-            discovery: Mutex::new(None),
+            discovery: Mutex::new((vec![origin.clone()], Discovery::default())),
         });
         store
             .worker

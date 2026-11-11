@@ -254,7 +254,10 @@ raw transcript bytes have not changed.
 
 `search_schema.sql` owns independently versioned derived indexes. A search-version
 mismatch drops only those indexes and rebuilds them from catalog rows, without
-re-reading transcripts. The worker handles newest conversations first and
+re-reading transcripts. The utility worker starts after the HTTP listener is
+bound and owns the reset. Until the current derived schema is installed, search
+returns an empty result with `truncated: true` and reads the canonical catalog
+version marker only. The worker handles newest conversations first and
 coalesces affected roots in a persistent dirty queue. Canonical item changes
 maintain the scoped word index transactionally. A new conversation publishes its
 document during ingest. Ancestry changes rebuild the previous and current roots.
@@ -270,7 +273,8 @@ reasoning text use the newest indexed items up to 512 KiB, 4,096 items and 128
 member sessions. Earlier assistant or reasoning terms may be absent from
 candidate selection for a capped root. They remain available in the scoped
 word index for already matched conversations. `sessions/sql` reports the
-number of capped roots in `coverage.conversationSearch.cappedRoots`.
+number of capped roots in `coverage.conversationSearch.cappedRoots`. This count
+is null while the derived schema is being installed.
 
 ## Locate a matching item
 

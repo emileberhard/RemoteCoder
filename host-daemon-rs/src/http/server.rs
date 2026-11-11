@@ -213,7 +213,12 @@ pub(crate) async fn run_http_server(
             lan_server.await;
         }
     };
-    let (served, ()) = tokio::join!(plaintext, lan);
+    let sessions = async {
+        if let Err(error) = shutdown_gateway.start_sessions().await {
+            tracing::warn!(%error, "Session history is unavailable");
+        }
+    };
+    let (served, (), ()) = tokio::join!(plaintext, lan, sessions);
     served.context("http server exited")?;
 
     Ok(())

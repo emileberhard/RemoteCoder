@@ -32,12 +32,14 @@ fn codex_meta(id: &str, parent: Option<&str>) -> Value {
 }
 
 fn fixture_store(path: PathBuf) -> Result<Store> {
-    Store::open(
+    let store = Store::open(
         path,
         super::storage::Capacity::Fixed {
             free_bytes: 1 << 40,
         },
-    )
+    )?;
+    super::index::open(&*store.writer()?)?;
+    Ok(store)
 }
 
 fn fixture() -> Fixture {
@@ -2910,6 +2912,40 @@ fn sessions_conversations_rebuild_indexes_from_rows_and_report_pending_work() {
             .session_key,
         root
     );
+}
+
+#[test]
+fn sessions_conversations_store_open_leaves_derived_upgrades_to_worker() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    f.store.writer()?.execute_batch(
+        "UPDATE meta SET value='old' WHERE key='search_version'; DROP TABLE search_document;",
+    )?;
+    let reopened = Store::open(
+        f.store.path.clone(),
+        super::storage::Capacity::Fixed {
+            free_bytes: 1 << 40,
+        },
+    )?;
+    let db = reopened.reader()?;
+    let version: String = db.query_row(
+        "SELECT value FROM meta WHERE key='search_version'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(version, "old");
+    let request = super::conversations::Request {
+        query: "fixture".into(),
+        limit: 30,
+    };
+    let control = super::store::ReadControl::new(Instant::now() + super::conversations::DEADLINE);
+    let response = super::conversations::search(&db, &request, &control, &Default::default())?;
+    assert!(response.truncated);
+    assert!(response.conversations.is_empty());
+    assert!(
+        query::sql(&db, "SELECT 1")?["coverage"]["conversationSearch"]["cappedRoots"].is_null()
+    );
+    Ok(())
 }
 
 #[test]
