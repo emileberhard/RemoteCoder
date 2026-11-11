@@ -1480,6 +1480,12 @@ entrypoint linked above.
   field through `ChatCommand`. Message hits and item links use the screen's
   resume task, history window and transcript scroll request. A highlight changes
   the inputs of its target row and adds no row observation.
+  The iOS drawer's search field sits in the bottom `safeAreaBar`, and the drawer
+  hides the bottom scroll edge effect. The bar extends that blurred edge under
+  the field, which costs about four offscreen passes per frame whenever the
+  drawer is on screen (`DrawerMovement` on the test iPhone: 32.9 without it,
+  37.2 with the automatic or the hard style). Keep it hidden unless a device
+  trace shows the pass count unchanged.
   [System architecture](../docs/system-architecture.md#conversation-search)
   owns the search, locate and Ask contracts.
 - Opening the drawer captures a `ConversationDrawerLayout`: every row's
