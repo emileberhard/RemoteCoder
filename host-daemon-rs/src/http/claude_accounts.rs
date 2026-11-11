@@ -74,6 +74,7 @@ struct ClaudeAccount {
     id: String,
     label: String,
     plan: String,
+    tier: Option<String>,
     shared: bool,
     credential: Credential,
     availability: Availability,
@@ -101,11 +102,20 @@ struct RouterUsage {
     observed_at: String,
     five_hour: Option<RouterWindow>,
     weekly: Option<RouterWindow>,
+    model_limits: Option<Value>,
 }
 #[derive(Deserialize)]
 struct RouterWindow {
     utilization: f64,
     resets_at: String,
+}
+#[derive(Deserialize)]
+struct RouterModelWindow {
+    model: String,
+    group: String,
+    observed_at: String,
+    #[serde(flatten)]
+    window: RouterWindow,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +151,7 @@ struct Account {
     id: String,
     label: String,
     plan: String,
+    tier: Option<String>,
     shared: bool,
     credential: Credential,
     availability: Availability,
@@ -177,25 +188,28 @@ fn map_directory(value: Value) -> Result<Directory> {
                 ("weekly", "Weekly", 10080, usage.weekly),
             ] {
                 if let Some(window) = window {
-                    ensure!(
-                        window.utilization.is_finite() && window.utilization >= 0.0,
-                        "Invalid Claude utilization"
-                    );
-                    windows.push(UsageWindow {
-                        id: id.to_owned(),
-                        label: label.to_owned(),
-                        duration_minutes: Some(duration),
-                        used_percent: (window.utilization * 100.0).min(100.0),
-                        resets_at: Some(timestamp(&window.resets_at)?),
-                        model: None,
-                    });
+                    windows.push(usage_window(
+                        id.to_owned(),
+                        label.to_owned(),
+                        Some(duration),
+                        None,
+                        &window,
+                    )?);
                 }
+            }
+            match model_windows(usage.model_limits) {
+                Ok(model_windows) => windows.extend(model_windows),
+                Err(_) => tracing::warn!(
+                    account = %account.id,
+                    "Claude model limits are unmappable; leaving them unknown"
+                ),
             }
         }
         accounts.push(Account {
             id: account.id,
             label: account.label,
             plan: account.plan,
+            tier: account.tier,
             shared: account.shared,
             credential: account.credential,
             availability: account.availability,
@@ -229,6 +243,54 @@ fn map_directory(value: Value) -> Result<Directory> {
         copilot,
         accounts,
     })
+}
+fn usage_window(
+    id: String,
+    label: String,
+    duration_minutes: Option<i64>,
+    model: Option<String>,
+    window: &RouterWindow,
+) -> Result<UsageWindow> {
+    ensure!(
+        window.utilization.is_finite() && window.utilization >= 0.0,
+        "Invalid Claude utilization"
+    );
+    Ok(UsageWindow {
+        id,
+        label,
+        duration_minutes,
+        used_percent: (window.utilization * 100.0).min(100.0),
+        resets_at: Some(timestamp(&window.resets_at)?),
+        model,
+        observed_at: None,
+    })
+}
+fn model_windows(limits: Option<Value>) -> Result<Vec<UsageWindow>> {
+    let Some(limits) = limits else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value::<Vec<RouterModelWindow>>(limits)?
+        .into_iter()
+        .map(|limit| {
+            ensure!(valid_id(&limit.model), "Invalid Claude model limit");
+            let mut label = limit.model.clone();
+            label[..1].make_ascii_uppercase();
+            let duration = match limit.group.as_str() {
+                "session" => Some(300),
+                "weekly" => Some(10080),
+                _ => None,
+            };
+            let mut window = usage_window(
+                format!("{}-{}", limit.model, limit.group),
+                format!("{label} {}", limit.group),
+                duration,
+                Some(limit.model),
+                &limit.window,
+            )?;
+            window.observed_at = Some(timestamp(&limit.observed_at)?);
+            Ok(window)
+        })
+        .collect()
 }
 fn map_copilot(account: CopilotAccount) -> Result<Copilot> {
     let budget = account

@@ -27,6 +27,7 @@ extension CodexAppServerV2 {
         var name: String?
         let status: ThreadStatus
         var parentThreadId: String? = nil
+        var forkedFromId: String? = nil
         var canAcceptDirectInput: Bool? = nil
         var agentRelation: ConversationAgentRelation? = nil
         var parentTag = ParentTag.absent
@@ -138,6 +139,7 @@ extension CodexAppServerV2 {
     struct ThreadForkParams: Encodable, Sendable {
         let threadId: String
         let lastTurnId: String?
+        let lastItemId: String?
         let serviceTier: ServiceTierOverride?
         let threadSource = "user"
         let persistExtendedHistory = true
@@ -220,7 +222,7 @@ extension CodexAppServerV2.Thread: Codable {
         case source
         case name
         case status
-        case parentThreadId, canAcceptDirectInput, agentRelation, parent
+        case parentThreadId, forkedFromId, canAcceptDirectInput, agentRelation, parent
     }
 
     init(from decoder: Decoder) throws {
@@ -241,6 +243,7 @@ extension CodexAppServerV2.Thread: Codable {
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.status = try container.decodeIfPresent(CodexAppServerV2.ThreadStatus.self, forKey: .status) ?? .notLoaded
         parentThreadId = try container.decodeIfPresent(String.self, forKey: .parentThreadId)
+        forkedFromId = try container.decodeIfPresent(String.self, forKey: .forkedFromId)
         canAcceptDirectInput = try container.decodeIfPresent(Bool.self, forKey: .canAcceptDirectInput)
         agentRelation = try container.decodeIfPresent(ConversationAgentRelation.self, forKey: .agentRelation)
         if !container.contains(.parent) { parentTag = .absent }
@@ -266,6 +269,7 @@ extension CodexAppServerV2.Thread: Codable {
         try container.encodeIfPresent(name, forKey: .name)
         try container.encode(status, forKey: .status)
         try container.encodeIfPresent(parentThreadId, forKey: .parentThreadId)
+        try container.encodeIfPresent(forkedFromId, forKey: .forkedFromId)
         try container.encodeIfPresent(canAcceptDirectInput, forKey: .canAcceptDirectInput)
         try container.encodeIfPresent(agentRelation, forKey: .agentRelation)
         switch parentTag {

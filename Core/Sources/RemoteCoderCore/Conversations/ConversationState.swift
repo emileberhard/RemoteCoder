@@ -477,6 +477,14 @@ struct ConversationState: Sendable {
         return true
     }
 
+    mutating func queueEntryNotRestored(_ messageID: UUID, reason: String) -> Bool {
+        guard submissions[messageID]?.status == .queued else { return false }
+        submissions[messageID]?.status = .failed
+        submissions[messageID]?.deliveryError = reason
+        markPersistedChange()
+        return true
+    }
+
     mutating func removeNotSent(_ messageID: UUID) {
         guard let pending = submissions[messageID], pending.status == .failed else { return }
         remove(pending)
@@ -1169,6 +1177,18 @@ struct ConversationState: Sendable {
     func showsOutcome(of turn: Turn) -> Bool {
         guard let window, window.isLoaded, window.newer != nil else { return true }
         return historyTurn(turn.id, in: window) != nil
+    }
+
+    func editBase(ofTurn id: String) -> MessageEditBase? {
+        guard let window, window.isLoaded else { return nil }
+        if let index = window.turns.firstIndex(where: { $0.id == id || resolvedTurnID($0.id) == id }) {
+            if index > 0 { return .afterTurn(resolvedTurnID(window.turns[index - 1].id)) }
+            return window.older == nil ? .threadStart : nil
+        }
+        guard window.newer == nil, let tail = window.turns.last,
+              let tailIndex = order.firstIndex(of: resolvedTurnID(tail.id)),
+              let index = order.firstIndex(of: id), index > tailIndex else { return nil }
+        return .afterTurn(order[index - 1])
     }
 
     private func historyTurn(_ id: String, in window: HistoryWindow) -> HistoryWindow.Turn? {

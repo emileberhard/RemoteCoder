@@ -3,6 +3,7 @@ import errno
 import os
 import signal
 import subprocess
+import sys
 import time
 from functools import cache
 from contextlib import contextmanager
@@ -77,6 +78,8 @@ def _libproc():
         ctypes.c_uint32,
     ]
     library.proc_pidpath_audittoken.restype = ctypes.c_int
+    library.proc_listpgrppids.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+    library.proc_listpgrppids.restype = ctypes.c_int
     return library
 
 
@@ -118,14 +121,6 @@ def process_identity(pid: int) -> dict | None:
         error = ctypes.get_errno()
         if error == errno.ESRCH:
             return None
-        if error == errno.EPERM:
-            rows = subprocess.check_output(["ps", "-axo", "pid=,stat="], text=True)
-            if any(
-                int(parts[0]) == pid and parts[1].startswith("Z")
-                for line in rows.splitlines()
-                if len(parts := line.split()) == 2
-            ):
-                return None
         raise OSError(error, "Cannot read process identity", pid)
     if size != ctypes.sizeof(info) or info.bsd.pid != pid:
         raise ValueError(f"Incomplete process identity for PID {pid}")
@@ -212,17 +207,47 @@ def suspended_processes(identities: list[dict]):
                 signal_process(identity, signal.SIGCONT)
 
 
+def _group_pids(group: int) -> list[int]:
+    capacity = 64
+    while True:
+        pids = (ctypes.c_int * capacity)()
+        ctypes.set_errno(0)
+        count = _libproc().proc_listpgrppids(group, pids, ctypes.sizeof(pids))
+        if count < 0 or (count == 0 and ctypes.get_errno()):
+            raise OSError(ctypes.get_errno(), "Cannot list process group", group)
+        if count < capacity:
+            return pids[:count]
+        capacity *= 4
+
+
+def _is_live_member(pid: int, group: int) -> bool:
+    short_info = (ctypes.c_uint32 * 16)()
+    if _libproc().proc_pidinfo(pid, 13, 1, short_info, ctypes.sizeof(short_info)):
+        _pid, _parent, member_group, status = short_info[:4]
+        return member_group == group and status != 5
+    error = ctypes.get_errno()
+    if error == errno.ESRCH:
+        return False
+    raise OSError(error, "Cannot read process group member", pid)
+
+
 def group_has_live_members(group: int, exclude_pid: int = 0) -> bool:
-    rows = subprocess.check_output(
-        ["ps", "-axo", "pid=,pgid=,stat="], text=True, start_new_session=True
-    )
-    return any(
-        int(parts[1]) == group
-        and int(parts[0]) != exclude_pid
-        and not parts[2].startswith("Z")
-        for line in rows.splitlines()
-        if len(parts := line.split()) == 3
-    )
+    if sys.platform != "darwin":
+        rows = subprocess.check_output(
+            ["ps", "-axo", "pid=,pgid=,stat="], text=True, start_new_session=True
+        )
+        return any(
+            int(parts[1]) == group
+            and int(parts[0]) != exclude_pid
+            and not parts[2].startswith("Z")
+            for line in rows.splitlines()
+            if len(parts := line.split()) == 3
+        )
+    listed = set(_group_pids(group)) - {exclude_pid}
+    if any(_is_live_member(pid, group) for pid in listed):
+        return True
+    confirmed = set(_group_pids(group)) - {exclude_pid}
+    return not confirmed <= listed or any(_is_live_member(pid, group) for pid in confirmed)
 
 
 def terminate_group(identity: dict, grace_seconds: float):
@@ -241,20 +266,11 @@ def terminate_group(identity: dict, grace_seconds: float):
         raise ValueError("Measurement command must own its process group")
     with suspended_processes([identity]):
         deadline = time.monotonic() + grace_seconds
-        while audit_alive(identity):
-            rows = subprocess.check_output(
-                ["ps", "-axo", "pid=,pgid=,stat="], text=True, start_new_session=True
-            )
+        while True:
             members = []
-            for line in rows.splitlines():
-                parts = line.split()
-                if (
-                    len(parts) == 3
-                    and int(parts[1]) == identity["pgid"]
-                    and int(parts[0]) != identity["pid"]
-                    and not parts[2].startswith("Z")
-                ):
-                    member = process_identity(int(parts[0]))
+            for pid in _group_pids(identity["pgid"]):
+                if pid != identity["pid"]:
+                    member = process_identity(pid)
                     if member is not None and member["pgid"] == identity["pgid"]:
                         members.append(member)
             if not audit_alive(identity):
@@ -263,7 +279,7 @@ def terminate_group(identity: dict, grace_seconds: float):
                         f"Measurement anchor {identity['pid']} died during group cleanup"
                     )
                 return
-            if not members:
+            if not members and not group_has_live_members(identity["pgid"], identity["pid"]):
                 signal_process(identity, signal.SIGKILL)
                 while audit_alive(identity):
                     time.sleep(0.01)

@@ -460,7 +460,7 @@ entrypoint linked above.
 - History for both providers uses thread-wide `thread/items/list` pages and
   `thread/turns/list` metadata with opaque directional cursors, including
   forks. Live notifications stay authoritative for current activity. Fork boundaries come from canonical turn
-  identity, never a full-history reverse lookup.
+  and item identity, never a full-history reverse lookup.
 - `ConversationIndex` is the actor-backed store mapping Codex thread ids to
   local conversation UUIDs, so resumes and completion routing never rely on
   heuristics.
@@ -685,9 +685,17 @@ entrypoint linked above.
   unconfirmed until listed. The canonical `userMessage` with the matching
   `clientId` moves the row into its turn as an ordinary first message. Stop
   pauses the queue (both providers skip dispatch after an interrupt); a queued row
-  offers Send Now (`thread/queue/start`, only while no turn runs) and Remove
-  from Queue (`thread/queue/delete`). A held Claude queue's reason reads
-  "Paused: …" once, on the first listed local row without its own error.
+  offers Send Now (`thread/queue/start`, only while no turn runs), Edit and
+  Remove from Queue (`thread/queue/delete`). Edit (`TurnDispatcher.editQueued`,
+  offered only for `ChatMessage.restorableComposerContent`, so never for images
+  or files) deletes the entry first; after the acknowledgement it appends the
+  text to the draft after a blank line (the whole draft when nothing is typed)
+  and saves it, and only then drops the row. A delete that finds the entry
+  already started reconciles and leaves the composer alone; a draft that cannot
+  take the text turns the row "Not sent". A kill before the save leaves the
+  receipt, which restores as an "Unconfirmed" row with its text. A held Claude
+  queue's reason reads "Paused: …" once, on the first listed local row without
+  its own error.
 - A delivery failure stays on its own row: the label carries the submission's
   `deliveryError`, including a failed Send Now or Remove from Queue on a queued
   row. The transcript has no separate error rows; restore drops the local
@@ -741,11 +749,35 @@ entrypoint linked above.
     replica; host invalidations and reconnect retain their full refresh paths.
   - Unknown state offers Refresh, never an inferred pending prompt. Summary
     previews never pin an unpositioned question to the transcript tail.
-- Only the final assistant bubble of a completed turn, with its history tail
-  loaded, offers **Fork from Here** and, beside it, **Count Changes from Here**
-  (hidden on the current start point). The server cutoff includes the whole turn,
-  so user bubbles, intermediate replies, active turns and pages with newer items
-  must not offer it.
+- **Fork from Here** comes from the projection's `ConversationSnapshot.forkBoundaries`.
+  The final assistant bubble of a completed turn, with its history tail loaded,
+  forks through that turn and offers, beside it, **Count Changes from Here**
+  (hidden on the current start point). In a Claude conversation whose host
+  advertises `host/info.claudeItemFork`, every other settled assistant bubble with
+  canonical turn and item identity, also in a running turn, forks through its
+  item; `ChatScreenModel.forkBoundaries` drops those for other hosts and Codex,
+  whose cutoff includes the whole turn, so their intermediate replies, active
+  turns and pages with newer items must not offer it. User bubbles and streaming
+  replies never offer it.
+- An earlier user bubble offers **Edit as Fork** only when the projection proves
+  its edit base (`ConversationSnapshot.editBases`, carried in `TranscriptRowInputs`):
+  a sent, non-steer turn head that is fully restorable
+  (`restorableComposerContent`) in a turn the history window holds or a live turn
+  after a window that reaches the tail, and either the thread's first message
+  with the start of history loaded or after a loaded, canonical, finished turn.
+  A send that creates a thread asks the target to reconcile that thread's tail:
+  a fork once its turn is accepted, so it shows its inherited turns, and a new
+  thread once its first turn completes, because its history is not written
+  before; its turns then become editable without reopening. It opens a
+  new unsent draft holding that text whose `NewChatSetup.forkPoint` names the
+  source thread and that previous turn; the first message gets a plain new chat
+  with the same folder and settings. Nothing forks on tap: the send passes
+  `TurnDispatcher.ThreadTarget.fork`, which calls `thread/fork` through that turn
+  and starts the turn on the fork. A fork draft's folder and provider are fixed.
+  A failed or refused fork leaves the row Not sent and the draft keeps its fork
+  point, so the next send forks again; it never falls back to `thread/start` and
+  is never retried automatically. `ChatScreenModel.shownDraftForkSource` exposes
+  the source of the shown fork draft.
 - `ConversationCheckpointStore` persists canonical checkpoints with revision and
   generation guards. Derived timelines are not persisted. The legacy timeline
   reader keeps old local activity for migration and rollback, but all new
@@ -960,6 +992,11 @@ entrypoint linked above.
   - Picking a different working directory immediately starts a fresh
     conversation, so a session never spans repositories. On an unsent draft
     it changes that draft's folder instead.
+  - A fork shows `ForkOriginHeader`, "Forked from" its source's sidebar title
+    ("another conversation" while that header is not cached), below the header
+    on iOS and below the Mac window toolbar. A tap opens the source by exact
+    address through the ordinary conversation switch. Only a known
+    `forkedFromId` shows it; a subagent that is also a fork shows both headers.
 - **Mac window toolbar.** `ChatScreenChrome` is the platform seam for the
   header: the iOS arm keeps `ChatScreenToolbar` as a top inset, and the Mac arm
   puts the chat into the detail column's window toolbar instead.
@@ -1055,7 +1092,9 @@ entrypoint linked above.
     Shift- or Option-Return inserts a newline, and Return never sends while IME
     text is marked. Up Arrow in an empty field inserts the conversation's last
     sent prompt for editing (`SentPromptRecall`: nothing when that prompt is
-    not loaded or contained only image/file attachments). v2 recalls restore
+    not loaded or contained only image/file attachments). `ChatMessage.composerContent`
+    is the one message-to-composer conversion, and `restorableComposerContent`
+    the one rule for a message the composer holds in full. v2 recalls restore
     inline chips; earlier pasted-text attachments expand as plain text.
     Esc stops a stoppable turn through the
     same `stopTurn` path as ⌘. and Stop; otherwise it continues up the responder
@@ -1070,7 +1109,10 @@ entrypoint linked above.
     composer grows by one row however many are added. Each tile has a corner
     remove control with a `ControlMetrics.minimumTarget` hit area, and the whole
     strip is a composer control hit region, so it scrolls.
-  - The attachment menu offers camera, photo library, file import and paste.
+  - The attachment menu offers camera, photo library, file import and paste. It
+    is an `AppActionMenu`, so it opens on touch-down instead of on release, and a
+    touch that starts on it belongs to the menu: press, slide and release picks
+    an item, and a swipe from it does not move the drawer.
   - **Choose File** attaches any file, or a folder as a zip. `UploadStaging`
     copies it locally and `GatewayUploadClient` streams it to the gateway's
     resumable `/uploads/<id>` session. Four files upload at once. An
@@ -1663,7 +1705,8 @@ entrypoint linked above.
   `RenderedMessageStore`, driven by the existing reveal-cover ticks through a
   stateless handle. `HapticService` owns global cadence and a separate streaming
   player. Ineligible frames discard pending marks; no replay, extra clock or
-  per-frame observation is allowed. New native menus use `AppMenu`. Preserve native menus and the
+  per-frame observation is allowed. New native menus use `AppMenu`, or `AppActionMenu` for a plain
+  action list that opens on touch-down. Preserve native menus and the
   reasoning gesture bridge when adding control coverage. `scripts/lint-haptics`
   enforces these boundaries.
 

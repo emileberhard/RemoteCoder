@@ -36,7 +36,7 @@ struct MermaidPreviewFixture: View {
                         Button("Finish diagram") { finished = true }
                     }
                     if store[message.id] != nil {
-                        ChatBubble(message: message, renderedMessages: store, onFork: nil, onCountChanges: nil, deliveryActions: nil)
+                        ChatBubble(message: message, renderedMessages: store, onFork: nil, onEditAsFork: nil, onCountChanges: nil, deliveryActions: nil)
                             .id(ChatStreamItem.message(message).id)
                             .environment(\.transcriptRowVisibility, TranscriptRowVisibility(
                                 rowID: ChatStreamItem.message(message).id, visibility: visibility))

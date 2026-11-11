@@ -11,6 +11,7 @@ protocol TurnDispatchHost: AnyObject {
     func retireGatewayJob(threadID: String, turnID: String?, jobID: String)
     func startActivityRefresh()
     func reconcileInputDelivery(threadID: String) async
+    func readHistory(ofCreatedThread threadID: String)
     func threadStarted(_ thread: CodexAppServerV2.Thread, session: ConversationSession, settingsRevision: UInt64,
                        requestedServiceTier: CodexAppServerV2.ServiceTierOverride?, admittedSettings: TurnDispatcher.Settings?) async
     func selectionIsCurrent(revision: UInt64, threadID: String) -> Bool
@@ -61,6 +62,16 @@ final class TurnDispatcher {
         let settings: Settings
     }
 
+    enum ThreadTarget: Equatable {
+        case existing(String)
+        case start
+        case fork(NewChatSetup.ForkPoint)
+
+        var threadID: String? {
+            if case .existing(let id) = self { id } else { nil }
+        }
+    }
+
     struct FollowUp {
         let conversationID: UUID
         let draft: ComposerDraft
@@ -95,6 +106,7 @@ final class TurnDispatcher {
     private var queueChangeTails: [String: UUID] = [:]
     private var stoppedTurns: [RunningTurn: StoppedTurn] = [:]
     private var inflightSteers: [RunningTurn: Int] = [:]
+    private var historyAwaitingFirstTurns: Set<RunningTurn> = []
 
     init(host: any TurnDispatchHost, gateway: GatewayClient, turns: TurnRegistry, stops: TurnStops,
          conversations: ConversationSessions, sessionIndex: ConversationIndex, metadata: ConversationMetadataService,
@@ -114,6 +126,7 @@ final class TurnDispatcher {
     @discardableResult
     func cancelAll() -> [Task<Void, Never>] {
         clearStoppedTurns()
+        historyAwaitingFirstTurns.removeAll()
         return tasks.cancelAll() + queueReads.cancelAll()
     }
 
@@ -127,6 +140,7 @@ final class TurnDispatcher {
     func quiesce() {
         acceptsWork = false
         clearStoppedTurns()
+        historyAwaitingFirstTurns.removeAll()
         tasks.quiesce()
         queueReads.quiesce()
     }
@@ -182,6 +196,7 @@ final class TurnDispatcher {
 
     func turnCompleted(threadID: String, turnID: String) {
         let key = Self.normalized(RunningTurn(threadID: threadID, turnID: turnID))
+        if historyAwaitingFirstTurns.remove(key) != nil { host?.readHistory(ofCreatedThread: threadID) }
         stoppedTurns[key]?.completed = true
         continueStoppedTurn(key)
     }
@@ -207,7 +222,7 @@ final class TurnDispatcher {
                 }
                 startTurn(Submission(draft: followUp.draft, conversationID: followUp.conversationID,
                     userMessageID: steers.message.id, input: steers.input, interactionMode: .text,
-                    settings: followUp.settings), sessionID: key.threadID)
+                    settings: followUp.settings), in: .existing(key.threadID))
             } else if await host?.queueSupport(threadID: key.threadID) == true {
                 guard !isClosed, !Task.isCancelled, stoppedTurns[key]?.id == stopped.id else { return }
                 startQueued(.first, conversationID: followUp.conversationID, threadID: key.threadID, settings: followUp.settings)
@@ -259,7 +274,7 @@ final class TurnDispatcher {
                 if case .turnNotRunning = (error as? GatewayRPCFailure)?.kind,
                    stoppedTurns[key] == nil, !isClosed, !Task.isCancelled {
                     host.retireGatewayJob(threadID: activeTurn.threadID, turnID: activeTurn.turnID, jobID: activeTurn.jobID)
-                    startTurn(submission, sessionID: activeTurn.threadID)
+                    startTurn(submission, in: .existing(activeTurn.threadID))
                 } else {
                     if !(error is CancellationError) { feedback(.error) }
                     let failure = Self.inputDeliveryFailure(error)
@@ -377,23 +392,46 @@ final class TurnDispatcher {
     }
 
     func removeQueued(messageID: UUID, conversationID: UUID, threadID: String) {
+        deleteQueued(messageID: messageID, conversationID: conversationID, threadID: threadID) {}
+    }
+
+    func editQueued(messageID: UUID, conversationID: UUID, threadID: String,
+                    content: ComposerDocumentContent, into draft: ComposerDraft) {
+        deleteQueued(messageID: messageID, conversationID: conversationID, threadID: threadID) { [drafts] in
+            try await drafts.restoreMessage(content, to: draft)
+        }
+    }
+
+    private func deleteQueued(messageID: UUID, conversationID: UUID, threadID: String,
+                              keep: @escaping @MainActor () async throws -> Void) {
         guard let host, !isClosed else { return }
         let feedback = host.feedbackForCurrentConversation()
         changeQueue(threadID: threadID) { [self] in
             let session = await conversations.session(conversationID: conversationID, threadID: threadID)
             guard let queuedSubmissionID = await session.queuedSubmissionID(for: messageID) else { return }
+            let deleted: Bool
             do {
-                if try await gateway.deleteQueuedMessage(threadID: threadID, queuedSubmissionID: queuedSubmissionID) {
-                    await session.queueRemoved(messageID)
-                } else {
-                    reconcileQueue(threadID: threadID)
-                }
+                deleted = try await gateway.deleteQueuedMessage(threadID: threadID, queuedSubmissionID: queuedSubmissionID)
             } catch is CancellationError {
                 reconcileQueue(threadID: threadID)
+                return
             } catch {
                 feedback(.error)
                 await reportQueueFailure(error, messageID: messageID, session: session, conversationID: conversationID)
                 reconcileQueue(threadID: threadID)
+                return
+            }
+            guard deleted else {
+                reconcileQueue(threadID: threadID)
+                return
+            }
+            do {
+                try await keep()
+                await session.queueRemoved(messageID)
+            } catch {
+                feedback(.error)
+                await session.queueEntryNotRestored(messageID,
+                    reason: "Removed from the queue, but the draft could not keep it: \(error.localizedDescription)")
             }
         }
     }
@@ -415,8 +453,9 @@ final class TurnDispatcher {
         }
     }
 
-    func startTurn(_ submission: Submission, sessionID: String?) {
+    func startTurn(_ submission: Submission, in target: ThreadTarget) {
         guard let host, !isClosed else { return }
+        let sessionID = target.threadID
         let feedback = host.feedbackForCurrentConversation()
         let conversationID = submission.conversationID
         let userMessageID = submission.userMessageID
@@ -437,9 +476,13 @@ final class TurnDispatcher {
                 try await gateway.verifyDispatchAllowed(to: sessionID)
                 try Task.checkCancellation()
                 guard !isClosed else { return }
-                // An existing thread already belongs to a provider; only a new
-                // one takes its provider from the selected model.
-                let provider = sessionID.map(AgentProvider.provider(forThreadID:)) ?? settings.model.provider
+                // An existing or forked thread already belongs to a provider; only
+                // a new one takes its provider from the selected model.
+                let provider = switch target {
+                case .existing(let threadID): AgentProvider.provider(forThreadID: threadID)
+                case .fork(let point): AgentProvider.provider(forThreadID: point.threadID)
+                case .start: settings.model.provider
+                }
                 let cwd = settings.workingDirectory
                 // Claude runs the CLI in the working directory and has no
                 // fallback the way Codex does, so an unset one must fail here
@@ -447,17 +490,27 @@ final class TurnDispatcher {
                 if provider == .claude, cwd?.isEmpty != false {
                     throw AgentProviderError.workingDirectoryRequired(provider)
                 }
+                if case .fork = target, settings.model.provider != provider {
+                    throw AgentProviderError.forkRequiresProvider(provider)
+                }
 
                 guard !isClosed else { return }
-                let thread = try await gateway.startOrResumeThread(
-                    threadID: sessionID,
-                    model: settings.model.id,
-                    cwd: cwd,
-                    serviceTier: settings.serviceTier,
-                    provider: provider,
-                    effort: settings.reasoning.effort?.rawValue
-                )
-                let settings = sessionID == nil ? settings.admitted(to: thread) : settings
+                let thread: CodexAppServerV2.Thread
+                if case .fork(let point) = target {
+                    thread = try await gateway.forkThread(threadID: point.threadID, through: .turnEnd(point.lastTurnID),
+                                                          serviceTier: settings.serviceTier).thread
+                    if provider == .claude { await metadata.sync() }
+                } else {
+                    thread = try await gateway.startOrResumeThread(
+                        threadID: sessionID,
+                        model: settings.model.id,
+                        cwd: cwd,
+                        serviceTier: settings.serviceTier,
+                        provider: provider,
+                        effort: settings.reasoning.effort?.rawValue
+                    )
+                }
+                let settings = target == .start ? settings.admitted(to: thread) : settings
                 let threadID = thread.id
                 guard !isClosed else { return }
                 await drafts.bind(submission.draft, to: threadID)
@@ -496,6 +549,7 @@ final class TurnDispatcher {
                 }
 
                 await session.accepted(userMessageID, turnID: turnID)
+                readHistory(ofThreadCreatedBy: target, threadID: threadID, firstTurnID: turnID)
                 logger.notice("turn accepted thread=\(threadID) new=\(sessionID == nil) elapsed=\(String(describing: started.duration(to: .now)))")
                 if sessionID == nil, host.selectionIsCurrent(revision: settings.selectionRevision, threadID: threadID) {
                     await metadata.upsert(sessionID: threadID, modelID: settings.model.id,
@@ -516,6 +570,16 @@ final class TurnDispatcher {
                     guard !isClosed, await session.deliveryIsUncertain(userMessageID) else { return }
                 }
             }
+        }
+    }
+
+    private func readHistory(ofThreadCreatedBy target: ThreadTarget, threadID: String, firstTurnID: String) {
+        switch target {
+        case .existing: return
+        case .fork: host?.readHistory(ofCreatedThread: threadID)
+        case .start:
+            if turns.hasCompleted(threadID: threadID, turnID: firstTurnID) { host?.readHistory(ofCreatedThread: threadID) }
+            else { historyAwaitingFirstTurns.insert(Self.normalized(RunningTurn(threadID: threadID, turnID: firstTurnID))) }
         }
     }
 

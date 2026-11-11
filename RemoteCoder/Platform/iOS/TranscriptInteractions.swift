@@ -4,6 +4,7 @@ struct ChatBubbleMenu: View {
     let message: ChatMessage
     let rendered: RenderedMessage?
     let onFork: ((ChatMessage) -> Void)?
+    let onEditAsFork: ((ChatMessage) -> Void)?
     let onCountChanges: ((ChatMessage) -> Void)?
     let deliveryActions: MessageDeliveryActions?
     let onSelectText: ((String) -> Void)?
@@ -16,6 +17,9 @@ struct ChatBubbleMenu: View {
                 } label: {
                     Label("Send Now", systemImage: "arrow.up.circle")
                 }
+            }
+            if message.delivery == .queued, message.restorableComposerContent != nil {
+                Button("Edit", systemImage: "pencil") { deliveryActions.edit(message) }
             }
             Button(role: .destructive) {
                 deliveryActions.remove(message)
@@ -43,10 +47,13 @@ struct ChatBubbleMenu: View {
             Label("Share", systemImage: "square.and.arrow.up")
         }
 
-        if onFork != nil || onCountChanges != nil {
+        if onFork != nil || onEditAsFork != nil || onCountChanges != nil {
             Section {
                 if let onFork {
                     Button("Fork from Here", systemImage: "arrow.triangle.branch") { onFork(message) }
+                }
+                if let onEditAsFork {
+                    Button("Edit as Fork", systemImage: "square.and.pencil") { onEditAsFork(message) }
                 }
                 if let onCountChanges {
                     Button("Count Changes from Here", systemImage: ChangesView.sinceSymbol) { onCountChanges(message) }

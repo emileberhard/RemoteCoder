@@ -111,6 +111,7 @@ struct ClaudeRouterAccount: Codable, Equatable, Sendable, Identifiable {
     let label: String
     enum Availability: String, Codable, Sendable { case available, cooling, exhausted, rejected, unavailable }
     let plan: String
+    var tier: String? = nil
     let shared: Bool
     let credential: Credential
     let availability: Availability
@@ -119,12 +120,17 @@ struct ClaudeRouterAccount: Codable, Equatable, Sendable, Identifiable {
     let observedAt: Double?
     var resets: AccountResets? = nil
 
+    var planTitle: String {
+        let name = tier?.replacingOccurrences(of: "_", with: " ") ?? plan
+        return name.prefix(1).uppercased() + name.dropFirst()
+    }
+
     func usageRows(now: Date) -> [CodexUsageLimitRow] {
         windows.map { window in
-            let kind: UsageWindowKind = window.durationMinutes == 300 ? .fiveHour : .weekly
-            return CodexUsageLimitRow(id: "claude-\(id)-\(window.id)", title: kind.label,
+            let kind = window.kind
+            return CodexUsageLimitRow(id: "claude-\(id)-\(window.id)", title: window.title,
                 usedPercent: 100 - window.remainingPercent, kind: kind,
-                isStale: isUsageStale(now: now),
+                isStale: isUsageStale(observedAt: window.observedAt ?? observedAt, now: now),
                 resetText: window.resetText(now: now, calendar: .autoupdatingCurrent),
                 runOutWarning: kind == .fiveHour ? observedAt.flatMap {
                     UsageRunOutWarning(window: window, observedAt: Date(timeIntervalSince1970: $0), now: now)
@@ -132,7 +138,7 @@ struct ClaudeRouterAccount: Codable, Equatable, Sendable, Identifiable {
         }
     }
 
-    private func isUsageStale(now: Date) -> Bool {
+    private func isUsageStale(observedAt: Double?, now: Date) -> Bool {
         guard credential == .ready, let observedAt else { return true }
         return now.timeIntervalSince1970 - observedAt > 900
     }
@@ -154,7 +160,7 @@ struct ClaudeRouterAccount: Codable, Equatable, Sendable, Identifiable {
     var notice: String? {
         if credential == .rejected { return "Credential rejected" }
         if windows.isEmpty { return "Usage unavailable" }
-        if isUsageStale(now: .now) { return "Last known usage" }
+        if isUsageStale(observedAt: observedAt, now: .now) { return "Last known usage" }
         return nil
     }
 

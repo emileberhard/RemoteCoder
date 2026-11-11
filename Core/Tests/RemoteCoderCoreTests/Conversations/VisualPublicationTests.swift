@@ -26,7 +26,7 @@ struct VisualPublicationTests: ConversationHistoryFixtures {
         #expect(snapshot.items.map(\.id).contains("published-visual-publication"))
         #expect(snapshot.messages.isEmpty)
         #expect(!snapshot.items.contains { if case .turnOutcome = $0 { true } else { false } })
-        #expect(snapshot.forkableMessageIDs.isEmpty)
+        #expect(snapshot.forkBoundaries.isEmpty)
         var historical = ConversationState(conversationID: live.conversationID, threadID: "thread")
         historical.merge(history(items: [item], status: .completed))
         #expect(ConversationProjection.project(historical).items.map(\.id) == snapshot.items.map(\.id))

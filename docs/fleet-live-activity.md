@@ -43,6 +43,16 @@ sum counts and select the latest three attention rows across the declared hosts.
 Sort ties use host and thread identity. Peer reports never contain fleet merges,
 so data cannot circulate and double count.
 
+`daemon/liveActivity/fleet` returns `content.activeTaskSubagentCounts` alongside
+`activeTaskCount`. Each entry counts running threads other than the root in one
+running tree, including descendants on other requested hosts. Entries follow the
+deterministic host-and-thread order of the owning roots and their number always
+equals `activeTaskCount`. An idle root with running descendants still has an
+entry. Unavailable hosts and unresolved ownership retain the available reported
+state, so these counts may be incomplete. This field is only in the fleet RPC
+result, not peer reports or Live Activity push payloads. Older gateways omit it;
+consumers that connect across versions must handle its absence.
+
 ## Availability, ordering and lifecycle
 
 Fresh local projections and current peer reports certify known state. Restored,

@@ -5,11 +5,21 @@ struct ChatScreenToolbar: View {
     let workspace: ChatWorkspaceModel
     let screen: ChatScreenModel
     let onReturnToParent: () -> Void
+    let onOpenConversation: (ConversationAddress) -> Void
     let onOpenConversations: (() -> Void)?
     let onChooseFolder: () -> Void
     let onNewChatInHome: () -> Void
 
     var body: some View {
+        VStack(spacing: 8) {
+            header
+            ScreenForkOriginHeader(screen: screen, onOpen: onOpenConversation)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 6)
+    }
+
+    private var header: some View {
         ChatHeader(
             screen: screen,
             hostName: workspace.conversationTargetName(of: screen),
@@ -23,8 +33,6 @@ struct ChatScreenToolbar: View {
         } trailing: {
             NewChatButton(onNewChat: screen.startNewConversation, onNewChatInHome: onNewChatInHome)
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 6)
     }
 
     /// The drawer used to be reachable only by an edge drag, which no

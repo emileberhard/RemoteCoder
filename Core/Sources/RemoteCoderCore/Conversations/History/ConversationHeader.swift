@@ -35,6 +35,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
     let status: CodexAppServerV2.ThreadStatus
     private(set) var spawnedAsSubAgent: Bool
     var nativeParentThreadID: String?
+    var forkedFromThreadID: String?
     var canAcceptDirectInput: Bool?
     var agentClassification: ConversationAgentClassification
     var agentRelation: ConversationAgentRelation? {
@@ -61,6 +62,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         status = thread.status
         spawnedAsSubAgent = spawn != nil
         nativeParentThreadID = thread.parentThreadId ?? spawn?["parent_thread_id"]?.stringValue
+        forkedFromThreadID = thread.forkedFromId
         canAcceptDirectInput = thread.canAcceptDirectInput
         agentClassification = thread.agentRelation.map(ConversationAgentClassification.child) ?? .unresolved
         switch thread.parentTag {
@@ -73,7 +75,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, preview, name, model, modelProvider, reasoningEffort, extra, createdAt, updatedAt, lastTurnCompletedAt, recencyAt
-        case path, cwd, status, spawnedAsSubAgent, nativeParentThreadID, canAcceptDirectInput, agentRelation
+        case path, cwd, status, spawnedAsSubAgent, nativeParentThreadID, forkedFromThreadID, canAcceptDirectInput, agentRelation
         case agentClassification, pendingHistorySince
     }
 
@@ -95,6 +97,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         status = try values.decode(CodexAppServerV2.ThreadStatus.self, forKey: .status)
         spawnedAsSubAgent = try values.decode(Bool.self, forKey: .spawnedAsSubAgent)
         nativeParentThreadID = try values.decodeIfPresent(String.self, forKey: .nativeParentThreadID)
+        forkedFromThreadID = try values.decodeIfPresent(String.self, forKey: .forkedFromThreadID)
         canAcceptDirectInput = try values.decodeIfPresent(Bool.self, forKey: .canAcceptDirectInput)
         let legacyRelation = try values.decodeIfPresent(ConversationAgentRelation.self, forKey: .agentRelation)
         agentClassification = try values.decodeIfPresent(ConversationAgentClassification.self, forKey: .agentClassification)
@@ -120,6 +123,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         try values.encode(status, forKey: .status)
         try values.encode(spawnedAsSubAgent, forKey: .spawnedAsSubAgent)
         try values.encodeIfPresent(nativeParentThreadID, forKey: .nativeParentThreadID)
+        try values.encodeIfPresent(forkedFromThreadID, forKey: .forkedFromThreadID)
         try values.encodeIfPresent(canAcceptDirectInput, forKey: .canAcceptDirectInput)
         try values.encodeIfPresent(agentRelation, forKey: .agentRelation)
         try values.encode(agentClassification, forKey: .agentClassification)
@@ -134,6 +138,7 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
         precondition(id == previous.id)
         if !agentClassification.isDefinitive { agentClassification = previous.agentClassification }
         nativeParentThreadID = nativeParentThreadID ?? previous.nativeParentThreadID
+        forkedFromThreadID = forkedFromThreadID ?? previous.forkedFromThreadID
         spawnedAsSubAgent = spawnedAsSubAgent || previous.spawnedAsSubAgent
         canAcceptDirectInput = canAcceptDirectInput ?? previous.canAcceptDirectInput
     }

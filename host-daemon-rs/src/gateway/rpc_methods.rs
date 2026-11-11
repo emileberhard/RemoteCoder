@@ -1048,6 +1048,18 @@ impl Gateway {
                 }
             }
         }
+        if let Some(agent) = self.claude_agent() {
+            if let Some(phase) = &mut phase {
+                phase.advance("claudeForkOrigin");
+            }
+            match agent.fork_origin(&thread_id).await {
+                Ok(Some(source)) => thread["forkedFromId"] = json!(source),
+                Ok(None) => {}
+                Err(error) => {
+                    warn!(thread_id, error = %format!("{error:#}"), "claude fork origin unreadable");
+                }
+            }
+        }
         if let Some(phase) = phase {
             phase.complete();
         }
@@ -1294,6 +1306,17 @@ impl Gateway {
     }
 
     async fn claude_turn_start(&self, params: &Value) -> RpcResult {
+        let keeps_recorded_selection = params.get("model").and_then(Value::as_str).is_none();
+        if keeps_recorded_selection
+            && ["effort", "serviceTier"]
+                .iter()
+                .any(|key| params.get(key).is_some())
+        {
+            return Err(RpcError::new(
+                RpcCode::InvalidParams,
+                "effort and serviceTier require model; a turn without model keeps the conversation's selection",
+            ));
+        }
         let model = self.claude_rpc_model(params)?;
         let thread_id = params
             .get("threadId")
@@ -1362,18 +1385,24 @@ impl Gateway {
                     .get("effort")
                     .and_then(Value::as_str)
                     .map(claude_effort_wire_value),
-                fast: claude_fast_mode(
-                    &agent,
-                    &thread_id,
-                    model,
-                    params.get("serviceTier").map(Value::as_str),
-                )
-                .await?,
+                fast: !keeps_recorded_selection
+                    && claude_fast_mode(
+                        &agent,
+                        &thread_id,
+                        model,
+                        params.get("serviceTier").map(Value::as_str),
+                    )
+                    .await?,
             },
             cwd,
         };
 
-        match agent.start_turn(request).await {
+        let started = if keeps_recorded_selection {
+            agent.start_turn_with_recorded_selection(request).await
+        } else {
+            agent.start_turn(request).await
+        };
+        match started {
             Ok(turn_id) => Ok(serde_json::json!({
                 "turn": {
                     "id": turn_id,
@@ -1714,6 +1743,7 @@ fn host_info(
         conversation_search: true,
         conversation_search_by_meaning,
         claude_queue,
+        claude_item_fork: true,
     }))
 }
 

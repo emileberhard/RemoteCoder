@@ -571,12 +571,12 @@ impl Gateway {
                 // The inherited turn finished between binding and steering.
                 // The utterance must still reach the executor.
                 Err(TurnControlError::NotRunning { .. }) => {
-                    agent.start_voice_turn(turn_request).await
+                    agent.start_turn_with_recorded_selection(turn_request).await
                 }
                 Err(TurnControlError::Failed(err)) => Err(err),
             }
         } else {
-            agent.start_voice_turn(turn_request).await
+            agent.start_turn_with_recorded_selection(turn_request).await
         };
         match started_turn {
             Ok(turn_id) => {

@@ -9,7 +9,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from contextlib import ExitStack, contextmanager, nullcontext, redirect_stdout
@@ -24,86 +23,12 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
-from process_group import (
-    audit_alive,
-    process_identity,
-    same_process,
-    signal_process,
-)
+from hang_guard import HANG_SECONDS
 
 
-def _drain_upload_case(process):
-    identity = process_identity(process.pid)
-    if (
-        identity is None
-        or identity["ppid"] != os.getpid()
-        or identity["pgid"] != process.pid
-    ):
-        raise ValueError(
-            "Upload fixture lost its owned process identity before cleanup"
-        )
-    owned = {}
-    deadline = time.monotonic() + 5
-    pending = [identity]
-    try:
-        while pending:
-            for actor in pending:
-                if len(owned) >= 64 or time.monotonic() >= deadline:
-                    raise TimeoutError(
-                        "Upload fixture process drain exceeded its ownership bound"
-                    )
-                owned[actor["pid"]] = actor
-                if not signal_process(actor, signal.SIGSTOP):
-                    owned.pop(actor["pid"])
-                    continue
-                while True:
-                    current = process_identity(actor["pid"])
-                    if not same_process(current, actor):
-                        owned.pop(actor["pid"])
-                        break
-                    if current["state"] == 4:
-                        break
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError(
-                            f"Upload fixture PID {actor['pid']} did not acknowledge suspension within the cleanup budget"
-                        )
-                    time.sleep(min(0.01, remaining))
-            if identity["pid"] not in owned:
-                raise ValueError("Upload fixture owner could not be suspended")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(
-                    "Upload fixture process inventory exceeded its cleanup budget"
-                )
-            try:
-                rows = subprocess.check_output(
-                    ["ps", "-axo", "pid=,ppid="], text=True, timeout=remaining
-                )
-            except subprocess.TimeoutExpired as error:
-                raise TimeoutError(
-                    "Upload fixture process inventory exceeded its cleanup budget"
-                ) from error
-            pending = []
-            for line in rows.splitlines():
-                pid, parent = map(int, line.split())
-                if parent in owned and pid not in owned:
-                    actor = process_identity(pid)
-                    if actor is not None and actor["ppid"] == parent:
-                        pending.append(actor)
-    finally:
-        for actor in reversed(tuple(owned.values())):
-            signal_process(actor, signal.SIGKILL)
-    while any(audit_alive(actor) for actor in owned.values()):
-        if time.monotonic() >= deadline:
-            raise TimeoutError("Upload fixture still has live processes after cleanup")
-        time.sleep(0.01)
-    return list(owned.values())
-
-
-def _run_upload_case(root, local, stalled):
-    program = "import importlib.util,sys; from pathlib import Path; s=importlib.util.spec_from_file_location('upload_fixture',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m._real_upload_case(Path(sys.argv[2]),sys.argv[3]=='local',sys.argv[4]=='stalled')"
-    process = subprocess.Popen(
+def _run_upload_case(root, local):
+    program = "import importlib.util,sys; from pathlib import Path; sys.path.insert(0,str(Path(sys.argv[1]).parent)); s=importlib.util.spec_from_file_location('upload_fixture',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m._real_upload_case(Path(sys.argv[2]),sys.argv[3]=='local')"
+    with subprocess.Popen(
         [
             sys.executable,
             "-c",
@@ -111,54 +36,23 @@ def _run_upload_case(root, local, stalled):
             str(Path(__file__).resolve()),
             str(root),
             "local" if local else "remote",
-            "stalled" if stalled else "copy",
         ],
         start_new_session=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-    )
-    try:
-        owner = process_identity(process.pid)
+    ) as process:
         try:
-            output, errors = process.communicate(timeout=15)
+            output, errors = process.communicate(timeout=HANG_SECONDS)
         except subprocess.TimeoutExpired:
-            if not stalled:
-                raise
-            try:
-                child = json.loads((root / "stalled-child.json").read_text())
-                receiver = json.loads((root / "stalled-receiver.json").read_text())
-                actors = [owner, child, receiver]
-                for actor in (child, receiver):
-                    signal_process(actor, signal.SIGKILL)
-                process.communicate(timeout=10)
-                if any(audit_alive(actor) for actor in actors):
-                    raise RuntimeError("Stalled upload fixture still has live owners")
-                with (Path(receiver["run"]) / "collection.lock").open("a") as lease:
-                    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                (root / "drained.json").write_text(json.dumps(actors))
-            except Exception as error:
-                raise RuntimeError("Stalled upload fixture cleanup failed") from error
+            os.killpg(process.pid, signal.SIGKILL)
             raise
-        if process.returncode:
-            raise AssertionError(
-                f"Upload fixture failed: {output.decode()} {errors.decode()}"
-            )
-    finally:
-        try:
-            if process.returncode is None:
-                actors = _drain_upload_case(process)
-                (root / "drained.json").write_text(json.dumps(actors))
-        finally:
-            try:
-                if process.returncode is None:
-                    process.kill()
-                    process.wait(timeout=5)
-            finally:
-                process.stdout.close()
-                process.stderr.close()
+    if process.returncode:
+        raise AssertionError(
+            f"Upload fixture failed: {output.decode()} {errors.decode()}"
+        )
 
 
-def _real_upload_case(root, local, stalled):
+def _real_upload_case(root, local):
     original_output = module.output
     checks = unittest.TestCase()
     scripts = root / "scripts"
@@ -220,28 +114,7 @@ def _real_upload_case(root, local, stalled):
             "error": "fixture stops before compilation",
         }
 
-    original_prepare = module.prepare_upload_receiver
-
-    def prepare(shell, run):
-        original_prepare(shell, run)
-        if stalled:
-            child_code = "import json,signal,sys; from pathlib import Path; from process_group import own_identity; signal.signal(signal.SIGTERM,signal.SIG_IGN); Path(sys.argv[1]).write_text(json.dumps(own_identity())); sys.stdin.read()"
-            receiver = f"""import fcntl,json,os,signal,subprocess,sys
-from pathlib import Path
-sys.path.insert(0,{str(scripts)!r})
-from process_group import own_identity
-signal.signal(signal.SIGTERM,signal.SIG_IGN)
-run=Path(sys.argv[1])
-with (run/'collection.lock').open('a') as lease:
- fcntl.flock(lease,fcntl.LOCK_EX)
- child=subprocess.Popen([sys.executable,'-c',{child_code!r},{str(root / "stalled-child.json")!r}],stdin=subprocess.PIPE,start_new_session=True,env=os.environ|{{'PYTHONPATH':{str(scripts)!r}}})
- Path({str(root / "stalled-receiver.json")!r}).write_text(json.dumps(own_identity()|{{'run':str(run)}}))
- reader,writer=os.pipe(); os.read(reader,1)
-"""
-            (run / "rsync-upload.py").write_text(receiver)
-
     with (
-        patch.object(module, "prepare_upload_receiver", side_effect=prepare),
         patch.object(sys, "argv", ["codex-build.py", str(source)]),
         patch.dict(os.environ, {"RC_GATEWAY_BUILD_HOST": "fixture-macbook"}),
         patch.object(
@@ -393,76 +266,7 @@ class CodexPackageReuseTests(unittest.TestCase):
     def test_client_prepares_and_uploads_through_both_real_receivers(self):
         for local in (False, True):
             with self.subTest(local=local), tempfile.TemporaryDirectory() as temporary:
-                _run_upload_case(Path(temporary), local, False)
-
-    def test_stalled_upload_deadline_drains_receivers_and_separate_child_groups(self):
-        for local in (False, True):
-            with self.subTest(local=local), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                with self.assertRaises(subprocess.TimeoutExpired) as stalled:
-                    _run_upload_case(root, local, True)
-                self.assertEqual(stalled.exception.timeout, 15)
-                receiver = json.loads((root / "stalled-receiver.json").read_text())
-                child = json.loads((root / "stalled-child.json").read_text())
-                self.assertNotEqual(receiver["pgid"], child["pgid"])
-                actors = json.loads((root / "drained.json").read_text())
-                self.assertGreaterEqual(len(actors), 3)
-                self.assertTrue(all(not audit_alive(actor) for actor in actors))
-                self.assertFalse(audit_alive(receiver))
-                self.assertFalse(audit_alive(child))
-                with (Path(receiver["run"]) / "collection.lock").open("a") as lease:
-                    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-    def test_unacknowledged_suspension_obeys_cleanup_budget_and_kills_its_actor(self):
-        import select
-
-        original_identity = process_identity
-        with subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                "import sys; print('ready',flush=True); sys.stdin.read()",
-            ],
-            start_new_session=True,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-        ) as child:
-            retained = original_identity(child.pid)
-            expired = threading.Event()
-
-            def safety_expiry():
-                expired.set()
-                signal_process(retained, signal.SIGKILL)
-
-            def never_stopped(pid):
-                current = original_identity(pid)
-                return current | {"state": 2} if current is not None else None
-
-            safety = threading.Timer(6, safety_expiry)
-            try:
-                self.assertTrue(select.select([child.stdout], [], [], 5)[0])
-                self.assertEqual(child.stdout.readline(), b"ready\n")
-                retained = original_identity(child.pid)
-                safety.start()
-                started = time.monotonic()
-                with (
-                    patch(__name__ + ".process_identity", side_effect=never_stopped),
-                    patch("process_group.process_identity", side_effect=never_stopped),
-                    self.assertRaisesRegex(TimeoutError, "suspension"),
-                ):
-                    _drain_upload_case(child)
-                self.assertFalse(
-                    expired.is_set(), "Cleanup required the test safety watchdog"
-                )
-                self.assertLess(time.monotonic() - started, 6)
-                child.communicate(timeout=1)
-                self.assertFalse(audit_alive(retained))
-            finally:
-                safety.cancel()
-                if safety.ident is not None:
-                    safety.join(timeout=1)
-                signal_process(retained, signal.SIGKILL)
-                child.communicate(timeout=5)
+                _run_upload_case(Path(temporary), local)
 
     def test_identical_inputs_reuse_verified_package_and_corruption_rebuilds(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -703,13 +507,13 @@ raise SystemExit(module.serve_worker(Path(sys.argv[2])))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             worker = self.reader_worker(root)
-            bootstrap = """import importlib.util,sys,time
+            bootstrap = """import importlib.util,signal,sys
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('controller',sys.argv[1])
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 with module.collecting_worker([sys.executable,sys.argv[2]]):
  Path(sys.argv[3]).touch()
- time.sleep(30)
+ signal.pause()
 """
             client = subprocess.Popen(
                 [
@@ -722,15 +526,18 @@ with module.collecting_worker([sys.executable,sys.argv[2]]):
                 ]
             )
             try:
-                deadline = time.monotonic() + 5
+                deadline = time.monotonic() + HANG_SECONDS
                 while (
                     not (root / "collecting").exists() and time.monotonic() < deadline
                 ):
                     time.sleep(0.01)
                 self.assertTrue((root / "collecting").exists())
                 getattr(client, cancellation)()
-                client.wait(timeout=5)
-                deadline = time.monotonic() + 5
+                self.assertEqual(
+                    client.wait(timeout=HANG_SECONDS),
+                    {"terminate": 128 + signal.SIGTERM, "kill": -signal.SIGKILL}[cancellation],
+                )
+                deadline = time.monotonic() + HANG_SECONDS
                 while not (root / "released").exists() and time.monotonic() < deadline:
                     time.sleep(0.01)
                 self.assertTrue((root / "released").exists())

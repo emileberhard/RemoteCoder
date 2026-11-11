@@ -354,6 +354,7 @@ async fn fleet_tokens_receive_their_declared_hosts_with_exact_row_hosts() {
     let both = fleet_requests(&broker, 2);
     let state = &both.last().unwrap()["content_state"];
     assert_eq!(state["activeTaskCount"], 3);
+    assert!(state.get("activeTaskSubagentCounts").is_none());
     assert_eq!(state["attentionCount"], 3);
     assert_eq!(
         state["attention"],
@@ -546,6 +547,7 @@ async fn delegated_trees_count_once_under_their_owning_root() {
     peer(&service, 1, Some(delegated(&[], &[])));
     let unresolved = fleet(&service, &hosts);
     assert_eq!(unresolved.content.active_task_count, 1);
+    assert_eq!(unresolved.active_task_subagent_counts, vec![1]);
     assert_eq!(
         unresolved.unavailable_host_ids,
         vec![PEER.to_owned(), third.to_owned()]
@@ -557,6 +559,7 @@ async fn delegated_trees_count_once_under_their_owning_root() {
     service.receive_peer_live_activity(third, 2, Ok(Some(delegated(&["c"], &[]))));
     let nested = fleet(&service, &hosts);
     assert_eq!(nested.content.active_task_count, 1);
+    assert_eq!(nested.active_task_subagent_counts, vec![1]);
     assert!(nested.unavailable_host_ids.is_empty());
     assert!(
         service
@@ -566,6 +569,97 @@ async fn delegated_trees_count_once_under_their_owning_root() {
                 thread_id: "c".into(),
             })
     );
+}
+
+#[tokio::test]
+async fn fleet_subagent_counts_follow_ordered_trees_and_include_remote_children() {
+    let service = PushService::fixture_disabled(Journal::disabled());
+    let hosts = [PEER, LOCAL];
+    service
+        .report_live_activity(Some(LOCAL), delegated(&[], &[]))
+        .await;
+    peer(&service, 1, Some(delegated(&[], &[])));
+    let empty = serde_json::to_value(fleet(&service, &hosts)).unwrap();
+    assert_eq!(empty["activeTaskCount"], 0);
+    assert_eq!(empty["activeTaskSubagentCounts"], json!([]));
+
+    let mut local = delegated(&["a", "b", "root"], &[]);
+    local.running_roots.extend([
+        ("a-child".into(), "a".into()),
+        ("a-grandchild".into(), "a".into()),
+        ("c-child".into(), "c".into()),
+    ]);
+    local.content.active_task_count = 4;
+    service.report_live_activity(Some(LOCAL), local).await;
+    peer(
+        &service,
+        1,
+        Some(delegated(
+            &["remote-child", "root"],
+            &[("remote-child", LOCAL, "a"), ("root", LOCAL, "root")],
+        )),
+    );
+    let result = serde_json::to_value(fleet(&service, &hosts)).unwrap();
+    assert_eq!(
+        result,
+        json!({
+            "activeTaskCount": 4,
+            "activeTaskSubagentCounts": [3, 0, 1, 1],
+            "attention": [],
+            "attentionCount": 0,
+            "unavailableHostIDs": []
+        })
+    );
+}
+
+#[tokio::test]
+async fn fleet_subagent_changes_advance_revision_without_changing_tree_count() {
+    let service = PushService::fixture_disabled(Journal::disabled());
+    let mut changes = service.fleet_live_activity_changes();
+    let root = delegated(&["root"], &[]);
+    service
+        .report_live_activity(Some(LOCAL), root.clone())
+        .await;
+    let first = fleet(&service, &[LOCAL]);
+    changes.borrow_and_update();
+    let mut with_child = root.clone();
+    with_child
+        .running_roots
+        .insert("child".into(), "root".into());
+    service.report_live_activity(Some(LOCAL), with_child).await;
+    assert!(changes.has_changed().unwrap());
+    let second = fleet(&service, &[LOCAL]);
+    assert_eq!(
+        first.content.active_task_count,
+        second.content.active_task_count
+    );
+    assert_eq!(first.active_task_subagent_counts, vec![0]);
+    assert_eq!(second.active_task_subagent_counts, vec![1]);
+    changes.borrow_and_update();
+    service.report_live_activity(Some(LOCAL), root).await;
+    assert!(changes.has_changed().unwrap());
+    assert_eq!(
+        fleet(&service, &[LOCAL]).active_task_subagent_counts,
+        vec![0]
+    );
+
+    peer(&service, 1, Some(delegated(&[], &[])));
+    changes.borrow_and_update();
+    peer(
+        &service,
+        1,
+        Some(delegated(&["root"], &[("root", LOCAL, "root")])),
+    );
+    assert!(changes.has_changed().unwrap());
+    let remote_started = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(remote_started.content.active_task_count, 1);
+    assert_eq!(remote_started.active_task_subagent_counts, vec![1]);
+    changes.borrow_and_update();
+    peer(&service, 1, Some(delegated(&[], &[])));
+    assert!(changes.has_changed().unwrap());
+    let remote_stopped = fleet(&service, &[LOCAL, PEER]);
+    assert_eq!(remote_stopped.content.active_task_count, 1);
+    assert_eq!(remote_stopped.active_task_subagent_counts, vec![0]);
 }
 
 #[tokio::test]
@@ -1044,6 +1138,7 @@ fn the_largest_supported_fleet_state_fits_the_activity_budget() {
             attention: vec![row; MAX_ATTENTION_ROWS],
             attention_count: usize::MAX,
         },
+        active_task_subagent_counts: vec![],
         unavailable_host_ids: vec![host.to_owned(); MAX_FLEET_HOSTS],
         certifies: false,
     };

@@ -5,13 +5,15 @@ struct RecentConversationCache {
     struct Presentation {
         let messages: [ChatMessage]
         let items: [ChatStreamItem]
-        let forkableMessageIDs: Set<UUID>
+        let forkBoundaries: [UUID: ForkBoundary]
+        let editBases: [UUID: MessageEditBase]
         weak var session: ConversationSession?
 
         init(_ snapshot: ConversationSnapshot, session: ConversationSession?) {
             messages = snapshot.messages
             items = snapshot.items
-            forkableMessageIDs = snapshot.forkableMessageIDs
+            forkBoundaries = snapshot.forkBoundaries
+            editBases = snapshot.editBases
             self.session = session
         }
     }

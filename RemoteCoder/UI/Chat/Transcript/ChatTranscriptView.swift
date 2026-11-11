@@ -11,7 +11,8 @@ struct ChatTranscriptView<QuestionContent: View, BottomBar: View>: View {
     private let content: () -> TranscriptContentView<QuestionContent, BottomBar>
 
     init(items: [ChatStreamItem], readingPosition: TranscriptReadingPosition, rowPresentations: TranscriptRowPresentations, readingScope: UUID, retainedSurfaces: TranscriptSurfaceRetention.Scope?, renderedMessages: RenderedMessageStore,
-         forkableMessageIDs: Set<UUID>, scrollToRow: TranscriptRowRequest?, onFork: @escaping (ChatMessage) -> Void,
+         forkBoundaries: [UUID: ForkBoundary], editBases: [UUID: MessageEditBase], scrollToRow: TranscriptRowRequest?,
+         onFork: @escaping (ChatMessage) -> Void, onEditAsFork: @escaping (ChatMessage) -> Void,
          countChanges: ChangesStartAction?, deliveryActions: MessageDeliveryActions, onToggleTimeline: @escaping (String) -> Void,
          questionCard: @escaping (QuestionPrompt) -> QuestionContent, onRefreshCompaction: (() -> Void)? = nil,
          onBackgroundTap: @escaping () -> Void, historyEdgeStatus: [HistoryEdge.Kind: HistoryEdge.Status],
@@ -23,8 +24,8 @@ struct ChatTranscriptView<QuestionContent: View, BottomBar: View>: View {
         content = {
             TranscriptContentView(items: items, readingPosition: readingPosition, rowPresentations: rowPresentations,
                 readingScope: readingScope, retainedSurfaces: retainedSurfaces, renderedMessages: renderedMessages,
-                forkableMessageIDs: forkableMessageIDs, scrollToRow: scrollToRow, onFork: onFork,
-                countChanges: countChanges, deliveryActions: deliveryActions, onToggleTimeline: onToggleTimeline, questionCard: questionCard,
+                forkBoundaries: forkBoundaries, editBases: editBases, scrollToRow: scrollToRow, onFork: onFork,
+                onEditAsFork: onEditAsFork, countChanges: countChanges, deliveryActions: deliveryActions, onToggleTimeline: onToggleTimeline, questionCard: questionCard,
                 onRefreshCompaction: onRefreshCompaction, onBackgroundTap: onBackgroundTap,
                 historyEdgeStatus: historyEdgeStatus, canPrefetchOlderHistory: canPrefetchOlderHistory,
                 canLoadHistory: canLoadHistory, onLoadHistory: onLoadHistory, onShowLatest: onShowLatest, onFirstContent: onFirstContent,
@@ -92,10 +93,12 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
     let retainedSurfaces: TranscriptSurfaceRetention.Scope?
     /// Pre-parsed presentation per message id; bubbles never parse.
     let renderedMessages: RenderedMessageStore
-    let forkableMessageIDs: Set<UUID>
+    let forkBoundaries: [UUID: ForkBoundary]
+    let editBases: [UUID: MessageEditBase]
     /// A one-shot send/question request; each request owns its anchor and token.
     let scrollToRow: TranscriptRowRequest?
     let onFork: (ChatMessage) -> Void
+    let onEditAsFork: (ChatMessage) -> Void
     let countChanges: ChangesStartAction?
     let deliveryActions: MessageDeliveryActions
     let onToggleTimeline: (String) -> Void
@@ -151,7 +154,8 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
     @State private var openingAttachment: MessageAttachment?
 
     init(items: [ChatStreamItem], readingPosition: TranscriptReadingPosition, rowPresentations: TranscriptRowPresentations, readingScope: UUID, retainedSurfaces: TranscriptSurfaceRetention.Scope?, renderedMessages: RenderedMessageStore,
-         forkableMessageIDs: Set<UUID>, scrollToRow: TranscriptRowRequest?, onFork: @escaping (ChatMessage) -> Void,
+         forkBoundaries: [UUID: ForkBoundary], editBases: [UUID: MessageEditBase], scrollToRow: TranscriptRowRequest?,
+         onFork: @escaping (ChatMessage) -> Void, onEditAsFork: @escaping (ChatMessage) -> Void,
          countChanges: ChangesStartAction?, deliveryActions: MessageDeliveryActions, onToggleTimeline: @escaping (String) -> Void,
          questionCard: @escaping (QuestionPrompt) -> QuestionContent, onRefreshCompaction: (() -> Void)? = nil,
          onBackgroundTap: @escaping () -> Void, historyEdgeStatus: [HistoryEdge.Kind: HistoryEdge.Status],
@@ -164,9 +168,11 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         self.readingScope = readingScope
         self.retainedSurfaces = retainedSurfaces
         self.renderedMessages = renderedMessages
-        self.forkableMessageIDs = forkableMessageIDs
+        self.forkBoundaries = forkBoundaries
+        self.editBases = editBases
         self.scrollToRow = scrollToRow
         self.onFork = onFork
+        self.onEditAsFork = onEditAsFork
         self.countChanges = countChanges
         self.deliveryActions = deliveryActions
         self.onToggleTimeline = onToggleTimeline
@@ -332,7 +338,7 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
                 follow.revealRow()
                 native.scrollTo(id: rowID, anchor: nil, animated: false, completion: {})
                 onToggleTimeline(jobID)
-            }, onFork: onFork, countChanges: countChanges?.select, deliveryActions: deliveryActions,
+            }, onFork: onFork, onEditAsFork: onEditAsFork, countChanges: countChanges?.select, deliveryActions: deliveryActions,
             refreshCompaction: onRefreshCompaction)
         AppKitTranscriptScrollView(presentation: nativePresentation, retention: retainedSurfaces, readingPosition: readingPosition, rowPresentations: rowPresentations, readingScope: readingScope,
             rows: rows.map(rowInputs), renderedMessages: renderedMessages, reservedBottom: reservedBottom,
@@ -839,13 +845,15 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
     private func rowInputs(_ row: TranscriptRow) -> TranscriptRowInputs {
         switch row.kind {
         case .content(.message(let message)):
-            TranscriptRowInputs(row: row, isForkable: forkableMessageIDs.contains(message.id), countsChanges: countsChanges(from: message),
-                                edgeStatus: nil, canSendQueuedMessage: message.delivery == .queued && deliveryActions.sendNow != nil)
+            TranscriptRowInputs(row: row, isForkable: forkBoundaries[message.id] != nil, isEditable: editBases[message.id] != nil,
+                                countsChanges: countsChanges(from: message), edgeStatus: nil,
+                                canSendQueuedMessage: message.delivery == .queued && deliveryActions.sendNow != nil)
         case .content(.historyEdge(let edge)):
-            TranscriptRowInputs(row: row, isForkable: false, countsChanges: false, edgeStatus: historyEdgeStatus[edge.kind],
-                                canSendQueuedMessage: false)
+            TranscriptRowInputs(row: row, isForkable: false, isEditable: false, countsChanges: false,
+                                edgeStatus: historyEdgeStatus[edge.kind], canSendQueuedMessage: false)
         default:
-            TranscriptRowInputs(row: row, isForkable: false, countsChanges: false, edgeStatus: nil, canSendQueuedMessage: false)
+            TranscriptRowInputs(row: row, isForkable: false, isEditable: false, countsChanges: false, edgeStatus: nil,
+                                canSendQueuedMessage: false)
         }
     }
 
@@ -945,18 +953,20 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
     }
 
     private func countsChanges(from message: ChatMessage) -> Bool {
-        guard let countChanges, forkableMessageIDs.contains(message.id) else { return false }
+        guard let countChanges, forkBoundaries[message.id]?.isTurnEnd == true else { return false }
         return message.canonicalTurnID != countChanges.startTurnID
     }
 
     private func messageRow(_ message: ChatMessage) -> some View {
         #if os(macOS)
         let fork: (ChatMessage) -> Void = { [actions = nativePresentation.actions] in actions.fork($0) }
+        let edit: (ChatMessage) -> Void = { [actions = nativePresentation.actions] in actions.editAsFork($0) }
         let count: (ChatMessage) -> Void = { [actions = nativePresentation.actions] in actions.countChanges($0) }
         let delivery = nativePresentation.actions.deliveryActions
         let attachment: (MessageAttachment) -> Void = { [actions = nativePresentation.actions] in actions.openAttachment($0) }
         #else
         let fork = onFork
+        let edit = onEditAsFork
         let count: (ChatMessage) -> Void = { [countChanges] in countChanges?.select($0) }
         let delivery = deliveryActions
         let attachment: (MessageAttachment) -> Void = { [selection = $openingAttachment] in selection.wrappedValue = $0 }
@@ -964,7 +974,8 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         return ChatBubble(
             message: message,
             renderedMessages: renderedMessages,
-            onFork: forkableMessageIDs.contains(message.id) ? fork : nil,
+            onFork: forkBoundaries[message.id] != nil ? fork : nil,
+            onEditAsFork: editBases[message.id] != nil ? edit : nil,
             onCountChanges: countsChanges(from: message) ? count : nil,
             deliveryActions: message.delivery == .queued || message.delivery == .notSent ? delivery : nil,
             onSelectText: textSelectionAction(for: message),
@@ -1398,13 +1409,14 @@ final class TranscriptVisibility {
 struct TranscriptRowInputs: Equatable {
     let row: TranscriptRow
     let isForkable: Bool
+    let isEditable: Bool
     let countsChanges: Bool
     let edgeStatus: HistoryEdge.Status?
     let canSendQueuedMessage: Bool
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.row.id == rhs.row.id && lhs.row.revision == rhs.row.revision && lhs.isForkable == rhs.isForkable
-            && lhs.countsChanges == rhs.countsChanges && lhs.edgeStatus == rhs.edgeStatus
+            && lhs.isEditable == rhs.isEditable && lhs.countsChanges == rhs.countsChanges && lhs.edgeStatus == rhs.edgeStatus
             && lhs.canSendQueuedMessage == rhs.canSendQueuedMessage
     }
 }

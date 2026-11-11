@@ -26,6 +26,24 @@ struct ComposerDocumentTests {
         #expect(document.content.expandedText == " " + whitespace + useful.text)
     }
 
+    @Test(arguments: ["", " \n "])
+    func aRestoredMessageBecomesAnEmptyComposersDraft(_ blank: String) {
+        let document = ComposerDocument(content: .init(runs: blank.isEmpty ? [] : [.text(blank)]), onChange: {})
+        document.edit(.appendParagraph(.init(runs: [.text("Queued")])))
+        #expect(document.content == .init(runs: [.text("Queued")]))
+    }
+
+    @Test func aRestoredMessageFollowsTypedTextAfterABlankLineWithDistinctPastes() {
+        let paste = PastedTextPromptBlock.Entry(id: UUID(), text: "Log")
+        let document = ComposerDocument(content: .init(runs: [.text("Typed "), .paste(paste)]), onChange: {})
+        document.edit(.appendParagraph(.init(runs: [.text("Queued "), .paste(paste)])))
+        let content = document.content
+        #expect(content.expandedText == "Typed Log\n\nQueued Log")
+        #expect(content.pasted.count == 2)
+        #expect(content.pasted.first?.id == paste.id)
+        #expect(content.pasted.last?.id != paste.id)
+    }
+
     @Test func boundedControlsKeepSlashMeaningAfterLeadingWhitespaceAndRangeEdits() {
         let spaces = String(repeating: " ", count: 10_000)
         let document = ComposerDocument(content: .init(runs: [.text(spaces + "/compact")]), onChange: {})

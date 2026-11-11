@@ -18,19 +18,8 @@ extension ProviderAccountSnapshot {
     var usageRows: [CodexUsageLimitRow] {
         let now = Date.now
         return windows.map { window in
-            let kind: UsageWindowKind
-            if window.model?.lowercased().contains("fable") == true {
-                kind = .fable
-            } else if window.model != nil {
-                kind = .other
-            } else {
-                kind = switch window.durationMinutes {
-                case 300: .fiveHour
-                case 10080: .weekly
-                default: .other
-                }
-            }
-            return CodexUsageLimitRow(id: window.id, title: kind == .other ? window.label : kind.label,
+            let kind = window.kind
+            return CodexUsageLimitRow(id: window.id, title: window.title,
                 usedPercent: 100 - window.remainingPercent, kind: kind,
                 isStale: stale || state != .ready,
                 resetText: window.resetText(now: now, calendar: .autoupdatingCurrent),
@@ -40,6 +29,17 @@ extension ProviderAccountSnapshot {
 }
 
 extension AccountUsageWindow {
+    var kind: UsageWindowKind {
+        guard model == nil else { return .other }
+        return switch durationMinutes {
+        case 300: .fiveHour
+        case 10080: .weekly
+        default: .other
+        }
+    }
+
+    var title: String { kind == .other ? label : kind.label }
+
     func resetText(now: Date, calendar: Calendar) -> String? {
         guard let resetDate else { return nil }
         let style = Date.FormatStyle(locale: calendar.locale ?? .autoupdatingCurrent, calendar: calendar, timeZone: calendar.timeZone)

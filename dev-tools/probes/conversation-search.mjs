@@ -40,6 +40,7 @@ try {
   await lab.start();
   const {ws,rpc}=await lab.connect();
   const info=await rpc('host/info',{});
+  assert.equal(info.result.claudeItemFork,true);
   assert.equal(info.result.conversationSearch,true);
   assert.equal(info.result.conversationSearchByMeaning,true);
   let result;

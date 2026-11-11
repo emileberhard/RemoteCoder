@@ -376,7 +376,7 @@ async fn live_settings_switch_preserves_the_process_and_completes_real_input_onc
         let input_id = new_session_uuid();
         let mut followup = ClaudeUserInput::text("Reply exactly SECOND_ACK without tools.");
         followup.client_id = Some(input_id.clone());
-        let next_turn_id = agent.start_voice_turn(ClaudeTurnRequest {
+        let next_turn_id = agent.start_turn_with_recorded_selection(ClaudeTurnRequest {
             thread_id: thread_id.clone(), session_uuid: session_uuid.clone(), first_turn: false,
             input: followup, selection: selection("sonnet", Some("high")),
             cwd: dir.path().display().to_string(),
@@ -429,7 +429,7 @@ async fn live_synthetic_tail_queries_and_replays_without_a_user_bubble() -> anyh
     );
     input.client_id = Some(input_id.clone());
     let result = tokio::time::timeout(Duration::from_secs(90), async {
-        let turn_id = agent.start_voice_turn(ClaudeTurnRequest {
+        let turn_id = agent.start_turn_with_recorded_selection(ClaudeTurnRequest {
             thread_id: thread_id.clone(), session_uuid: session_uuid.clone(), first_turn: true,
             input, selection: selection("sonnet", Some("medium")),
             cwd: dir.path().display().to_string(),

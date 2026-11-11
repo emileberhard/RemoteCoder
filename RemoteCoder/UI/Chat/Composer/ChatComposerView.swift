@@ -454,45 +454,36 @@ struct ChatComposerView: View {
         })
     }
 
+    private var attachmentItems: [ContextMenuItem] {
+        var items: [ContextMenuItem] = []
+        #if os(iOS)
+        items.append(ContextMenuItem(title: "Take Photo", systemImage: "camera") {
+            dismissSoftwareKeyboard()
+            if let draft = screen.currentDraft { presentations.presentCamera(for: screen, draft: draft) }
+        })
+        #endif
+        items.append(ContextMenuItem(title: "Choose from Library", systemImage: "photo.on.rectangle") {
+            dismissSoftwareKeyboard()
+            photoDestination = attachmentDestination
+            presentations.showPhotoPicker = true
+        })
+        items.append(ContextMenuItem(title: "Choose File", systemImage: "doc") {
+            dismissSoftwareKeyboard()
+            fileDestination = attachmentDestination
+            presentations.showFileImporter = true
+        })
+        items.append(ContextMenuItem(title: "Paste from Clipboard", systemImage: "doc.on.clipboard", perform: pasteFromClipboard))
+        return items
+    }
+
     private var attachmentMenu: some View {
-        AppMenu(trigger: .icon) {
-            #if os(iOS)
-            Button {
-                dismissSoftwareKeyboard()
-                if let draft = screen.currentDraft { presentations.presentCamera(for: screen, draft: draft) }
-            } label: {
-                Label("Take Photo", systemImage: "camera")
-            }
-            #endif
-
-            Button {
-                dismissSoftwareKeyboard()
-                photoDestination = attachmentDestination
-                presentations.showPhotoPicker = true
-            } label: {
-                Label("Choose from Library", systemImage: "photo.on.rectangle")
-            }
-
-            Button {
-                dismissSoftwareKeyboard()
-                fileDestination = attachmentDestination
-                presentations.showFileImporter = true
-            } label: {
-                Label("Choose File", systemImage: "doc")
-            }
-
-            Button(action: pasteFromClipboard) {
-                Label("Paste from Clipboard", systemImage: "doc.on.clipboard")
-            }
-
-        } label: {
+        AppActionMenu(title: "Add attachment", items: attachmentItems) {
             composerIcon("plus")
         }
         #if os(macOS)
         .menuIndicator(.hidden)
         #endif
         .tooltip("Add attachment")
-        .accessibilityLabel("Add attachment")
         .onChange(of: fileImportRequest) {
             dismissSoftwareKeyboard()
             fileDestination = attachmentDestination

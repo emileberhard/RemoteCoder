@@ -179,7 +179,7 @@ struct AccountRetirementMigrationTests {
         defer { temporary.cleanUp() }
         let host = UUID(), account = UUID(), conversation = UUID(), slot = UUID(), draftID = UUID()
         let folder = temporary.storage.directory(for: .account(host: host, account: account))
-        let setup = NewChatSetup(workingDirectory: "/saved/repo", modelID: "gpt-6-sol", reasoning: .effort(.high), fastMode: true)
+        let setup = NewChatSetup(workingDirectory: "/saved/repo", modelID: "gpt-6-sol", reasoning: .effort(.high), fastMode: true, forkPoint: nil)
         let recording = UUID()
         do {
             let context = try ComposerDraftStore.makeContext(directory: folder.appending(path: "drafts"))
@@ -279,8 +279,8 @@ struct AccountRetirementMigrationTests {
         let host = UUID(), account = UUID(), slot = UUID()
         let source = temporary.storage.directory(for: .account(host: host, account: account))
         let target = temporary.storage.directory(for: .host(host))
-        let setupA = NewChatSetup(workingDirectory: "/repo/A", modelID: "gpt-6-sol", reasoning: .effort(.medium), fastMode: false)
-        let setupB = NewChatSetup(workingDirectory: "/repo/B", modelID: "gpt-6-astra", reasoning: .effort(.xhigh), fastMode: true)
+        let setupA = NewChatSetup(workingDirectory: "/repo/A", modelID: "gpt-6-sol", reasoning: .effort(.medium), fastMode: false, forkPoint: nil)
+        let setupB = NewChatSetup(workingDirectory: "/repo/B", modelID: "gpt-6-astra", reasoning: .effort(.xhigh), fastMode: true, forkPoint: nil)
         for (folder, setup, text) in [(target, setupA, "Draft A"), (source, setupB, "Draft B")] {
             let context = try ComposerDraftStore.makeContext(directory: folder.appending(path: "drafts"))
             let draft = ComposerDraft(destination: ComposerDraftStore.Destination.newChat(slot).key)

@@ -15,6 +15,7 @@ struct ConversationTranscriptView: View {
     @Binding var showsAgents: Bool
     let onOpenAgent: (ConversationAddress) -> Void
     let onReviewChanges: () -> Void
+    let onEditAsFork: (ChatMessage) -> Void
     @State private var openURLAction: OpenURLAction
     @State private var agentOpener: AgentConversationOpener
 
@@ -22,7 +23,8 @@ struct ConversationTranscriptView: View {
          onDismissComposerFocus: @escaping () -> Void,
          showsAgents: Binding<Bool>,
          onOpenAgent: @escaping (ConversationAddress) -> Void,
-         onReviewChanges: @escaping () -> Void) {
+         onReviewChanges: @escaping () -> Void,
+         onEditAsFork: @escaping (ChatMessage) -> Void) {
         self.screen = screen
         self.workspace = workspace
         self.focus = focus
@@ -30,6 +32,7 @@ struct ConversationTranscriptView: View {
         _showsAgents = showsAgents
         self.onOpenAgent = onOpenAgent
         self.onReviewChanges = onReviewChanges
+        self.onEditAsFork = onEditAsFork
         _openURLAction = State(initialValue: OpenURLAction { [weak screen] url in
             screen?.openFileURL(url, transition: nil, presentationScope: nil) ?? .discarded
         })
@@ -87,7 +90,8 @@ struct ConversationTranscriptView: View {
         if !screen.canSteerCurrentConversation {
             sendNow = { [screen] message in screen.sendQueuedMessageNow(message) }
         }
-        return MessageDeliveryActions(sendNow: sendNow, remove: { [screen] message in screen.removeMessage(message) })
+        return MessageDeliveryActions(sendNow: sendNow, edit: { [screen] message in screen.editQueuedMessage(message) },
+                                      remove: { [screen] message in screen.removeMessage(message) })
     }
 
     private var transcript: some View {
@@ -98,13 +102,15 @@ struct ConversationTranscriptView: View {
             readingScope: screen.transcriptSurfaceID,
             retainedSurfaces: retainedSurfaces?.scope(owner: screen.transcriptSurfaceID),
             renderedMessages: screen.target.renderedMessages,
-            forkableMessageIDs: screen.forkableMessageIDs,
+            forkBoundaries: screen.forkBoundaries,
+            editBases: screen.editBases,
             scrollToRow: screen.pendingTranscriptRequest,
             onFork: { message in
                 Task {
                     await screen.forkConversation(from: message)
                 }
             },
+            onEditAsFork: onEditAsFork,
             countChanges: screen.changeSummary.flatMap { summary in
                 summary.offersViews ? ChangesStartAction(startTurnID: summary.startTurnID,
                                                          select: { [screen] in screen.countChanges(from: $0) }) : nil

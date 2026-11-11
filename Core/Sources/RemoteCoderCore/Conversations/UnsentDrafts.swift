@@ -1,16 +1,23 @@
 import Foundation
 
 struct NewChatSetup: Codable, Equatable, Sendable {
+    struct ForkPoint: Codable, Hashable, Sendable {
+        let threadID: String
+        let lastTurnID: String
+    }
+
     let workingDirectory: String?
     let modelID: String?
     let reasoning: String
     let fastMode: Bool?
+    let forkPoint: ForkPoint?
 
-    init(workingDirectory: String?, modelID: String?, reasoning: ReasoningSelection, fastMode: Bool?) {
+    init(workingDirectory: String?, modelID: String?, reasoning: ReasoningSelection, fastMode: Bool?, forkPoint: ForkPoint?) {
         self.workingDirectory = workingDirectory
         self.modelID = modelID
         self.reasoning = reasoning.id
         self.fastMode = fastMode
+        self.forkPoint = forkPoint
     }
 
     var reasoningSelection: ReasoningSelection? { ReasoningSelection.fromStorageValue(reasoning) }

@@ -15,6 +15,15 @@ for a real tap action (for example, New Conversation); it preserves native hold
 and menu tracking, not a dummy action to produce feedback. Parent/caller plain
 button styling cannot silently replace the wrapper's internal tactile style.
 
+Use `AppActionMenu` for an icon menu of plain actions that must open the moment
+it is touched, such as the composer's attachment menu. On the iOS 27 builds
+measured, a button's menu presents when the finger lifts, or after about 170 ms
+of holding, so an `AppMenu` adds a tap's contact time to its opening. On iOS `AppActionMenu` is
+a UIKit button with a prebuilt `UIMenu`: touch-down plays `.iconPress` through
+`HapticService` and presents the menu with `performPrimaryAction()`. On the Mac
+it is an `AppMenu`, which already opens on mouse-down. Its items are
+`ContextMenuItem`s; menus with pickers, toggles or sections stay on `AppMenu`.
+
 Ordinary buttons use `.appButtonFeedback()` / `.appIconButtonFeedback()` or the
 existing semantic `ResponsiveButtonStyle`. Its `appPressFeedback` observes the rising
 press transition and calls the service directly; the measurement harness shares that modifier. UIKit-backed controls call `HapticService.play` from their existing contact callback, before preparing a held interaction. No additional recognizer is installed.

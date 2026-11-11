@@ -1270,10 +1270,12 @@ fn a_fork_point_keeps_the_result_of_its_last_tool() {
     let path = write_session(home.path(), CWD, "tool", &records);
     let (projection, _) = project(home.path(), "claude_tool", &path, None);
 
-    let point = projection.fork_point(Some("claude-turn-1")).unwrap();
+    let point = projection
+        .fork_point(&ForkBoundary::Turn("claude-turn-1".to_string()))
+        .unwrap();
 
     assert_eq!(point.length, record_bytes(&records[..3]));
-    assert_eq!(point.turns, turn_set(&["claude-turn-1"]));
+    assert_eq!(point.history.turns, turn_set(&["claude-turn-1"]));
 }
 
 #[test]
@@ -1285,11 +1287,14 @@ fn a_turn_that_a_later_prompt_interleaves_is_not_a_fork_point() {
     let (projection, _) = project(home.path(), "claude_interleaved", &path, None);
 
     assert!(matches!(
-        projection.fork_point(Some("claude-turn-1")),
+        projection.fork_point(&ForkBoundary::Turn("claude-turn-1".to_string())),
         Err(HistoryError::InvalidRequest(_))
     ));
     assert_eq!(
-        projection.fork_point(None).unwrap().length,
+        projection
+            .fork_point(&ForkBoundary::LastFinishedTurn)
+            .unwrap()
+            .length,
         record_bytes(&records)
     );
 }
@@ -1310,10 +1315,15 @@ async fn a_whole_fork_ends_at_the_last_finished_turn_before_a_running_turn_write
         crate::providers::claude::timeline::resolve_session_path("running", home.path()).unwrap();
     let (projection, _) = project(home.path(), "claude_running", &path, Some("turn-live"));
 
-    let point = projection.fork_point(None).unwrap();
+    let point = projection
+        .fork_point(&ForkBoundary::LastFinishedTurn)
+        .unwrap();
 
     assert_eq!(point.length, record_bytes(&records[..12]));
-    assert_eq!(point.turns, turn_set(&["turn-1", "turn-2", "turn-3"]));
+    assert_eq!(
+        point.history.turns,
+        turn_set(&["turn-1", "turn-2", "turn-3"])
+    );
 }
 
 #[tokio::test]
@@ -1332,12 +1342,14 @@ async fn a_fork_never_reaches_past_a_running_turn_that_a_reasoning_only_turn_fol
         crate::providers::claude::timeline::resolve_session_path("wake", home.path()).unwrap();
     let (projection, _) = project(home.path(), "claude_wake", &path, Some("turn-live"));
 
-    let point = projection.fork_point(None).unwrap();
+    let point = projection
+        .fork_point(&ForkBoundary::LastFinishedTurn)
+        .unwrap();
 
     assert_eq!(point.length, record_bytes(&records[..6]));
-    assert_eq!(point.turns, turn_set(&["turn-1", "turn-2"]));
+    assert_eq!(point.history.turns, turn_set(&["turn-1", "turn-2"]));
     assert!(matches!(
-        projection.fork_point(Some("turn-wake")),
+        projection.fork_point(&ForkBoundary::Turn("turn-wake".to_string())),
         Err(HistoryError::InvalidRequest(_))
     ));
 }
@@ -1536,5 +1548,184 @@ fn locate_maps_exact_parts_and_agent_links_to_inclusive_turn_cursors() {
                 &|| anyhow::bail!("cancelled")
             )
             .is_err()
+    );
+}
+
+fn mid_turn_records() -> Vec<Value> {
+    let prompt = |uuid: &str, text: &str, second: u32| json!({"type":"user","uuid":uuid,"cwd":CWD,"timestamp":format!("2026-08-16T13:36:{second:02}.000Z"),"message":{"role":"user","content":text}});
+    let tool = |uuid: &str, message: &str, id: &str, name: &str, second: u32| json!({"type":"assistant","uuid":uuid,"timestamp":format!("2026-08-16T13:36:{second:02}.000Z"),"message":{"id":message,"role":"assistant","content":[{"type":"tool_use","id":id,"name":name,"input":{"command":format!("echo {id}"),"message":"Starting"}}]}});
+    let result = |uuid: &str, id: &str, second: u32| json!({"type":"user","uuid":uuid,"timestamp":format!("2026-08-16T13:36:{second:02}.000Z"),"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":id,"content":id}]}});
+    let text = |uuid: &str, message: &str, text: &str, second: u32| json!({"type":"assistant","uuid":uuid,"timestamp":format!("2026-08-16T13:36:{second:02}.000Z"),"message":{"id":message,"role":"assistant","content":[{"type":"text","text":text}]}});
+    vec![
+        prompt("P1", "first", 1),
+        text("a1", "m1", "looking", 2),
+        tool("a2", "m1", "t1", "Bash", 3),
+        result("r1", "t1", 4),
+        tool("a3", "m2", "s1", "SendUserMessage", 5),
+        result("r2", "s1", 6),
+        text("a4", "m2", "done", 7),
+        prompt("P2", "second", 10),
+        text("a5", "m3", "two", 11),
+    ]
+}
+
+fn item_boundary(turn: &str, item: &str) -> ForkBoundary {
+    ForkBoundary::Item {
+        turn: turn.to_string(),
+        item: item.to_string(),
+    }
+}
+
+fn cut(turn: &str, items: &[&str]) -> Option<CutTurn> {
+    Some(CutTurn {
+        id: turn.to_string(),
+        items: turn_set(items),
+    })
+}
+
+#[test]
+fn an_item_boundary_keeps_its_turn_through_that_item_and_the_results_it_owns() {
+    let home = TempDir::new().unwrap();
+    let records = mid_turn_records();
+    let path = write_session(home.path(), CWD, "items", &records);
+    let (projection, _) = project(home.path(), "claude_items", &path, None);
+
+    let text = projection
+        .fork_point(&item_boundary("claude-turn-1", "m1#0"))
+        .unwrap();
+    let tool = projection
+        .fork_point(&item_boundary("claude-turn-1", "t1"))
+        .unwrap();
+    let sent = projection
+        .fork_point(&item_boundary("claude-turn-1", "s1"))
+        .unwrap();
+
+    assert_eq!(text.length, record_bytes(&records[..2]));
+    assert_eq!(text.history.turns, turn_set(&[]));
+    assert_eq!(text.history.cut, cut("claude-turn-1", &["P1", "m1#0"]));
+    assert_eq!(tool.length, record_bytes(&records[..4]));
+    assert_eq!(
+        tool.history.cut,
+        cut("claude-turn-1", &["P1", "m1#0", "t1"])
+    );
+    assert_eq!(sent.length, record_bytes(&records[..6]));
+    assert_eq!(
+        sent.history.cut,
+        cut("claude-turn-1", &["P1", "m1#0", "t1", "s1"])
+    );
+}
+
+#[test]
+fn the_final_item_of_a_finished_turn_is_that_turn_boundary() {
+    let home = TempDir::new().unwrap();
+    let mut records = mid_turn_records();
+    records.push(json!({"type":"custom-title","customTitle":"Named","sessionId":"final"}));
+    let path = write_session(home.path(), CWD, "final", &records);
+    let (projection, _) = project(home.path(), "claude_final", &path, None);
+
+    for (turn, item) in [("claude-turn-1", "m2#1"), ("claude-turn-2", "m3#0")] {
+        let through_item = projection.fork_point(&item_boundary(turn, item)).unwrap();
+        let through_turn = projection
+            .fork_point(&ForkBoundary::Turn(turn.to_string()))
+            .unwrap();
+        assert_eq!(through_item, through_turn, "{turn}");
+        assert_eq!(through_item.history.cut, None);
+    }
+    assert_eq!(
+        projection
+            .fork_point(&item_boundary("claude-turn-2", "m3#0"))
+            .unwrap()
+            .length,
+        record_bytes(&records)
+    );
+}
+
+#[test]
+fn an_item_boundary_inside_the_running_turn_stops_at_that_item() {
+    let home = TempDir::new().unwrap();
+    let mut records = mid_turn_records();
+    records.push(json!({"type":"assistant","uuid":"a6","timestamp":"2026-08-16T13:36:12.000Z","message":{"id":"m3","role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"sleep 600"}}]}}));
+    let path = write_session(home.path(), CWD, "live", &records);
+    let (projection, _) = project(home.path(), "claude_live", &path, Some("turn-live"));
+
+    let point = projection
+        .fork_point(&item_boundary("turn-live", "m3#0"))
+        .unwrap();
+
+    assert_eq!(point.length, record_bytes(&records[..9]));
+    assert_eq!(point.history.turns, turn_set(&["claude-turn-1"]));
+    assert_eq!(point.history.cut, cut("turn-live", &["P2", "m3#0"]));
+    for refused in [
+        ForkBoundary::Turn("turn-live".to_string()),
+        item_boundary("turn-live", "t3"),
+    ] {
+        assert!(
+            matches!(
+                projection.fork_point(&refused),
+                Err(HistoryError::InvalidRequest(_))
+            ),
+            "{refused:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_item_boundary_that_cannot_be_cut_cleanly_is_refused() {
+    let home = TempDir::new().unwrap();
+    let mut records = mid_turn_records();
+    records.push(json!({"type":"user","uuid":"P3","cwd":CWD,"timestamp":"2026-08-16T13:36:20.000Z","message":{"role":"user","content":"third"}}));
+    records.push(json!({"type":"assistant","uuid":"a7","timestamp":"2026-08-16T13:36:21.000Z","message":{"id":"m4","role":"assistant","content":[
+        {"type":"text","text":"shared"},
+        {"type":"tool_use","id":"t4","name":"Bash","input":{"command":"true"}}]}}));
+    records.push(json!({"type":"user","uuid":"r4","timestamp":"2026-08-16T13:36:22.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t4","content":"ok"}]}}));
+    records.push(json!({"type":"assistant","uuid":"a8","timestamp":"2026-08-16T13:36:23.000Z","message":{"id":"m5","role":"assistant","content":[{"type":"text","text":"three"}]}}));
+    let store = Store::new(home.path().to_path_buf());
+    for (turn, items) in [
+        (
+            "turn-1",
+            vec![
+                json!({"type":"userMessage","id":"P1","content":[]}),
+                json!({"type":"reasoning","id":"rs-1","summary":["Thinking"],"content":[]}),
+                json!({"type":"agentMessage","id":"m1#0","text":""}),
+                json!({"type":"commandExecution","id":"t1"}),
+                json!({"type":"agentMessage","id":"s1","text":""}),
+                json!({"type":"agentMessage","id":"m2#1","text":""}),
+            ],
+        ),
+        (
+            "turn-2",
+            vec![json!({"type":"userMessage","id":"P2","content":[]})],
+        ),
+        (
+            "turn-3",
+            vec![json!({"type":"userMessage","id":"P3","content":[]})],
+        ),
+    ] {
+        index_turn(&store, "claude_refused", turn, items).await;
+    }
+    let path = write_session(home.path(), CWD, "refused", &records);
+    let (projection, _) = project(home.path(), "claude_refused", &path, None);
+
+    for refused in [
+        item_boundary("turn-1", "missing"),
+        item_boundary("turn-2", "m1#0"),
+        item_boundary("turn-1", "rs-1"),
+        item_boundary("turn-3", "m4#0"),
+        item_boundary("turn-z", "m1#0"),
+    ] {
+        assert!(
+            matches!(
+                projection.fork_point(&refused),
+                Err(HistoryError::InvalidRequest(_))
+            ),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(
+        projection
+            .fork_point(&item_boundary("turn-1", "m1#0"))
+            .unwrap()
+            .length,
+        record_bytes(&records[..2])
     );
 }

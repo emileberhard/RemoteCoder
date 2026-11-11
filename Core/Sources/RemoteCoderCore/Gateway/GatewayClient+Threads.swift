@@ -184,12 +184,18 @@ extension GatewayClient {
 
     func forkThread(
         threadID: String,
-        lastTurnID: String? = nil,
-        serviceTier: CodexAppServerV2.ServiceTierOverride? = nil
+        through boundary: ForkBoundary?,
+        serviceTier: CodexAppServerV2.ServiceTierOverride?
     ) async throws -> CodexAppServerV2.ThreadForkResponse {
+        let (lastTurnID, lastItemID): (String?, String?) = switch boundary {
+        case nil: (nil, nil)
+        case .turnEnd(let turnID): (turnID, nil)
+        case .item(let turnID, let itemID): (turnID, itemID)
+        }
         let params = CodexAppServerV2.ThreadForkParams(
             threadId: threadID,
             lastTurnId: lastTurnID,
+            lastItemId: lastItemID,
             serviceTier: serviceTier
         )
         return try await callDecodable(

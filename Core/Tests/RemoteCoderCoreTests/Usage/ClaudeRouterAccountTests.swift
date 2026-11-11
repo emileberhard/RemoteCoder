@@ -39,6 +39,24 @@ struct ClaudeRouterAccountTests {
         #expect(sample.usageRows(now: Date(timeIntervalSince1970: 9900)).allSatisfy { !$0.isStale })
     }
 
+    @Test func modelLimitsKeepTheirOwnRowAndTierNamesThePlan() throws {
+        let windows = [AccountUsageWindow(id: "weekly", label: "Weekly", durationMinutes: 10080,
+            usedPercent: 50, resetsAt: 604800, model: nil),
+            AccountUsageWindow(id: "fable-weekly", label: "Fable weekly", durationMinutes: 10080,
+                usedPercent: 100, resetsAt: 604800, model: "fable", observedAt: 7000)]
+        let sample = account(id: "one", observed: 9000, windows: windows)
+        let rows = sample.usageRows(now: Date(timeIntervalSince1970: 9000))
+        #expect(rows.map(\.title) == ["Weekly", "Fable weekly"])
+        #expect(rows.map(\.kind) == [.weekly, .other])
+        #expect(rows.map(\.isStale) == [false, true])
+        #expect(sample.menuTitle(now: Date(timeIntervalSince1970: 9000)) == "one@example.com · 5h — · Week 50%")
+        #expect(sample.planTitle == "Max")
+        let data = Data(#"""
+        {"id":"one","label":"one@example.com","plan":"max","tier":"max_20x","shared":false,"credential":"ready","availability":"available","availableAt":null,"windows":[],"observedAt":null}
+        """#.utf8)
+        #expect(try JSONDecoder().decode(ClaudeRouterAccount.self, from: data).planTitle == "Max 20x")
+    }
+
     @Test func inventoryDecodesRouterPolicyAndStrictStates() throws {
         let data = Data(#"""
         {"automatic":"one","preference":null,"accounts":[{"id":"one","label":"one@example.com","plan":"max","shared":true,"credential":"rejected","availability":"cooling","availableAt":18000,"windows":[],"observedAt":null}]}

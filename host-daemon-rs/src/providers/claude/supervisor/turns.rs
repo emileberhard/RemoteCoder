@@ -10,7 +10,7 @@ use crate::providers::claude::{
 };
 use crate::rpc::error::RpcCode;
 use nix::unistd::Pid;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -49,16 +49,38 @@ impl ClaudeSupervisor {
             .await
     }
 
-    pub(crate) async fn start_voice_turn(
+    pub(crate) async fn start_turn_with_recorded_selection(
         self: &Arc<Self>,
         mut request: ClaudeTurnRequest,
     ) -> Result<String, TurnStartError> {
         let _start_guard = self.lifecycles.lock(&request.thread_id).await;
+        self.refuse_while_user_turn_runs(&request).await?;
         if let Some((selection, _)) = self.recorded_selection(&request.thread_id).await? {
             request.selection = selection;
         }
         self.start_turn_locked(request, TurnOrigin::Dispatched)
             .await
+    }
+
+    async fn refuse_while_user_turn_runs(
+        &self,
+        request: &ClaudeTurnRequest,
+    ) -> Result<(), TurnStartError> {
+        self.wait_for_finishing_turn(&request.thread_id).await;
+        if self
+            .runtimes
+            .lock()
+            .await
+            .get(&request.thread_id)
+            .is_some_and(|runtime| {
+                runtime
+                    .running_turn()
+                    .is_some_and(|turn| !turn.agent_initiated)
+            })
+        {
+            self.reserve_start(request).await?;
+        }
+        Ok(())
     }
 
     pub(super) async fn recorded_selection(
@@ -128,20 +150,7 @@ impl ClaudeSupervisor {
             })?;
         self.check_callback_generation(&request.thread_id, origin)
             .await?;
-        self.wait_for_finishing_turn(&request.thread_id).await;
-        if self
-            .runtimes
-            .lock()
-            .await
-            .get(&request.thread_id)
-            .is_some_and(|runtime| {
-                runtime
-                    .running_turn()
-                    .is_some_and(|turn| !turn.agent_initiated)
-            })
-        {
-            self.reserve_start(&request).await?;
-        }
+        self.refuse_while_user_turn_runs(&request).await?;
         let update_warm_runtime = self
             .runtimes
             .lock()
@@ -808,6 +817,20 @@ impl ClaudeSupervisor {
             .await
     }
 
+    pub(crate) async fn record_fork_origin(
+        &self,
+        thread_id: &str,
+        source: &str,
+    ) -> anyhow::Result<()> {
+        self.conversation_index
+            .record_fork_origin(thread_id, source)
+            .await
+    }
+
+    pub(crate) async fn fork_origin(&self, thread_id: &str) -> anyhow::Result<Option<String>> {
+        self.conversation_index.fork_origin(thread_id).await
+    }
+
     pub(crate) fn is_minted(&self, thread_id: &str) -> anyhow::Result<bool> {
         self.conversation_index.is_minted(thread_id)
     }
@@ -833,10 +856,10 @@ impl ClaudeSupervisor {
         &self,
         source_id: &str,
         target_id: &str,
-        turns: HashSet<String>,
+        history: crate::providers::claude::conversation_index::ForkHistory,
     ) -> anyhow::Result<()> {
         self.conversation_index
-            .fork_thread(source_id, target_id, turns)
+            .fork_thread(source_id, target_id, history)
             .await
     }
 

@@ -42,7 +42,14 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     var renderWindowIDs: Set<UUID> {
         Set(messages.map(\.id)).union(preparingRenderWindows.values.flatMap { $0 })
     }
-    private(set) var forkableMessageIDs: Set<UUID> = []
+    private var projectedForkBoundaries: [UUID: ForkBoundary] = [:]
+    var forkBoundaries: [UUID: ForkBoundary] {
+        guard let activeSessionID, target.supportsItemForks(threadID: activeSessionID) else {
+            return projectedForkBoundaries.filter { $0.value.isTurnEnd }
+        }
+        return projectedForkBoundaries
+    }
+    private(set) var editBases: [UUID: MessageEditBase] = [:]
     var isComposerFocused = false
     private(set) var composerSends = 0
     @ObservationIgnored private var currentStreamItems: [ChatStreamItem] = []
@@ -243,7 +250,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func countChanges(from message: ChatMessage) {
-        guard forkableMessageIDs.contains(message.id), let turnID = message.canonicalTurnID else { return }
+        guard case .turnEnd(let turnID) = forkBoundaries[message.id] else { return }
         changeSummary?.select(.since(ChangesAnchor(turnID: turnID, boundary: .end)))
     }
 
@@ -310,7 +317,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         compaction = nil
         pendingTranscriptRequest = nil
         messages = []
-        forkableMessageIDs = []
+        projectedForkBoundaries = [:]
+        editBases = [:]
         streamItems = []
         canPrefetchOlderHistory = false
         pendingQuestion = nil
@@ -327,7 +335,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         guard let presentation = target.recentPresentation(threadID: threadID),
               renderedMessages.hasOpeningRendered(presentation.messages) else { return }
         messages = presentation.messages
-        forkableMessageIDs = presentation.forkableMessageIDs
+        projectedForkBoundaries = presentation.forkBoundaries
+        editBases = presentation.editBases
         streamItems = presentation.items
         htmlVisualReplies.update(.unknown, threadID: threadID)
         renderedMessages.ensureRendered(presentation.messages)
@@ -393,7 +402,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         }
         showsRecentPresentation = false
         messages = snapshot.messages
-        forkableMessageIDs = snapshot.forkableMessageIDs
+        projectedForkBoundaries = snapshot.forkBoundaries
+        editBases = snapshot.editBases
         streamItems = snapshot.items
         htmlVisualReplies.update(snapshot.visualReplies, threadID: snapshot.threadID)
         canPrefetchOlderHistory = snapshot.canPrefetchOlder
@@ -721,6 +731,13 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
                                       settings: turnSettings(model: model))
     }
 
+    func editQueuedMessage(_ message: ChatMessage) {
+        guard target.acceptsWork, message.delivery == .queued, let threadID = activeSessionID,
+              let draft = currentDraft, let content = message.restorableComposerContent else { return }
+        target.dispatcher.editQueued(messageID: message.id, conversationID: currentConversationID, threadID: threadID,
+                                     content: content, into: draft)
+    }
+
     func removeMessage(_ message: ChatMessage) {
         switch message.delivery {
         case .queued:
@@ -890,6 +907,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let feedback = target.feedbackForCurrentConversation()
         let conversationID = currentConversationID
         let sessionID = activeSessionID
+        let threadTarget: TurnDispatcher.ThreadTarget = sessionID.map { .existing($0) }
+            ?? draft.newChat?.forkPoint.map { .fork($0) } ?? .start
         // A send that lands in an already-running turn is a steer, not a new turn.
         let steering = sessionID.flatMap { target.turns.turn(forThread: $0) }.map { turn in
             let context = SteerContext.capture(in: streamItems, turnID: turn.turnID) { message in
@@ -940,7 +959,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         if let steering {
             target.dispatcher.steer(submission, activeTurn: steering.turn, context: steering.context)
         } else {
-            target.dispatcher.startTurn(submission, sessionID: sessionID)
+            target.dispatcher.startTurn(submission, in: threadTarget)
         }
         return userMessage.id
     }
@@ -1087,7 +1106,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private func loadResumeConversation(_ thread: ConversationHeader, session: ConversationSession, previousOwner: ConversationSession?,
                                         loadID: UUID, settingsRevision: UInt64) async -> ResumeOutcome {
         let operation = AppPerformanceDiagnostics.shared.beginHistory(.opening, threadID: thread.id)
-        async let settings: Void = restoreConversationSettings(thread, loadID: loadID, revision: settingsRevision)
+        async let settings = restoreConversationSettings(thread, loadID: loadID, revision: settingsRevision)
         var failure: (any Error)?
         do {
             try await session.restore()
@@ -1118,7 +1137,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
                 failure = error
             }
         }
-        await settings
+        let refreshed = await settings
         guard isCurrentResumeLoad(loadID, threadID: thread.id) else {
             AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
             return .superseded
@@ -1131,11 +1150,12 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
         await conversations.evictIdle(keeping: target.presentedConversationIDs)
         target.warmConversationsIfIdle()
+        if let refreshed { await adoptForkOrigin(of: refreshed) }
         return failure.map(ResumeOutcome.failed) ?? .loaded
     }
 
     func forkConversation(_ thread: ConversationHeader) async {
-        await fork(threadID: thread.id, lastTurnID: nil, serviceTier: forkServiceTier(for: thread.id))
+        await fork(threadID: thread.id, through: nil, serviceTier: forkServiceTier(for: thread.id))
     }
 
     func forkServiceTier(for threadID: String) -> CodexAppServerV2.ServiceTierOverride? {
@@ -1143,19 +1163,15 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func forkConversation(from message: ChatMessage) async {
-        guard forkableMessageIDs.contains(message.id), let sessionID = activeSessionID else { return }
-        guard let turnID = message.canonicalTurnID else {
-            present(.conversation("This message's canonical turn is not loaded yet. Reload its history before forking."))
-            return
-        }
-        await fork(threadID: sessionID, lastTurnID: turnID, serviceTier: serviceTierOverride)
+        guard let boundary = forkBoundaries[message.id], let sessionID = activeSessionID else { return }
+        await fork(threadID: sessionID, through: boundary, serviceTier: serviceTierOverride)
     }
 
-    private func fork(threadID: String, lastTurnID: String?,
+    private func fork(threadID: String, through boundary: ForkBoundary?,
                       serviceTier: CodexAppServerV2.ServiceTierOverride?) async {
         let feedback = target.feedbackForCurrentConversation()
         do {
-            let response = try await target.gatewayClient.forkThread(threadID: threadID, lastTurnID: lastTurnID, serviceTier: serviceTier)
+            let response = try await target.gatewayClient.forkThread(threadID: threadID, through: boundary, serviceTier: serviceTier)
             if AgentProvider.provider(forThreadID: response.thread.id) == .claude {
                 await target.metadataService.sync()
             }
@@ -1165,6 +1181,30 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             present(.conversation(error.localizedDescription))
             if !(error is CancellationError) { feedback(.error) }
         }
+    }
+
+    func prepareEditAsFork(_ message: ChatMessage) async -> UnsentDraftAddress? {
+        guard target.acceptsWork, let base = editBases[message.id], let threadID = activeSessionID,
+              let content = message.restorableComposerContent else { return nil }
+        let forkPoint: NewChatSetup.ForkPoint? = switch base {
+        case .threadStart: nil
+        case .afterTurn(let turnID): NewChatSetup.ForkPoint(threadID: threadID, lastTurnID: turnID)
+        }
+        let setup = NewChatSetup(workingDirectory: workingDirectory, modelID: selectedModel?.id,
+                                 reasoning: reasoningSelection, fastMode: fastModeSelection, forkPoint: forkPoint)
+        let address = UnsentDraftAddress(target: executionTarget, draftID: UUID())
+        guard let draft = await drafts.draft(for: .newChat(address.draftID)), target.acceptsWork else { return nil }
+        drafts.setNewChatSetup(setup, in: draft)
+        drafts.setContent(content, in: draft)
+        return address
+    }
+
+    private var draftForkPoint: NewChatSetup.ForkPoint? {
+        activeSessionID == nil ? currentDraft?.newChat?.forkPoint : nil
+    }
+
+    var shownDraftForkSource: ConversationAddress? {
+        draftForkPoint.map { ConversationAddress(hostID: hostID, threadID: $0.threadID) }
     }
 
     var newChatDestination: ComposerDraftStore.Destination { .newChat(newChatDraftID) }
@@ -1181,7 +1221,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     func startNewConversation() {
         let shown = drafts.cachedDraft(for: newChatDestination)
-        let isOccupied = shown.map(drafts.hasContent) ?? drafts.unsentDrafts.contains { $0.id == newChatDraftID }
+        let isOccupied = shown.map { drafts.hasContent($0) || $0.newChat?.forkPoint != nil }
+            ?? drafts.unsentDrafts.contains { $0.id == newChatDraftID }
         if isOccupied || target.voice.isRecording || target.voice.isTranscribing {
             newChatDraftID = UUID()
         }
@@ -1201,7 +1242,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func suggestWorkingDirectory(_ path: String) {
-        guard shownNewChatDraft != nil, !showsUnsentContent else { return }
+        guard shownNewChatDraft != nil, !showsUnsentContent, draftForkPoint == nil else { return }
         updateWorkingDirectory(path)
         recordNewChatSetup()
     }
@@ -1229,7 +1270,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let modelID: String? = if let selectedModel { selectedModel.id }
             else if case .unavailable(let modelID, _) = newChatModelSource { modelID } else { nil }
         return NewChatSetup(workingDirectory: workingDirectory, modelID: modelID, reasoning: reasoningSelection,
-                            fastMode: fastModeSelection)
+                            fastMode: fastModeSelection, forkPoint: currentDraft?.newChat?.forkPoint)
     }
 
     private func chooseNewChatSetup() {
@@ -1492,7 +1533,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let currentPath = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines)
         let didChangeDirectory = currentPath != selectedPath
 
-        if didChangeDirectory, shownNewChatDraft == nil {
+        if didChangeDirectory, shownNewChatDraft == nil || draftForkPoint != nil {
             startNewConversation()
         }
         updateWorkingDirectory(selectedPath)
@@ -1638,6 +1679,22 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             parent: parent, parentTitle: parentTitle)
     }
 
+    var forkOrigin: ForkOrigin? {
+        guard let threadID = openThreadID else { return shownDraftForkSource.map(forkOrigin(of:)) }
+        let current = activeConversation?.id == threadID ? activeConversation : nil
+        guard let source = target.conversationList.header(id: threadID)?.forkedFromThreadID ?? current?.forkedFromThreadID
+        else { return nil }
+        return forkOrigin(of: ConversationAddress(hostID: hostID, threadID: source))
+    }
+
+    func forkOrigin(of source: ConversationAddress) -> ForkOrigin {
+        let list = target.conversationList
+        let title = source.hostID == hostID ? list.header(id: source.threadID).map {
+            ConversationSidebarProjection.title(for: $0, pinnedName: list.pinnedName(for: $0.id))
+        } : nil
+        return ForkOrigin(source: source, sourceTitle: title)
+    }
+
     var acceptsAttachments: Bool {
         target.acceptsWork && currentDraft != nil && acceptsConversationInput && currentConversationDispatchBlock != .otherClient
     }
@@ -1762,29 +1819,40 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         refreshReasoningVisibility()
     }
 
-    func restoreConversationSettings(_ thread: ConversationHeader, loadID: UUID, revision: UInt64) async {
+    func restoreConversationSettings(_ thread: ConversationHeader, loadID: UUID, revision: UInt64) async -> ConversationHeader? {
         let isCurrent = { self.isCurrentResumeLoad(loadID, threadID: thread.id) && self.settingsSelectionRevision == revision }
-        guard isCurrent() else { return }
-        if restorePendingConversationSettings(for: thread.id) { return }
+        guard isCurrent() else { return nil }
+        if restorePendingConversationSettings(for: thread.id) { return nil }
         async let current = target.gatewayClient.readThread(threadID: thread.id, includeTurns: false)
         let saved = await target.metadataService.metadata(for: thread.id)
-        guard isCurrent() else { return }
+        guard isCurrent() else { return nil }
         var cachedThread = thread
         cachedThread.extra = nil
         restorePicker(from: cachedThread, saved: saved)
+        var refreshed: ConversationHeader?
         do {
             let response = try await current
-            let refreshed = await ConversationHeader.prepare(response.thread)
-            guard isCurrent() else { return }
-            restorePicker(from: refreshed, saved: saved)
+            let read = await ConversationHeader.prepare(response.thread)
+            refreshed = read
+            guard isCurrent() else { return read }
+            restorePicker(from: read, saved: saved)
         } catch {
-            guard isCurrent() else { return }
+            guard isCurrent() else { return nil }
             logger.notice("Could not refresh conversation settings thread=\(thread.id): \(error.localizedDescription)")
         }
         if isCurrent() {
             pickerSelection.failIfLoading("Could not load this conversation’s model settings. Reopen the conversation to retry.")
         }
         if isCurrent() { refreshReasoningVisibility() }
+        return refreshed
+    }
+
+    private func adoptForkOrigin(of refreshed: ConversationHeader) async {
+        guard let source = refreshed.forkedFromThreadID else { return }
+        if activeConversation?.id == refreshed.id, activeConversation?.forkedFromThreadID != source {
+            activeConversation?.forkedFromThreadID = source
+        }
+        await target.conversationList.recordForkOrigin(threadID: refreshed.id, source: source)
     }
 
     @discardableResult
@@ -1916,7 +1984,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     private func applyModel(_ option: ModelOption, for threadID: String?, source: SettingsChangeSource) -> Bool {
         guard let current = pickerSettings(for: threadID),
-              threadID.map({ AgentProvider.provider(forThreadID: $0) == option.provider }) ?? true else { return false }
+              (threadID ?? draftForkPoint?.threadID).map({ AgentProvider.provider(forThreadID: $0) == option.provider }) ?? true
+        else { return false }
         let reasoning = visibleReasoning(pickerSelection.rememberedReasoning(for: option) ?? current.reasoning, for: option)
         applyPickerSettings(model: option, reasoning: reasoning,
             fastModeState: current.fastModeState.changingModel(from: current.model, to: option),

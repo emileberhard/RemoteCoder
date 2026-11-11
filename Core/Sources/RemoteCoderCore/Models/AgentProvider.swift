@@ -27,11 +27,14 @@ enum AgentProvider: String, Codable, Sendable, CaseIterable {
 
 enum AgentProviderError: LocalizedError {
     case workingDirectoryRequired(AgentProvider)
+    case forkRequiresProvider(AgentProvider)
 
     var errorDescription: String? {
         switch self {
         case .workingDirectoryRequired(let provider):
             return "\(provider.displayName) needs a working directory. Pick one from the folder button before sending."
+        case .forkRequiresProvider(let provider):
+            return "This edit forks a \(provider.displayName) conversation. Choose a \(provider.displayName) model before sending."
         }
     }
 }

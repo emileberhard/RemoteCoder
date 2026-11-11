@@ -80,7 +80,7 @@ struct StopContinuationTests {
         let message = ChatMessage(role: .user, text: "Hello")
         _ = try await session.submitDurably(message, input: "Hello")
         fixture.dispatcher.startTurn(.init(draft: draft, conversationID: conversationID,
-            userMessageID: message.id, input: "Hello", interactionMode: .text, settings: settings), sessionID: nil)
+            userMessageID: message.id, input: "Hello", interactionMode: .text, settings: settings), in: .start)
         await fixture.dispatcher.drain()
         let start = try await fixture.socket.request("thread/start")
         #expect(start.params?.objectValue?["acceptProviderFallback"] == .bool(true))
@@ -355,7 +355,7 @@ struct StopContinuationTests {
 }
 
 @MainActor
-private final class StopFixture: TurnDispatchHost {
+final class StopFixture: TurnDispatchHost {
     let temporary = TemporaryHostStorage()
     let hostID = UUID()
     let conversationID = UUID()
@@ -371,6 +371,7 @@ private final class StopFixture: TurnDispatchHost {
     var selectionCurrent = false
     var claudeQueue: Bool? = false
     var admittedSettings: TurnDispatcher.Settings?
+    var createdThreadReads: [String] = []
     var isRetired = false
     var refreshed = false
     var refreshWaiter: CheckedContinuation<Void, Never>?
@@ -463,6 +464,7 @@ private final class StopFixture: TurnDispatchHost {
     func retireGatewayJob(threadID: String, turnID: String?, jobID: String) {}
     func startActivityRefresh() { refreshed = true; refreshWaiter?.resume(); refreshWaiter = nil }
     func reconcileInputDelivery(threadID: String) async {}
+    func readHistory(ofCreatedThread threadID: String) { createdThreadReads.append(threadID) }
     func threadStarted(_ thread: CodexAppServerV2.Thread, session: ConversationSession, settingsRevision: UInt64,
                        requestedServiceTier: CodexAppServerV2.ServiceTierOverride?, admittedSettings: TurnDispatcher.Settings?) async { self.admittedSettings = admittedSettings }
     func selectionIsCurrent(revision: UInt64, threadID: String) -> Bool { selectionCurrent }
@@ -471,7 +473,7 @@ private final class StopFixture: TurnDispatchHost {
     }
 }
 
-private actor StopSocket {
+actor StopSocket {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "StopSocket")
     private var startedThread: CodexAppServerV2.Thread?
@@ -488,6 +490,8 @@ private actor StopSocket {
     private var received: [CodexAppServerV2.JSONRPC.Request] = []
     private var waiters: [(String, Int, AsyncStream<[CodexAppServerV2.JSONRPC.Request]>.Continuation)] = []
     private var queued: [CodexAppServerV2.QueuedSubmission] = []
+    private var deletes = true
+    private var forks = true
 
     init() throws {
         let parameters = NWParameters.tcp
@@ -555,10 +559,17 @@ private actor StopSocket {
                     if let startModel { result["model"] = .string(startModel) }
                     if let startEffort { result["reasoningEffort"] = .string(startEffort.rawValue) }
                     try await reply(request, result: .object(result))
+                case "thread/fork" where forks:
+                    try await reply(request, result: .object(["thread": try json(#require(startedThread)),
+                        "model": .string("gpt-6.1-sol"), "modelProvider": .string("openai"), "cwd": .string("/repo")]))
+                case "thread/fork":
+                    try await refuse(request)
                 case "thread/resume":
                     try await reply(request, result: .object(["thread": try json(CodexAppServerV2.Thread.historyFixture())]))
                 case "thread/queue/list":
                     try await reply(request, result: .object(["data": .array(queued.map { .object(["id": .string($0.id), "clientUserMessageId": .string($0.clientUserMessageId)]) })]))
+                case "thread/queue/delete":
+                    try await reply(request, result: .object(["deleted": .bool(deletes)]))
                 case "turn/start", "thread/queue/start":
                     try await reply(request, result: .object(["turn": .object(["id": .string("successor"), "status": .string("inProgress"), "items": .array([])])]))
                 default: try await reply(request, result: .object([:]))
@@ -577,6 +588,8 @@ private actor StopSocket {
 
     func count(_ method: String) -> Int { received.filter { $0.method == method }.count }
     func setQueue(_ entries: [CodexAppServerV2.QueuedSubmission]) { queued = entries }
+    func setDeletes(_ deletes: Bool) { self.deletes = deletes }
+    func setForks(_ forks: Bool) { self.forks = forks }
     func requests(_ method: String, count: Int) async throws -> [CodexAppServerV2.JSONRPC.Request] {
         if self.count(method) >= count { return received.filter { $0.method == method } }
         let pair = AsyncStream<[CodexAppServerV2.JSONRPC.Request]>.makeStream()

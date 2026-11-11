@@ -72,3 +72,39 @@ class ProcessIdentityTests(unittest.TestCase):
             finally:
                 replacement.kill()
                 replacement.wait(timeout=60)
+
+
+class GroupMembershipTests(unittest.TestCase):
+    def test_member_appearing_between_the_listings_keeps_the_group_live(self):
+        listings = iter(([101], [102]))
+        with (
+            patch.object(groups, "_group_pids", side_effect=lambda _: next(listings)),
+            patch.object(groups, "_is_live_member", return_value=False),
+        ):
+            self.assertTrue(groups.group_has_live_members(100))
+
+    def test_reused_pid_of_a_dead_member_keeps_the_group_live(self):
+        inspections = iter((False, True))
+        with (
+            patch.object(groups, "_group_pids", return_value=[101]),
+            patch.object(groups, "_is_live_member", side_effect=lambda *_: next(inspections)),
+        ):
+            self.assertTrue(groups.group_has_live_members(100))
+
+    def test_confirmed_listing_without_other_live_members_is_drained(self):
+        listings = iter(([100, 101, 102], [100, 101]))
+        with (
+            patch.object(groups, "_group_pids", side_effect=lambda _: next(listings)),
+            patch.object(groups, "_is_live_member", side_effect=lambda pid, _: pid == 100),
+        ):
+            self.assertFalse(groups.group_has_live_members(100, exclude_pid=100))
+
+    def test_zombie_member_is_not_live_and_a_running_one_is(self):
+        leader = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        try:
+            os.waitid(os.P_PID, leader.pid, os.WEXITED | os.WNOWAIT)
+            self.assertFalse(groups.group_has_live_members(leader.pid))
+        finally:
+            leader.wait(timeout=60)
+        self.assertFalse(groups.group_has_live_members(leader.pid))
+        self.assertTrue(groups.group_has_live_members(os.getpgrp()))

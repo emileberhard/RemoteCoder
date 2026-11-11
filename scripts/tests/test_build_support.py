@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 import build_support as build
 from build_support import Timings, atomic_json, build_environment
 from process_group import process_identity, terminate_group
+from hang_guard import HANG_SECONDS
 
 
 class BuildAdmissionTests(unittest.TestCase):
@@ -414,7 +415,7 @@ if mode == 'child': time.sleep(600)
                 owner.wait(timeout=60)
                 self.assert_lease_available(root / "build.lock", False)
                 terminate_group(job, 0.2)
-                deadline = time.monotonic() + 10
+                deadline = time.monotonic() + HANG_SECONDS
                 while True:
                     try:
                         self.assert_lease_available(root / "build.lock", True)
@@ -467,7 +468,7 @@ raise SystemExit(b.main())
                 )
                 try:
                     requested = root / "source.lock.requested"
-                    deadline = time.monotonic() + 10
+                    deadline = time.monotonic() + HANG_SECONDS
                     while not requested.exists() and time.monotonic() < deadline:
                         time.sleep(0.01)
                     self.assertTrue(requested.exists())
@@ -498,7 +499,7 @@ raise SystemExit(b.main())
                 env=environment,
             )
             try:
-                deadline = time.monotonic() + 5
+                deadline = time.monotonic() + HANG_SECONDS
                 while not (root / "started").exists() and time.monotonic() < deadline:
                     time.sleep(0.01)
                 self.assertTrue((root / "started").exists())

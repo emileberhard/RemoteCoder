@@ -17,6 +17,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from build_cache import CachePolicy
 from git_fixtures import init_repository
+from hang_guard import HANG_SECONDS
 
 HELPER = Path(__file__).resolve().parents[1] / "remote-build.py"
 spec = importlib.util.spec_from_file_location("remote_build", HELPER)
@@ -753,7 +754,7 @@ class RemoteBuildTests(unittest.TestCase):
                 stdin=left,
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=HANG_SECONDS,
                 check=False,
             )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -853,7 +854,7 @@ class RemoteBuildTests(unittest.TestCase):
                     )
                 )
             for process in processes:
-                output, error = process.communicate(timeout=10)
+                output, error = process.communicate(timeout=HANG_SECONDS)
                 self.assertEqual(process.returncode, 0, output + error)
                 self.assertEqual(json.loads(output)["exitCode"], 0)
             lines = (root / "order").read_text().splitlines()
@@ -965,7 +966,7 @@ class TransferLifecycleTests(unittest.TestCase):
                 "python3 -c 'import tempfile; print(tempfile.mkdtemp(prefix=\"rc-transfer-e2e-\"))'",
             ],
             text=True,
-            timeout=10,
+            timeout=HANG_SECONDS,
         ).strip()
         run = Path(remote) / "cache/runs/tiny"
         try:
@@ -989,7 +990,7 @@ class TransferLifecycleTests(unittest.TestCase):
                     subprocess.check_output(
                         [*shell, shlex.join(["python3", "-c", inspect, str(run)])],
                         text=True,
-                        timeout=10,
+                        timeout=HANG_SECONDS,
                     )
                 )
                 self.assertEqual(
@@ -1002,7 +1003,7 @@ class TransferLifecycleTests(unittest.TestCase):
                 [*shell, shlex.join(["python3", "-c", cleanup, remote])],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
-                timeout=10,
+                timeout=HANG_SECONDS,
                 check=False,
             )
             self.assertEqual(
@@ -1110,11 +1111,11 @@ class TransferLifecycleTests(unittest.TestCase):
             try:
                 receiver.stdin.write((29).to_bytes(4, "little"))
                 receiver.stdin.flush()
-                self.assertTrue(select.select([receiver.stdout], [], [], 5)[0])
+                self.assertTrue(select.select([receiver.stdout], [], [], HANG_SECONDS)[0])
                 self.assertEqual(len(receiver.stdout.read(4)), 4)
                 self.assertIsNone(receiver.poll())
                 if sys.platform == "darwin":
-                    assertions = subprocess.check_output(["pmset", "-g", "assertions"], text=True, errors="replace", timeout=5)
+                    assertions = subprocess.check_output(["pmset", "-g", "assertions"], text=True, errors="replace", timeout=HANG_SECONDS)
                     self.assertTrue(any(f"pid {receiver.pid}(" in line and
                                         'PreventUserIdleSystemSleep named: "RemoteCoder owned job"' in line
                                         for line in assertions.splitlines()))
@@ -1124,12 +1125,12 @@ class TransferLifecycleTests(unittest.TestCase):
                     with self.assertRaises(BlockingIOError):
                         fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     receiver.terminate()
-                    receiver.communicate(timeout=5)
+                    receiver.communicate(timeout=HANG_SECONDS)
                     fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
             finally:
                 if receiver.poll() is None:
                     receiver.kill()
-                    receiver.communicate(timeout=5)
+                    receiver.communicate(timeout=HANG_SECONDS)
 
 
 class ConnectedBuildTests(unittest.TestCase):
@@ -1172,7 +1173,7 @@ class ConnectedBuildTests(unittest.TestCase):
                     stdin=heartbeat,
                     capture_output=True,
                     text=True,
-                    timeout=10,
+                    timeout=HANG_SECONDS,
                     check=False,
                 )
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)

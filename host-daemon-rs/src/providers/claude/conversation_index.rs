@@ -62,6 +62,18 @@ pub(crate) enum TurnRecovery {
     Unresolved,
 }
 
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct ForkHistory {
+    pub turns: HashSet<String>,
+    pub cut: Option<CutTurn>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct CutTurn {
+    pub id: String,
+    pub items: HashSet<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 enum Record {
@@ -90,6 +102,7 @@ pub(crate) enum SessionOrigin {
 
 const MAX_PARENT_RECORD_BYTES: u64 = 512 * 1024;
 const MAX_MINTED_RECORD_BYTES: u64 = 4 * 1024;
+const MAX_FORK_ORIGIN_BYTES: u64 = 512;
 const MAX_PARENT_DELIVERIES: usize = 256;
 const MAX_EXECUTION_INDEX_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -295,6 +308,15 @@ fn fork_note_path(home: &Path, thread_id: &str) -> PathBuf {
     path(home, thread_id).with_extension("fork-note")
 }
 
+fn fork_origin_path(home: &Path, thread_id: &str) -> PathBuf {
+    path(home, thread_id).with_extension("fork-origin")
+}
+
+fn is_fork_source(thread_id: &str) -> bool {
+    crate::providers::claude::session_uuid_from_thread_id(thread_id)
+        .is_some_and(crate::ids::is_session_uuid)
+}
+
 fn with_fork_note<T>(
     home: &Path,
     thread: &str,
@@ -423,24 +445,45 @@ fn check_minted(data: &[u8], thread_id: &str, file: &Path) -> Result<SessionOrig
     Ok(record.origin)
 }
 
-fn fork(home: &Path, source_id: &str, target_id: &str, turns: &HashSet<String>) -> Result<()> {
-    let Some(source) = read_no_follow(&path(home, source_id))? else {
-        return Ok(());
-    };
+fn fork(home: &Path, source_id: &str, target_id: &str, history: &ForkHistory) -> Result<()> {
+    let source = read_no_follow(&path(home, source_id))?.unwrap_or_default();
     let mut kept = Vec::new();
+    let mut cut_started_at_ms = None;
     for line in source.split_inclusive(|byte| *byte == b'\n') {
         if line.last() != Some(&b'\n') {
             break;
         }
         let record: Record =
             serde_json::from_slice(line).context("invalid Claude identity record")?;
-        let turn = match &record {
-            Record::Item(item) => &item.turn_id,
-            Record::Turn(turn) => &turn.id,
+        let keeps = match &record {
+            Record::Item(item) => {
+                history.turns.contains(&item.turn_id)
+                    || history
+                        .cut
+                        .as_ref()
+                        .is_some_and(|cut| cut.id == item.turn_id && cut.items.contains(&item.id))
+            }
+            Record::Turn(turn) => {
+                if history.cut.as_ref().is_some_and(|cut| cut.id == turn.id) {
+                    cut_started_at_ms = Some(turn.started_at_ms);
+                }
+                history.turns.contains(&turn.id)
+            }
         };
-        if turns.contains(turn) {
+        if keeps {
             kept.extend_from_slice(line);
         }
+    }
+    if let Some(cut) = &history.cut {
+        kept.extend(serde_json::to_vec(&Record::Turn(TurnIdentity {
+            id: cut.id.clone(),
+            started_at_ms: cut_started_at_ms.unwrap_or_default(),
+            completed_at_ms: None,
+            status: "interrupted".to_string(),
+            error: None,
+            recovery: None,
+        }))?);
+        kept.push(b'\n');
     }
     if kept.is_empty() {
         return Ok(());
@@ -523,6 +566,41 @@ impl Store {
                 "Claude fork note already exists"
             );
             Ok(())
+        })
+        .await?
+    }
+
+    pub(crate) async fn record_fork_origin(&self, thread_id: &str, source: &str) -> Result<()> {
+        ensure!(
+            is_fork_source(source),
+            "{source:?} is not a Claude fork source"
+        );
+        let file = fork_origin_path(&self.home, thread_id);
+        let source = source.to_owned();
+        tokio::task::spawn_blocking(move || {
+            ensure!(
+                private_state::create_new(&file, source.as_bytes())? == Creation::Created,
+                "Claude fork origin already exists"
+            );
+            Ok(())
+        })
+        .await?
+    }
+
+    pub(crate) async fn fork_origin(&self, thread_id: &str) -> Result<Option<String>> {
+        let file = fork_origin_path(&self.home, thread_id);
+        tokio::task::spawn_blocking(move || {
+            let Some(data) = read_record(&file, MAX_FORK_ORIGIN_BYTES)? else {
+                return Ok(None);
+            };
+            let source = String::from_utf8(data)
+                .with_context(|| format!("{} is not UTF-8", file.display()))?;
+            ensure!(
+                is_fork_source(&source),
+                "{} does not name a Claude thread",
+                file.display()
+            );
+            Ok(Some(source))
         })
         .await?
     }
@@ -719,7 +797,7 @@ impl Store {
         &self,
         source_id: &str,
         target_id: &str,
-        turns: HashSet<String>,
+        history: ForkHistory,
     ) -> Result<()> {
         ensure!(
             source_id != target_id,
@@ -733,7 +811,7 @@ impl Store {
             target_id.to_owned(),
         );
         under_guards((source, target), move |(_, cached)| {
-            let forked = fork(&home, &source_id, &target_id, &turns);
+            let forked = fork(&home, &source_id, &target_id, &history);
             **cached = None;
             forked
         })

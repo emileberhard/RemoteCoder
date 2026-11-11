@@ -704,7 +704,7 @@ struct ConversationStateTests: ConversationHistoryFixtures {
         #expect(snapshot.items.contains { $0.id == ChatStreamItem.questionRowID(itemID: "call_q") })
     }
 
-    @Test func forkMenuRequiresFinalReplyAndCompletedTurn() throws {
+    @Test func onlyTheFinalReplyOfACompletedTurnForksThroughThatTurn() throws {
         var state = ConversationState(conversationID: UUID(), threadID: "thread")
         let items: [CodexAppServerV2.ThreadItem] = [
             .userMessage(id: "user", content: [.text(text: "Start", textElements: [])], clientId: nil),
@@ -713,28 +713,41 @@ struct ConversationStateTests: ConversationHistoryFixtures {
             .agentMessage(id: "final", text: "Done")
         ]
         state.merge(history(items: items))
-        #expect(ConversationProjection.project(state).forkableMessageIDs.isEmpty)
+        let running = ConversationProjection.project(state)
+        let commentary = try #require(running.messages.first { $0.text == "Working" })
+        let final = try #require(running.messages.last)
+        #expect(running.forkBoundaries == [commentary.id: .item(turnID: "turn", itemID: "commentary"),
+                                           final.id: .item(turnID: "turn", itemID: "final")])
 
         state.apply(try GatewayEventFixture.turn(.object(["threadId": .string("thread"),
             "turn": .object(["id": .string("turn"), "status": .string("completed")])]), method: "turn/completed"))
-        let finished = ConversationProjection.project(state)
-        let final = try #require(finished.messages.last)
-        #expect(finished.forkableMessageIDs == [final.id])
+        #expect(ConversationProjection.project(state).forkBoundaries == [commentary.id: .item(turnID: "turn", itemID: "commentary"),
+                                                                         final.id: .turnEnd("turn")])
 
         state.activity(turnID: "turn", active: true)
-        #expect(ConversationProjection.project(state).forkableMessageIDs.isEmpty)
+        #expect(ConversationProjection.project(state).forkBoundaries == running.forkBoundaries)
     }
 
-    @Test func forkMenuRejectsMissingTailAndActivityAfterReply() throws {
+    @Test func aReplyThatMayNotEndItsTurnForksOnlyThroughItsItem() throws {
         var state = ConversationState(conversationID: UUID(), threadID: "thread")
         state.merge(farBack([.init(turnId: "turn", item: .agentMessage(id: "reply", text: "An intermediate reply"), isComplete: true)]))
         state.turns["turn"]?.terminalStatus = .completed
         state.turns["turn"]?.terminal = true
-        #expect(ConversationProjection.project(state).forkableMessageIDs.isEmpty)
+        let reply = try #require(ConversationProjection.project(state).messages.last)
+        #expect(ConversationProjection.project(state).forkBoundaries == [reply.id: .item(turnID: "turn", itemID: "reply")])
 
         state.window = nil
         state.apply(try event("item/completed", item: tool("later-tool", status: .completed), ordinal: 2))
-        #expect(ConversationProjection.project(state).forkableMessageIDs.isEmpty)
+        #expect(ConversationProjection.project(state).forkBoundaries == [reply.id: .item(turnID: "turn", itemID: "reply")])
+    }
+
+    @Test func aStreamingReplyHasNoForkBoundary() throws {
+        var state = ConversationState(conversationID: UUID(), threadID: "thread")
+        state.merge(history(items: [.userMessage(id: "user", content: [.text(text: "Start", textElements: [])], clientId: nil)]))
+        state.apply(try event("item/started", item: .agentMessage(id: "answer", text: "Partial"), ordinal: 2))
+        let streaming = ConversationProjection.project(state)
+        #expect(streaming.messages.last?.isStreaming == true)
+        #expect(streaming.forkBoundaries.isEmpty)
     }
 
     @Test func aRememberedTokenUsageShowsWhileItsTurnIsTheFinishedNewest() throws {
@@ -1071,7 +1084,8 @@ extension ConversationStateTests {
         #expect(cached.items == fresh.items, step, sourceLocation: sourceLocation)
         #expect(cached.messages == fresh.messages, step, sourceLocation: sourceLocation)
         #expect(cached.timelines == fresh.timelines, step, sourceLocation: sourceLocation)
-        #expect(cached.forkableMessageIDs == fresh.forkableMessageIDs, step, sourceLocation: sourceLocation)
+        #expect(cached.forkBoundaries == fresh.forkBoundaries, step, sourceLocation: sourceLocation)
+        #expect(cached.editBases == fresh.editBases, step, sourceLocation: sourceLocation)
         #expect(cached.questionPrompts == fresh.questionPrompts, step, sourceLocation: sourceLocation)
         #expect(cached.pendingQuestion == fresh.pendingQuestion, step, sourceLocation: sourceLocation)
         #expect(cached.questionCoverage == fresh.questionCoverage, step, sourceLocation: sourceLocation)

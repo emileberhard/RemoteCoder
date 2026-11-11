@@ -22,6 +22,7 @@ struct AccountUsageWindow: Codable, Hashable, Sendable, Identifiable {
     let usedPercent: Double
     let resetsAt: Double?
     let model: String?
+    var observedAt: Double? = nil
 
     var remainingPercent: Int { Int((100 - min(100, max(0, usedPercent))).rounded()) }
     var resetDate: Date? { resetsAt.map(Date.init(timeIntervalSince1970:)) }

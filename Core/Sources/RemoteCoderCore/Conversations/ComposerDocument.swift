@@ -21,6 +21,7 @@ final class ComposerDocument {
         case insert(ComposerDocumentContent)
         case append(ComposerDocumentContent)
         case prepend(ComposerDocumentContent)
+        case appendParagraph(ComposerDocumentContent)
         case dictation(String)
         case updatePaste(UUID, String)
     }
@@ -237,6 +238,11 @@ final class ComposerDocument {
         case .prepend(let content):
             guard !content.runs.isEmpty else { return nil }
             return (NSRange(location: 0, length: 0), .init(runs: content.runs + (buffer.length == 0 ? [] : [.text("\n")])))
+        case .appendParagraph(let content):
+            let restored = content.avoidingPasteIDs(Set(self.content.pasted.map(\.id)))
+            guard !restored.runs.isEmpty else { return nil }
+            guard nonWhitespaceCount > 0 else { return (NSRange(location: 0, length: buffer.length), restored) }
+            return (NSRange(location: buffer.length, length: 0), .init(runs: [.text("\n\n")] + restored.runs))
         case .dictation(let text):
             let before = selection.location > 0 ? buffer.attributedSubstring(from: NSRange(location: selection.location - 1, length: 1)).string : ""
             let after = NSMaxRange(selection) < buffer.length ? buffer.attributedSubstring(from: NSRange(location: NSMaxRange(selection), length: 1)).string : ""

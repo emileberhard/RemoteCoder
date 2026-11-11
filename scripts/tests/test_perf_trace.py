@@ -9,7 +9,10 @@ import threading
 import unittest
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+from hang_guard import HANG_SECONDS
 
 loader = importlib.machinery.SourceFileLoader("perf_trace", str(Path(__file__).resolve().parents[1] / "perf-trace"))
 spec = importlib.util.spec_from_loader(loader.name, loader)
@@ -313,7 +316,7 @@ class WaitingExport(Export):
         self.killed.set()
 
     def wait(self):
-        if not self.killed.wait(3):
+        if not self.killed.wait(HANG_SECONDS):
             raise RuntimeError("export guard did not stop the fixture")
         return self.returncode
 
@@ -856,10 +859,18 @@ class PerfTraceTests(unittest.TestCase):
         entered = threading.Event()
         release = threading.Event()
         failures = []
+        limit = 0.7
+
+        class DeadlineAfterProbe(threading.Event):
+            def wait(self, timeout=None):
+                if timeout != limit:
+                    return super().wait(timeout)
+                entered.wait(HANG_SECONDS)
+                return self.is_set()
 
         def blocked_probe(pid):
             entered.set()
-            release.wait(3)
+            release.wait(HANG_SECONDS)
             return 0
 
         def summarize():
@@ -870,22 +881,23 @@ class PerfTraceTests(unittest.TestCase):
                 failures.append(error)
 
         with (
-            patch.object(trace, "EXPORT_TIMEOUT_SECONDS", 0.7),
+            patch.object(trace, "EXPORT_TIMEOUT_SECONDS", limit),
             patch.object(trace, "memory_bytes", side_effect=blocked_probe),
             patch.object(trace.subprocess, "Popen", return_value=export),
+            patch.object(trace, "threading", SimpleNamespace(Event=DeadlineAfterProbe, Lock=threading.Lock, Thread=threading.Thread)),
         ):
             owner = threading.Thread(target=summarize)
             owner.start()
             try:
-                self.assertTrue(entered.wait(1))
-                self.assertTrue(export.killed.wait(0.6), "a blocked memory probe defeated the export deadline")
+                self.assertTrue(entered.wait(HANG_SECONDS))
+                self.assertTrue(export.killed.wait(HANG_SECONDS), "a blocked memory probe defeated the export deadline")
             finally:
                 release.set()
-                owner.join(3)
+                owner.join(HANG_SECONDS)
         self.assertFalse(owner.is_alive())
         self.assertEqual(len(failures), 1)
         self.assertIsInstance(failures[0], SystemExit)
-        self.assertIn("seconds", str(failures[0]))
+        self.assertIn(f"(limit {limit} seconds)", str(failures[0]))
 
     def test_memory_probe_error_or_timeout_stops_and_reaps_export(self):
         for probe, error in (

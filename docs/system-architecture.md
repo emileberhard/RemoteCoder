@@ -637,7 +637,10 @@ Claude reads only this key; interaction-mode context remains Codex-only. Voice
 steers originate in gateway handoffs and carry no app screen note.
 
 The gateway owns fork context and builds the same wording for both providers,
-using the source's name, otherwise preview, and cwd. The shared title is one line,
+using the source's name, otherwise preview, and cwd. A Claude fork that ends inside
+a turn adds that the task continues in the source and is not to be continued
+unless the user asks, that files may have changed, and that background agents,
+shells and scheduled wakes belong to the source. The shared title is one line,
 bounded to 120 characters including an ellipsis when truncated. Only a
 client-originated
 `thread/fork` gets it; internal side-question forks do not. Codex's native request
@@ -812,7 +815,8 @@ shown draft when it is empty and otherwise moves to a fresh key, so a long
 dictation never blocks another prompt; changing the folder moves the shown
 draft rather than starting another. A blank unsent draft is never stored: the
 save deletes its record. Each draft keeps its edit time and its `NewChatSetup`
-(folder, model, reasoning and Fast). The screen records it explicitly: when the
+(folder, model, reasoning and Fast, and for Edit as Fork the source thread
+and turn to fork after, which the store never changes once set). The screen records it explicitly: when the
 user picks a folder, model, reasoning or Fast, when a moved draft adopts its
 settings, and while a blank draft follows the defaults. Opening a draft applies
 its setup without writing it back, and a defaults change in Settings skips
@@ -827,7 +831,9 @@ dictates, and edits that arrive after the deletion are dropped rather than
 saved again. `LaunchRestore` records the shown draft
 like a conversation, and the primary window reopens it on launch. Once its
 message is durably submitted, the draft follows the local conversation and
-then its server thread and drops its setup. A send clears the composer at
+then its server thread and drops its setup. A fork point stays until the
+thread exists, so the next send after a failed fork forks again rather than
+starting an empty thread. A send clears the composer at
 once, and text typed afterwards stays in the draft even if selection changes
 during the send. Until the transcript durably holds the message, draft saves
 store it ahead of that later text, so a crash loses neither; a failed save
@@ -1385,7 +1391,7 @@ retains its explicit ID. On iOS, `TranscriptLayout` shares measurements between
 sizing and placement, retaining at most two proposed widths. `updateCache`
 clears its measurements when the layout or any subview changes, including
 streaming renders, folding, image loading and zoom. On Mac,
-`TranscriptRowInputs` gates native root replacement, including fork availability,
+`TranscriptRowInputs` gates native root replacement, including fork and Edit as Fork availability,
 history-edge status and queued-message Send Now availability. The row factory
 runs only on admission or changed inputs/environment; retained roots hold concrete
 row content rather than a builder capturing a historical transcript snapshot.
@@ -1929,8 +1935,21 @@ threads changes, only newly added threads get a question read; the rest follow
 `conversation/questions/changed`. Required notifications
 remain enabled.
 
-Forking a bubble uses its canonical turn identity and never reads the full
-thread or falls back to a different fork boundary. Browsing does not resume a
+Forking a bubble uses its canonical turn identity, or its canonical item
+identity inside that turn on a Claude host that advertises item forks, and never
+reads the full thread or falls back to a different fork boundary. Edit as Fork forks through
+the canonical id of the turn before the edited message, taken from the loaded
+history window's order or, for a live turn after a window that reaches the tail,
+from the conversation's turn order, which notification-gap recovery keeps
+contiguous. An unloaded, aliased, unfinished or unknown previous turn offers no
+edit. A send that created a thread has `TranscriptRecovery` reconcile that
+thread's tail: a fork once its turn is accepted, which shows its inherited
+turns, and a new thread once its first turn completes, since its history is
+not written before. Either way the conversation gains its history window. A fork's origin comes from
+`forkedFromId` on the `thread/read` the app already makes when it opens a
+conversation (and on fork responses); list rows never carry it, so the header
+cache retains a known origin across list refreshes and an absent one stays
+unknown. Browsing does not resume a
 thread. Both providers page history with the same app-server v2
 `thread/turns/list` and `thread/items/list`; the gateway answers them for
 Claude threads with Codex's wire shape, cursor semantics and error codes. Token
@@ -2106,7 +2125,10 @@ drain owner can run. Each thread's drain waits only for that thread's restart
 recovery, and an entry whose input was written is settled from the session
 transcript, never requeued blindly.
 `thread/queue/changed` is stored like other thread notifications; clients read
-`thread/queue/list` after it, on reconnect and after relaunch.
+`thread/queue/list` after it, on reconnect and after relaunch. The app edits a
+queued message with `thread/queue/delete` alone, saving the text to the draft
+before dropping its write-ahead receipt, so both providers need no update or
+reorder RPC.
 `host-daemon-rs/AGENTS.md` (*Gateway RPCs*, and *Claude provider* for the
 Claude queue) owns the contract.
 

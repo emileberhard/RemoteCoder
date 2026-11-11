@@ -136,6 +136,7 @@ pub(crate) struct LiveActivitySnapshot {
 pub(crate) struct FleetContent {
     #[serde(flatten)]
     pub content: LiveActivityContent,
+    pub active_task_subagent_counts: Vec<usize>,
     #[serde(rename = "unavailableHostIDs")]
     pub unavailable_host_ids: Vec<String>,
     #[serde(skip)]
@@ -191,16 +192,18 @@ impl SourceProjection {
     pub(crate) fn running_trees(&self, host: &str) -> BTreeSet<AgentAddress> {
         self.running_roots
             .values()
-            .map(|root| {
-                self.remote_parents
-                    .get(root)
-                    .cloned()
-                    .unwrap_or_else(|| AgentAddress {
-                        host_id: host.to_owned(),
-                        thread_id: root.clone(),
-                    })
-            })
+            .map(|root| self.tree_address(host, root))
             .collect()
+    }
+
+    fn tree_address(&self, host: &str, root: &str) -> AgentAddress {
+        self.remote_parents
+            .get(root)
+            .cloned()
+            .unwrap_or_else(|| AgentAddress {
+                host_id: host.to_owned(),
+                thread_id: root.to_owned(),
+            })
     }
 
     fn validate_report(&self, host: &str) -> Result<()> {
@@ -527,7 +530,7 @@ impl Sources {
     }
 
     pub(super) fn fleet_content(&self, hosts: &[String], local_host: &str) -> FleetContent {
-        let mut trees = BTreeSet::new();
+        let mut trees = BTreeMap::new();
         let mut attention = Vec::new();
         let mut attention_count = 0;
         let mut unavailable_host_ids = Vec::new();
@@ -556,8 +559,9 @@ impl Sources {
             let Some(projection) = projection else {
                 continue;
             };
-            for tree in projection.running_trees(host) {
-                trees.insert(match self.owning_tree(tree, local_host) {
+            for (thread, root) in &projection.running_roots {
+                let tree = projection.tree_address(host, root);
+                let owner = match self.owning_tree(tree, local_host) {
                     Ok(root) => root,
                     Err(unresolved) => {
                         let owner = if hosts.contains(&unresolved.host_id) {
@@ -570,7 +574,9 @@ impl Sources {
                         }
                         unresolved
                     }
-                });
+                };
+                let is_subagent = owner.host_id != *host || owner.thread_id != *thread;
+                *trees.entry(owner).or_insert(0) += usize::from(is_subagent);
             }
             attention_count += projection.content.attention_count;
             attention.extend(
@@ -593,6 +599,7 @@ impl Sources {
                 attention,
                 attention_count,
             },
+            active_task_subagent_counts: trees.into_values().collect(),
             certifies: certifies && unavailable_host_ids.is_empty(),
             unavailable_host_ids,
         }

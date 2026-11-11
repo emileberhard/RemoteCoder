@@ -272,6 +272,7 @@ async fn host_info_reports_the_gateway_home_directory() {
         reply["result"]["claudeQueue"], false,
         "no queue loop runs before the gateway starts Claude"
     );
+    assert_eq!(reply["result"]["claudeItemFork"], true);
     assert_eq!(
         reply["result"]["automationsAuthority"],
         json!(crate::config::host_profile::AutomationAuthority::authority().unwrap())
@@ -5783,6 +5784,121 @@ async fn disabled_claude_history_is_empty_but_read_failures_are_errors() {
     };
     let response: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(response["error"]["code"], RpcCode::Internal.value());
+}
+
+#[tokio::test]
+async fn claude_turn_without_a_model_keeps_the_recorded_selection() {
+    let owner = Arc::new(crate::providers::claude::settings::ClaudeSettings::isolated_for_test());
+    let home = owner.settings.claude_home.clone();
+    let cwd = home.to_string_lossy().into_owned();
+    let session = "11111111-2222-4333-8444-555555555555";
+    let thread = format!("claude_{session}");
+    let history = crate::providers::claude::timeline::session_path_for_cwd(&home, &cwd, session);
+    std::fs::create_dir_all(history.parent().unwrap()).unwrap();
+    std::fs::write(
+        &history,
+        "{\"type\":\"user\",\"message\":\"existing history\"}\n",
+    )
+    .unwrap();
+    let stub = home.join("claude-stub");
+    crate::test_support::write_claude_cli_stub(
+        &stub,
+        crate::test_support::ClaudeCliMode::MessagesAcknowledgeInterrupt(history),
+    );
+    let settings = ClaudeSettings {
+        enabled: true,
+        claude_path: stub,
+        mcp_endpoint: "http://127.0.0.1:8787/mcp".to_owned(),
+        ..owner.settings.clone()
+    };
+    let codex = Arc::new(CodexAppServer::new(
+        PathBuf::from("/bin/true"),
+        HashMap::new(),
+    ));
+    let gateway = crate::test_support::TestGateway::with_settings(codex, settings.clone(), owner);
+    let (events, mut events_rx) = mpsc::channel(128);
+    let agent = crate::providers::claude::ClaudeSupervisor::new(
+        settings,
+        events,
+        crate::observability::journal::Journal::disabled(),
+        crate::agents::mcp::McpTokens::default(),
+    );
+    gateway.set_claude_agent(Arc::clone(&agent));
+    agent
+        .record_initial_selection(
+            &thread,
+            &cwd,
+            &crate::providers::claude::ClaudeSelection {
+                model: "opus".to_owned(),
+                effort: Some("low".to_owned()),
+                fast: true,
+            },
+        )
+        .await
+        .unwrap();
+    let (tx, mut out_rx) = mpsc::channel(2);
+    let out_tx = test_client(1, tx);
+    let mut replies = Vec::new();
+    for selection in [
+        json!({}),
+        json!({"effort": "high"}),
+        json!({"serviceTier": null}),
+    ] {
+        let mut params = json!({
+            "threadId": thread,
+            "cwd": cwd,
+            "input": [{"type": "text", "text": "initial"}],
+        });
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(selection.as_object().unwrap().clone());
+        gateway
+            .handle_claude_rpc(
+                &out_tx,
+                ClaudeMethod::TurnStart,
+                &request("turn/start", params),
+            )
+            .await
+            .unwrap();
+        let ClientCommand::Text(text) = out_rx.recv().await.unwrap() else {
+            panic!("expected JSON response")
+        };
+        replies.push(serde_json::from_str::<Value>(&text).unwrap());
+    }
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = crate::test_support::claude_event(events_rx.recv().await.unwrap());
+            if event["method"] == "turn/completed" {
+                return event;
+            }
+        }
+    })
+    .await;
+    agent.stop_all().await;
+    let launches: Vec<Value> = std::fs::read_to_string(home.join("launches.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        replies[0]["result"]["turn"]["status"], "inProgress",
+        "{replies:#?}"
+    );
+    assert_eq!(replies[1]["error"]["code"], RpcCode::InvalidParams.value());
+    assert_eq!(replies[2]["error"]["code"], RpcCode::InvalidParams.value());
+    assert_eq!(completed.unwrap()["params"]["turn"]["status"], "completed");
+    assert_eq!(launches.len(), 1);
+    let args = launches[0]["argv"].as_array().unwrap();
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == [json!("--model"), json!("opus")])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == [json!("--effort"), json!("low")])
+    );
+    assert_eq!(launches[0]["fastMode"], true);
 }
 
 #[tokio::test]

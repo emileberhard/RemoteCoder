@@ -151,7 +151,8 @@ final class ComposerDraftStore {
     }
 
     func setNewChatSetup(_ setup: NewChatSetup, in draft: ComposerDraft) {
-        guard acceptsInput, acceptsChanges(), Destination.isNewChat(key: draft.destination), draft.newChat != setup else { return }
+        guard acceptsInput, acceptsChanges(), Destination.isNewChat(key: draft.destination), draft.newChat != setup,
+              draft.newChat?.forkPoint.map({ $0 == setup.forkPoint }) ?? true else { return }
         draft.newChat = setup
         markDirty(draft)
     }
@@ -390,6 +391,15 @@ final class ComposerDraftStore {
         pendingReceipts[recordingID] = .init(draftID: draft.id, requiredRevision: draft.revision, receivedAt: .now)
     }
 
+    func restoreMessage(_ content: ComposerDocumentContent, to draft: ComposerDraft) async throws {
+        try requireActive()
+        guard !draft.isDiscarded else { throw DraftSaveError(message: "The draft was discarded.") }
+        try await document(for: draft).apply(.appendParagraph(content))
+        try requireActive()
+        guard !draft.isDiscarded else { throw DraftSaveError(message: "The draft was discarded.") }
+        guard await flush() else { throw DraftSaveError(message: errorMessage ?? "The draft could not be saved.") }
+    }
+
     func hasSavedReceipt(for recordingID: UUID) async throws -> Bool {
         try requireActive()
         let backing = try await open()
@@ -433,7 +443,7 @@ final class ComposerDraftStore {
         guard acceptsChanges() else { return }
         if Destination.isNewChat(key: draft.destination) {
             draft.destination = Destination.conversation(conversationID).key
-            draft.newChat = nil
+            if draft.newChat?.forkPoint == nil { draft.newChat = nil }
         }
         remember(draft)
         draft.revision += 1
@@ -520,7 +530,7 @@ final class ComposerDraftStore {
                 throw ComposerDraftPersistence.Failure.occupiedDestination
             }
             draft.destination = destination.key
-            if Destination.isNewChat(key: previous) { draft.newChat = nil }
+            draft.newChat = nil
             forget(previous)
             changed(draft)
             remember(draft)
