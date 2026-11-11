@@ -191,19 +191,6 @@ impl Record<'_> {
                             None,
                         )?;
                     }
-                    "agent_message" => {
-                        self.item(
-                            state,
-                            at,
-                            0,
-                            "assistant",
-                            text(&p["content"]),
-                            "/payload/content",
-                            &p["content"],
-                            None,
-                            None,
-                        )?;
-                    }
                     "reasoning" => {
                         self.item(
                             state,

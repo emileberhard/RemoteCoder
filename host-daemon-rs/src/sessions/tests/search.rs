@@ -809,7 +809,8 @@ fn sessions_conversations_preserve_response_prompts_before_authoritative_history
             json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"First reply"}]}}),
             json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"second"}}),
             json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"EarlierSecondAnchor"}]}}),
-            json!({"type":"response_item","payload":{"type":"agent_message","content":[{"type":"output_text","text":"Second reply"}]}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Second reply"}]}}),
+            json!({"type":"response_item","payload":{"type":"agent_message","author":"child","recipient":"parent","content":[{"type":"input_text","text":"InjectedAgentMessageMarker"}]}}),
             json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"third"}}),
             json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Image wrapper"},{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="},{"type":"input_text","text":"Third prompt"}]}}),
             json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":"third","item":{"type":"UserMessage","id":"third-user","content":[{"type":"text","text":"Third"},{"type":"image","image_url":"data:image/png;base64,aGVsbG8="},{"type":"text","text":"prompt"}]}}}),
@@ -827,6 +828,7 @@ fn sessions_conversations_preserve_response_prompts_before_authoritative_history
         texts,
         ["EarlierFirstAnchor", "EarlierSecondAnchor", "Third\nprompt"]
     );
+    assert_eq!(f.store.reader()?.query_row("SELECT count(*) FROM item WHERE kind='assistant' AND text='InjectedAgentMessageMarker'",[],|r|r.get::<_,i64>(0))?,0);
     Ok(())
 }
 
