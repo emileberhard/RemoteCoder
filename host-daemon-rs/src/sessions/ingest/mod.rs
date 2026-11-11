@@ -279,11 +279,9 @@ pub(super) fn scan_serving(
     }
     if matches!(scope, Scope::Full) {
         sources.sort_by_cached_key(|(_, path)| {
-            std::cmp::Reverse(
-                std::fs::metadata(path)
-                    .and_then(|metadata| metadata.modified())
-                    .ok(),
-            )
+            std::fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
         });
     }
     for batch in sources.chunks(32) {

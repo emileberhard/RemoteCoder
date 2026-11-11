@@ -141,7 +141,7 @@ allocating text or base64 values, with SQLITE_LIMIT_LENGTH on the query connecti
 only; ingestion and other SQLite users have no process-wide heap limit.
 
 Search returns newest-ingested items first with a descending rowid cursor.
-Background rebuilds ingest sources newest-first by mtime; appended records enter
+Background rebuilds ingest sources oldest-first by mtime; appended records enter
 at the head of search naturally. Ordering uses FTS rowid directly and stops at
 the page limit without sorting all matches. Timestamps remain exact predicates:
 item timestamps and ingestion order are not interchangeable. A date window with
