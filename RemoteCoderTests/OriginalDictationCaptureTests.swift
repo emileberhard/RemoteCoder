@@ -48,6 +48,7 @@ struct OriginalDictationCaptureTests {
         let original = try #require(retained.originalURL)
         #expect(FileManager.default.fileExists(atPath: original.path))
         #expect(retained.capture.sampleRate == 48_000)
+        #expect(try await DictationVoiceProfiles.decode(original).count > 0)
     }
 
     @Test @MainActor func filteredLibraryVersionsKeepEachModelsTextAndParent() async throws {
@@ -65,8 +66,14 @@ struct OriginalDictationCaptureTests {
         let capture = try #require(try await library.prepare(configuration: .init(model: .openAIGPT4oMini, language: .english)))
         library.isEnabled = false
         let session = DictationVoiceSession(check: fixture.check)
+        let requested = AsyncStream<Void>.makeStream()
         session.append(fixture.mix)
-        await session.finish { _, _ in fixture.phrases }
+        await session.finish { _, _ in
+            requested.continuation.yield(())
+            requested.continuation.finish()
+            return fixture.phrases
+        }
+        for await _ in requested.stream { break }
         let original = DictationTranscript(text: "Every selected-provider word.", model: "openai/selected")
         let filtered = try await session.resolve(original)
         #expect(filtered.transcript.removedVoices)

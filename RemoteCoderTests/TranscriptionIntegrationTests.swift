@@ -15,7 +15,21 @@ struct TranscriptionIntegrationTests {
         let configuration = TranscriptionConfiguration(model: .azureMAITranscribe2, language: .english,
             customVocabulary: ["OpenAI", "AssemblyAI", "ElevenLabs"])
         for repetitions in [1, 2, 4] {
-            let fixture = try await VoiceFixture(trusted: true)
+            let requested = AsyncStream<Void>.makeStream()
+            let failure = Mutex("none")
+            let fixture = try await VoiceFixture(trusted: true) { _, error in
+                failure.withLock { value in
+                    switch error {
+                    case SpeechKitError.httpFailure(let status, _): value = "HTTP \(status)"
+                    case SpeechKitError.relayRejected(let kind): value = "relayRejected(\(kind))"
+                    case SpeechKitError.invalidResponse: value = "invalidResponse"
+                    default: value = String(reflecting: type(of: error))
+                    }
+                }
+                requested.continuation.yield(())
+                requested.continuation.finish()
+            }
+            #expect(try await fixture.store.profile().isTrusted)
             defer { fixture.cleanUp() }
             let recordings = try TemporaryDictationRecordings()
             defer { recordings.cleanUp() }
@@ -27,8 +41,11 @@ struct TranscriptionIntegrationTests {
             let check = DictationVoiceSession(check: fixture.check)
             check.append(pcm)
             await check.finish { pcm, uploaded in
-                try await service.speakerPhrases(pcm, configuration: configuration, uploadFinished: uploaded)
+                requested.continuation.yield(())
+                requested.continuation.finish()
+                return try await service.speakerPhrases(pcm, configuration: configuration, uploadFinished: uploaded)
             }
+            for await _ in requested.stream { break }
             let original = try await service.transcribe(recording, configuration: configuration)
             let result = try await check.resolve(original)
             #expect(!result.transcript.text.isEmpty)
@@ -37,7 +54,7 @@ struct TranscriptionIntegrationTests {
             #expect(result.transcript.model == configuration.model.batchLibraryID)
             let upload = result.upload.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
             let completion = result.result?.labelledReplyTime.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
-            print("Azure relay voice check audio_ms=\(pcm.count * 1000 / 32_000) upload_ms=\(upload) completion_ms=\(completion) added_wait_ms=\(Int(result.wait / .milliseconds(1)))")
+            print("Azure relay voice check path=\(result.transcript.outcome?.path.rawValue ?? "unknown") failure=\(failure.withLock { $0 }) audio_ms=\(pcm.count * 1000 / 32_000) upload_ms=\(upload) completion_ms=\(completion) added_wait_ms=\(Int(result.wait / .milliseconds(1)))")
             await check.cancel()
         }
     }

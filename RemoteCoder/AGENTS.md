@@ -1852,6 +1852,8 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   rejected label preserves the selected provider's transcript. Filter before
   cleanup, retain everyone's text, and carry actual model provenance through
   `DictationTranscript`. Use existing library result kinds and parent IDs.
+  My Voice shows Unavailable only after a missing/refused Azure route; a slow
+  check or learning error keeps profile status and reports its own failure.
   The composer document owns persisted restore ranges; edits outside move them,
   edits replacing their text remove them, and sending clears them. Voice Mode
   bypasses this path.

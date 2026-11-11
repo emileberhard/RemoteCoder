@@ -185,7 +185,7 @@ struct VoiceFixture: Sendable {
     let check: VoiceCheck
     let store: VoiceProfileStore
 
-    init(trusted: Bool) async throws {
+    init(trusted: Bool, onFailure: @escaping @Sendable (VoiceFilterStage, any Error) -> Void = { _, _ in }) async throws {
         directory = URL.temporaryDirectory.appending(path: "dictation-voices-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let bundle = Bundle(for: VoiceFixtureBundle.self)
@@ -210,7 +210,7 @@ struct VoiceFixture: Sendable {
             try JSONSerialization.data(withJSONObject: profile).write(to: directory.appending(path: "VoiceProfile.json"))
         }
         store = VoiceProfileStore(accountDirectory: directory)
-        check = try VoiceCheck(profile: try await store.profile(), store: store, startedAt: .now, onFailure: { _, _ in })
+        check = try VoiceCheck(profile: try await store.profile(), store: store, startedAt: .now, onFailure: onFailure)
     }
 
     func cleanUp() { store.retire(); try? FileManager.default.removeItem(at: directory) }
@@ -237,15 +237,19 @@ private final class VoiceFixtureRecorder: VoiceInputRecording {
 
 private final class InjectedVoiceTranscriber: TranscriptionService {
     let requestCount = Mutex(0)
+    private let requested = AsyncStream<Void>.makeStream()
     let phrases: [SpeakerPhrase]
     init(phrases: [SpeakerPhrase]) { self.phrases = phrases }
     func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription? { nil }
     @concurrent func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
-        DictationTranscript(text: "Selected provider text.", model: configuration.model.batchLibraryID)
+        for await _ in requested.stream { break }
+        return DictationTranscript(text: "Selected provider text.", model: configuration.model.batchLibraryID)
     }
     @concurrent func speakerPhrases(_ pcm16: Data, configuration: TranscriptionConfiguration,
         uploadFinished: @escaping @Sendable (Duration) -> Void) async throws -> [SpeakerPhrase] {
         requestCount.withLock { $0 += 1 }
+        requested.continuation.yield(())
+        requested.continuation.finish()
         uploadFinished(.milliseconds(10))
         return phrases
     }

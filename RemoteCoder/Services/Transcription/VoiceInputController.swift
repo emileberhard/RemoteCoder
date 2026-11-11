@@ -185,8 +185,9 @@ final class VoiceInputController {
         self.active = nil
         if let recognition = active.recognition {
             let transcriber = transcriber
+            let configuration = active.configuration
             await recognition.finish { pcm, uploaded in
-                try await transcriber.speakerPhrases(pcm, configuration: active.configuration, uploadFinished: uploaded)
+                try await transcriber.speakerPhrases(pcm, configuration: configuration, uploadFinished: uploaded)
             }
         }
         if let archive = active.archive { library?.finish(archive) }
