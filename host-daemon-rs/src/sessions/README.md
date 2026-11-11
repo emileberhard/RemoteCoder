@@ -247,8 +247,9 @@ origin-owned facts. Codex typed prompts and steers primarily use paginated
 prepared user input. Legacy-history `event_msg/user_message` records are the
 other authoritative shape. Sources without either shape classify user-role
 response records with the provider's contextual-message rules. The first
-authoritative event demotes every preceding response-user row in that source;
-all later response rows remain system context. This source-level choice does
+authoritative event demotes response-user rows after the last assistant item,
+reconciling only its current prompt; earlier completed turns keep their typed
+text. All later response rows remain system context. This source-level choice does
 not compare text, so image labels and attached-file wrappers cannot duplicate
 a prompt. Both authoritative shapes can coexist during a history-mode change.
 Agent-message and injected-notification envelopes remain system items.

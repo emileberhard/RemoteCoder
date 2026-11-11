@@ -798,6 +798,39 @@ fn sessions_conversations_select_codex_user_evidence_by_source_shape() -> Result
 }
 
 #[test]
+fn sessions_conversations_preserve_response_prompts_before_authoritative_history() -> Result<()> {
+    let f = fixture();
+    write(
+        &f.codex,
+        &[
+            codex_meta("codex-root", None),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"first"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"EarlierFirstAnchor"}]}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"First reply"}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"second"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"EarlierSecondAnchor"}]}}),
+            json!({"type":"response_item","payload":{"type":"agent_message","content":[{"type":"output_text","text":"Second reply"}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"third"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Image wrapper"},{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="},{"type":"input_text","text":"Third prompt"}]}}),
+            json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":"third","item":{"type":"UserMessage","id":"third-user","content":[{"type":"text","text":"Third"},{"type":"image","image_url":"data:image/png;base64,aGVsbG8="},{"type":"text","text":"prompt"}]}}}),
+        ],
+    );
+    scan(&f);
+    let key = crate::sessions::session_key(&f.origins[0], "codex-root");
+    let texts: Vec<String> = f
+        .store
+        .reader()?
+        .prepare("SELECT text FROM item WHERE session_key=?1 AND kind='user' ORDER BY seq")?
+        .query_map([key], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(
+        texts,
+        ["EarlierFirstAnchor", "EarlierSecondAnchor", "Third\nprompt"]
+    );
+    Ok(())
+}
+
+#[test]
 fn sessions_conversations_preserve_origin_facts_through_replacement() -> Result<()> {
     let f = fixture();
     scan(&f);

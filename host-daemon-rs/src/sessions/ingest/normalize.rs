@@ -191,6 +191,19 @@ impl Record<'_> {
                             None,
                         )?;
                     }
+                    "agent_message" => {
+                        self.item(
+                            state,
+                            at,
+                            0,
+                            "assistant",
+                            text(&p["content"]),
+                            "/payload/content",
+                            &p["content"],
+                            None,
+                            None,
+                        )?;
+                    }
                     "reasoning" => {
                         self.item(
                             state,
@@ -473,7 +486,7 @@ impl Record<'_> {
         if !state.authoritative_user_events
             && let Some(thread) = &state.thread
         {
-            self.db.execute("UPDATE item SET kind='system' WHERE session_key=?1 AND kind='user' AND json_extract(source_ref,'$.pointer')='/payload/content'", [super::super::session_key(self.origin,thread)])?;
+            self.db.execute("UPDATE item SET kind='system' WHERE session_key=?1 AND kind='user' AND seq>coalesce((SELECT seq FROM item WHERE session_key=?1 AND kind='assistant' ORDER BY seq DESC LIMIT 1),-1) AND json_extract(source_ref,'$.pointer')='/payload/content'", [super::super::session_key(self.origin,thread)])?;
         }
         state.authoritative_user_events = true;
         self.item(

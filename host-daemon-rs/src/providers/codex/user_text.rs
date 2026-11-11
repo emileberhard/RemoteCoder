@@ -60,5 +60,6 @@ pub(crate) fn completed_message(content: &Value) -> String {
         .flatten()
         .filter(|part| part["type"] == "text")
         .filter_map(|part| part["text"].as_str())
-        .collect::<String>()
+        .collect::<Vec<_>>()
+        .join("\n")
 }
