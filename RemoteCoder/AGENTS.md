@@ -1840,6 +1840,22 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
 
 ## Speech output and dictation (`Services/Speech/`, `Services/Transcription/`)
 
+- `DictationVoiceProfiles` is workspace-owned and shared by every host's
+  controller, independent of the optional library. Only the explicit Voices
+  choice and forget timestamp sync; the device-local template never leaves its
+  app directory or enters backup. Derive the default from the resolved capture
+  model in `TranscriptionSettings.defaultVoices`: Azure uses Only Mine; other
+  models use Everyone until explicitly changed.
+- Only Mine feeds the shared `VoiceCheck` and its bounded upload buffer with
+  identical 16 kHz PCM16 from the capture sink, including for 24 kHz providers.
+  Azure labels use the existing relay. Failure, an untrusted profile or no
+  rejected label preserves the selected provider's transcript. Filter before
+  cleanup, retain everyone's text, and carry actual model provenance through
+  `DictationTranscript`. Use existing library result kinds and parent IDs.
+  The composer document owns persisted restore ranges; edits outside move them,
+  edits replacing their text remove them, and sending clears them. Voice Mode
+  bypasses this path.
+
 - `GatewaySpeechAccess` is the app's only speech-credential path. Each chat
   model binds it to its host, which hands SpeechKit a `.relay` at
   `<gateway>/speech/<provider>` with the host's bearer. The app carries no

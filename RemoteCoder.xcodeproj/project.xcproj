@@ -15,7 +15,7 @@
       "kind": "remote",
       "repository": "https://github.com/emileberhard/SpeechKit.git",
       "version": {
-        "version": "0.5.0"
+        "revision": "b98f742cc988fb9bd540e3e416662171cba9f58d"
       }
     },
     {
@@ -913,6 +913,12 @@
           }
         },
         {
+          "product-name": "SpeakerRecognition",
+          "build-phase": {
+            "build-phase": "frameworks"
+          }
+        },
+        {
           "product-name": "SpeechKit",
           "build-phase": {
             "build-phase": "frameworks"
@@ -1266,6 +1272,12 @@
       "package-product-members": [
         {
           "product-name": "DictationLibrary",
+          "build-phase": {
+            "build-phase": "frameworks"
+          }
+        },
+        {
+          "product-name": "SpeakerRecognition",
           "build-phase": {
             "build-phase": "frameworks"
           }

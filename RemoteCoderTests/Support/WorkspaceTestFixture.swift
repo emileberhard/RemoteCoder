@@ -230,5 +230,5 @@ struct StubTranscriber: TranscriptionService {
     func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription? { nil }
 
     @concurrent
-    func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> String { text }
+    func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript { DictationTranscript(text: text, model: configuration.model.batchLibraryID) }
 }

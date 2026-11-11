@@ -1,6 +1,12 @@
 import Foundation
 import SwiftData
 
+struct ComposerDictationRestore: Codable, Equatable, Sendable {
+    var location: Int
+    let length: Int
+    let everyone: String
+}
+
 @Model
 final class ComposerDraft {
     @Attribute(.unique) var destination: String
@@ -9,6 +15,7 @@ final class ComposerDraft {
     @Attribute(.codable, .externalStorage) var attachments: [ComposerAttachment]
     var revision: Int
     @Attribute(.codable, .externalStorage) var documentContent: ComposerDocumentContent?
+    @Attribute(.codable) var dictationRestores: [ComposerDictationRestore]?
     var modifiedAt: Date?
     @Attribute(.codable) var newChat: NewChatSetup?
     @Transient var document: ComposerDocument?
@@ -21,6 +28,7 @@ final class ComposerDraft {
         attachments = []
         revision = 0
         documentContent = nil
+        dictationRestores = nil
         modifiedAt = nil
         newChat = nil
         document = nil

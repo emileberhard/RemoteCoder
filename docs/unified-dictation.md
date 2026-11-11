@@ -36,8 +36,18 @@ capture without assigning an iCloud owner. Known other-account captures remain
 fenced. Settings provides an explicit current-account assignment only for
 unowned captures, with a confirmation explaining its consequence.
 
-Provider output and subsequent cleanup are separately identified immutable
-versions. Failure versions contain the error type, never a credential or
+Provider output, any speaker-filtered Azure output, and subsequent cleanup are
+separately identified immutable versions. The raw selected-provider result is
+the parent of the filtered result, and cleanup uses the delivered text as its
+parent. Each version names the model that produced its text, using the existing
+result kinds. Only Mine defaults to on for MAI-Transcribe-2; other models require
+an explicit choice before a second Azure request. The workspace owns one local
+voice template independently of this library, with live learning and one replay
+of recent local originals when the library is enabled. Filtering happens before
+cleanup. Composer drafts retain everyone’s text for Restore Everyone until the
+filtered text is sent or replaced.
+
+ Failure versions contain the error type, never a credential or
 provider response body. Publication retries on capture completion and foreground
 activation; settings also exposes retry. Saved locally, pending uploads, held
 captures, cloud acknowledgment and independent backup are distinct states.

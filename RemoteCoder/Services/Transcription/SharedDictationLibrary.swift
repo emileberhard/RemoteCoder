@@ -2,6 +2,7 @@ import DictationLibrary
 import Foundation
 import Observation
 import SpeechKit
+import SpeakerRecognition
 
 @MainActor
 @Observable
@@ -217,17 +218,25 @@ final class SharedDictationLibrary {
         return (capture.plan, account)
     }
 
-    func result(_ text: String, recordingID: UUID, plan: DictationPlan, model: String, access: GatewaySpeechAccess) async throws -> String {
+    func result(_ transcript: DictationTranscript, recordingID: UUID, plan: DictationPlan, access: GatewaySpeechAccess) async throws -> DictationTranscript {
         let raw = DictationResultVersion(id: UUID(), captureID: recordingID, createdAt: .now,
-            kind: .providerOutput, text: text, model: model, contextWasUsed: false, parentResultID: nil, plan: plan)
+            kind: .providerOutput, text: transcript.everyone, model: transcript.everyoneModel, contextWasUsed: false, parentResultID: nil, plan: plan)
         archive(raw)
-        guard plan.cleanupEnabled else { return text }
-        let cleaned = try await DictationCleanup.clean(text: text, plan: plan, access: try await access.access(to: .gemini))
+        let source: DictationResultVersion
+        if transcript.removedVoices {
+            source = DictationResultVersion(id: UUID(), captureID: recordingID, createdAt: .now,
+                kind: .providerOutput, text: transcript.text, model: transcript.model, contextWasUsed: false, parentResultID: raw.id, plan: plan)
+            archive(source)
+        } else { source = raw }
+        guard plan.cleanupEnabled else { return transcript }
+        let cleaned = try await DictationCleanup.clean(text: transcript.text, plan: plan, access: try await access.access(to: .gemini))
         if cleaned.kind != .providerOutput {
             archive(DictationResultVersion(id: UUID(), captureID: recordingID, createdAt: .now,
-                kind: cleaned.kind, text: cleaned.text, model: cleaned.model, contextWasUsed: cleaned.contextWasUsed, parentResultID: raw.id, plan: plan))
+                kind: cleaned.kind, text: cleaned.text, model: cleaned.model, contextWasUsed: cleaned.contextWasUsed, parentResultID: source.id, plan: plan))
         }
-        return cleaned.text
+        return DictationTranscript(text: cleaned.text, everyone: transcript.everyone,
+            model: cleaned.kind == .providerOutput ? transcript.model : cleaned.model,
+            everyoneModel: transcript.everyoneModel, outcome: transcript.outcome)
     }
 
     func publish() async {
@@ -335,6 +344,17 @@ final class SharedDictationLibrary {
         try await store().validateAccountSession(account)
     }
 
+    func localVoiceHistory() async throws -> (recordings: [VoiceHistoryRecording], account: DictationAccountSession) {
+        let store = try await store()
+        guard isEnabled, let account = store.accountSession() else { throw DictationLibraryError.accountUnavailable }
+        let entries = try await store.entries()
+        try store.validateAccountSession(account)
+        return (entries.compactMap { entry in
+            guard let url = entry.originalURL, let finished = entry.capture.finishedAt else { return nil }
+            return VoiceHistoryRecording(url: url, startedAt: entry.capture.startedAt, finishedAt: finished)
+        }, account)
+    }
+
     func waitForAccountChange(from account: DictationAccountSession) async throws {
         let store = try await store()
         for await _ in Observations({ @MainActor [self] in accountRevision }) where store.accountSession() != account { return }
@@ -433,6 +453,7 @@ extension TranscriptionConfiguration {
         guard let model = TranscriptionModel.allCases.first(where: { $0.libraryID == plan.effectiveModel && $0.libraryOptions == plan.providerOptions }) else {
             throw DictationLibraryError.invalidConfiguration
         }
-        self.init(model: model, language: local.language, customVocabulary: plan.dictionary, sharedLanguages: plan.languages)
+        self.init(model: model, language: local.language, customVocabulary: plan.dictionary, sharedLanguages: plan.languages,
+                  voiceChoice: local.voiceChoice)
     }
 }

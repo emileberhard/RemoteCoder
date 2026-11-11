@@ -4,6 +4,26 @@ import Testing
 
 @MainActor
 struct ComposerDocumentTests {
+    @Test func everyFilteredDictationCanBeRestoredAfterUnrelatedEdits() {
+        let document = ComposerDocument(content: .init(runs: []), onChange: {})
+        document.edit(.filteredDictation("First.", everyone: "First. Background one."))
+        document.edit(.filteredDictation("Second.", everyone: "Second. Background two."))
+        document.edit(.replace(NSRange(location: 0, length: 0), .init(runs: [.text("Prefix ")])))
+        #expect(document.dictationRestores.count == 2)
+        document.restoreEveryone()
+        #expect(document.content.expandedText == "Prefix First. Background one. Second. Background two.")
+        #expect(document.dictationRestores.isEmpty)
+    }
+
+    @Test func replacingFilteredWordsRemovesTheirRestoreAction() {
+        let document = ComposerDocument(content: .init(runs: []), onChange: {})
+        document.edit(.filteredDictation("Mine.", everyone: "Mine. Background."))
+        document.edit(.replaceAll(.init(runs: [.text("Replacement")])) )
+        #expect(document.dictationRestores.isEmpty)
+        document.restoreEveryone()
+        #expect(document.content.expandedText == "Replacement")
+    }
+
     @Test(arguments: ["", " \n\t "])
     func blankPastesRemainPlainTextAcrossPersistenceAndCannotEnableSending(_ whitespace: String) throws {
         let standalone = ComposerDocumentContent(runs: [.paste(.init(id: UUID(), text: whitespace))])

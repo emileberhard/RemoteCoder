@@ -1,6 +1,14 @@
 import Foundation
 import Observation
 
+enum DictationVoiceSelection: String, CaseIterable, Identifiable, Sendable {
+    case onlyMine
+    case everyone
+
+    var id: Self { self }
+    var title: String { self == .onlyMine ? "Only Mine" : "Everyone" }
+}
+
 enum TranscriptionProvider: String, CaseIterable, Identifiable, Sendable {
     case elevenLabs
     case openAI
@@ -171,11 +179,14 @@ struct TranscriptionConfiguration: Sendable {
     var languageHints: [String] { sharedLanguages ?? language.hints }
     var customVocabulary: [String] = []
     var sharedLanguages: [String]? = nil
+    var voiceChoice: DictationVoiceSelection? = nil
+    var voices: DictationVoiceSelection { voiceChoice ?? TranscriptionSettings.defaultVoices(for: model) }
 
     static func current(defaults: UserDefaults = AppStorageScope.current.defaults) -> TranscriptionConfiguration {
         TranscriptionConfiguration(
             model: TranscriptionSettings.model(defaults: defaults),
-            language: TranscriptionSettings.language(defaults: defaults)
+            language: TranscriptionSettings.language(defaults: defaults),
+            voiceChoice: TranscriptionSettings.voiceChoice(defaults: defaults)
         )
     }
 }
@@ -183,7 +194,21 @@ struct TranscriptionConfiguration: Sendable {
 enum TranscriptionSettings {
     private static let modelKey = "transcription.model"
     private static let languageKey = "transcription.language"
-    static let syncedKeys: Set<String> = [modelKey, languageKey]
+    private static let voicesKey = "transcription.voices"
+    static let voiceForgottenAtKey = "transcription.voiceForgottenAt"
+    static let syncedKeys: Set<String> = [modelKey, languageKey, voicesKey, voiceForgottenAtKey]
+
+    static func defaultVoices(for model: TranscriptionModel) -> DictationVoiceSelection {
+        model == .azureMAITranscribe2 ? .onlyMine : .everyone
+    }
+
+    static func voiceChoice(defaults: UserDefaults) -> DictationVoiceSelection? {
+        defaults.string(forKey: voicesKey).flatMap(DictationVoiceSelection.init(rawValue:))
+    }
+
+    static func setVoices(_ selection: DictationVoiceSelection, defaults: UserDefaults) {
+        defaults.set(selection.rawValue, forKey: voicesKey)
+    }
 
     static func model(defaults: UserDefaults = AppStorageScope.current.defaults) -> TranscriptionModel {
         defaults.string(forKey: modelKey)
@@ -211,6 +236,16 @@ enum TranscriptionSettings {
 final class TranscriptionSettingsStore {
     private var appliedModel: TranscriptionModel
     private var appliedLanguage: TranscriptionLanguage
+    private var appliedVoices: DictationVoiceSelection?
+
+    func voices(for model: TranscriptionModel) -> DictationVoiceSelection {
+        appliedVoices ?? TranscriptionSettings.defaultVoices(for: model)
+    }
+
+    func setVoices(_ selection: DictationVoiceSelection) {
+        appliedVoices = selection
+        TranscriptionSettings.setVoices(selection, defaults: AppStorageScope.current.defaults)
+    }
 
     var model: TranscriptionModel {
         get { appliedModel }
@@ -241,6 +276,7 @@ final class TranscriptionSettingsStore {
     init() {
         appliedModel = TranscriptionSettings.model()
         appliedLanguage = TranscriptionSettings.language()
+        appliedVoices = TranscriptionSettings.voiceChoice(defaults: AppStorageScope.current.defaults)
     }
 
     func reload() {
@@ -248,5 +284,6 @@ final class TranscriptionSettingsStore {
         if model != appliedModel { appliedModel = model }
         let language = TranscriptionSettings.language()
         if language != appliedLanguage { appliedLanguage = language }
+        appliedVoices = TranscriptionSettings.voiceChoice(defaults: AppStorageScope.current.defaults)
     }
 }

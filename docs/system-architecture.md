@@ -2645,6 +2645,33 @@ an enqueue notification delivers requests immediately when the app is active.
 
 ## Speech relay
 
+Composer Only Mine uses SpeechKit's optional `SpeakerRecognition` product.
+The workspace owns one `DictationVoiceProfiles` store in the device's app
+container, shared by per-host controllers and independent of the optional
+dictation library. The explicit Voices choice and forget timestamp use existing
+preference sync; biometric templates never sync or enter backups. Without an
+explicit choice, Azure MAI-Transcribe-2 defaults to Only Mine and other models to
+Everyone. The effective capture model resolves this default once at capture.
+
+The existing capture sink supplies a separate 16 kHz mono PCM16 feed when the
+provider uses another rate. The same recognition chunks reach the shared check
+and its bounded ten-minute upload buffer. At stop the check may request Azure
+speaker phrases through the existing relay, overlapping ordinary transcription.
+Untrusted profiles, Everyone and a negative watcher preserve ordinary delivery.
+Failure or a missed delivery budget keeps the selected provider's text and
+marks the check unavailable. User cancellation cancels both requests.
+
+`DictationTranscript` carries delivered and everyone's text, filter outcome and
+actual model provenance. Filtering precedes shared cleanup. The library stores
+the original provider output, any filtered Azure output as a child version, and
+cleanup as a further child, using existing result kinds. The local composer
+persists everyone's text and tracked insertion ranges with its draft. Restore
+Everyone replaces those dictation ranges without another transcription;
+unrelated edits move ranges, replacing their text removes them, and sending
+clears them. Live learning follows the shared check. With the library enabled,
+its recent local originals can teach the profile once; replay downloads no audio
+and validates the account lease before applying candidates.
+
 Composer dictation (realtime and batch) and dictation cleanup use SpeechKit's own
 provider protocols, but every request goes to the chat model's gateway rather
 than to the provider. `GatewaySpeechAccess` binds a chat model to its host and

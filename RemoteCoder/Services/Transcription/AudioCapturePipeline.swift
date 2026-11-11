@@ -78,12 +78,15 @@ struct PCM16CaptureOutput: Sendable {
     let receive: @Sendable (Data) -> Void
     var configureOriginal: (@Sendable (AVAudioFormat) throws -> Void)? = nil
     var receiveOriginal: (@Sendable (AVAudioPCMBuffer) -> Void)? = nil
+    var receiveRecognition: (@Sendable (Data) -> Void)? = nil
+    var recognitionFailed: (@Sendable () -> Void)? = nil
 }
 
 final class PCM16CaptureSink: @unchecked Sendable {
     private let lock = NSLock()
     private var processor: PCM16AudioProcessor?
     private var receiveOriginal: (@Sendable (AVAudioPCMBuffer) -> Void)?
+    private var recognitionProcessor: PCM16AudioProcessor?
 
     @concurrent func begin(inputFormat: AVAudioFormat, output: PCM16CaptureOutput) async throws {
         try lock.withLock {
@@ -95,13 +98,26 @@ final class PCM16CaptureSink: @unchecked Sendable {
             ), let processor = PCM16AudioProcessor(
                 inputFormat: inputFormat,
                 targetFormat: targetFormat,
-                output: output.receive
+                output: { chunk in
+                    output.receive(chunk)
+                    if output.sampleRate == 16_000 { output.receiveRecognition?(chunk) }
+                }
             ) else {
                 throw PCM16CaptureSinkError.formatUnavailable
             }
             try output.configureOriginal?(inputFormat)
             self.processor = processor
             receiveOriginal = output.receiveOriginal
+            if let receive = output.receiveRecognition {
+                if output.sampleRate != 16_000 {
+                    if let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true),
+                       let recognition = PCM16AudioProcessor(inputFormat: inputFormat, targetFormat: format, output: receive) {
+                        recognitionProcessor = recognition
+                    } else {
+                        output.recognitionFailed?()
+                    }
+                }
+            }
         }
     }
 
@@ -110,12 +126,15 @@ final class PCM16CaptureSink: @unchecked Sendable {
         defer { lock.unlock() }
         receiveOriginal?(buffer)
         processor?.ingest(buffer)
+        recognitionProcessor?.ingest(buffer)
     }
 
     func finish() {
         lock.lock()
         processor?.finish()
+        recognitionProcessor?.finish()
         processor = nil
+        recognitionProcessor = nil
         receiveOriginal = nil
         lock.unlock()
     }

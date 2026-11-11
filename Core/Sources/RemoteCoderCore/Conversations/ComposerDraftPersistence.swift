@@ -10,6 +10,7 @@ struct ComposerDraftSnapshot: Sendable {
     let attachments: [ComposerAttachment]
     let modifiedAt: Date?
     let newChat: NewChatSetup?
+    var dictationRestores: [ComposerDictationRestore]? = nil
 
     var isBlankNewChat: Bool {
         ComposerDraftStore.Destination.isNewChat(key: destination) && attachments.isEmpty
@@ -90,6 +91,7 @@ actor ComposerDraftPersistence {
                 draft.attachments = value.attachments
                 draft.modifiedAt = value.modifiedAt
                 draft.newChat = value.newChat
+                draft.dictationRestores = value.dictationRestores
                 saved.append(.init(id: value.id, revision: value.revision, text: text))
             }
             for (id, receipt) in receipts where try modelContext.fetchCount(receiptDescriptor(id)) == 0 {
@@ -173,7 +175,7 @@ actor ComposerDraftPersistence {
     private func snapshot(_ draft: ComposerDraft) -> ComposerDraftSnapshot {
         .init(id: draft.id, destination: draft.destination, revision: draft.revision,
             content: ComposerDraftStore.persistedContent(draft), attachments: draft.attachments.filter { $0.text == nil },
-            modifiedAt: draft.modifiedAt, newChat: draft.newChat)
+            modifiedAt: draft.modifiedAt, newChat: draft.newChat, dictationRestores: draft.dictationRestores)
     }
 
     private func existing(id: UUID) throws -> ComposerDraft? {

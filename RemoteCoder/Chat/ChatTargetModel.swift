@@ -421,7 +421,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
          modelPickerPreferences: ModelPickerPreferences, syncedPreferences: SyncedPreferenceStore, haptics: HapticService = .shared,
          voiceCalls: VoiceCallCenter, backgroundExecution: any BackgroundExecution, uploadContinuation: any UploadContinuation,
          gatewayPolicy: SharedGatewayPolicy,
-         storage: HostStorage = .live, deviceTools: DeviceToolHost? = nil, htmlVisuals: HTMLVisualServices, dictationLibrary: SharedDictationLibrary? = nil) {
+         storage: HostStorage = .live, deviceTools: DeviceToolHost? = nil, htmlVisuals: HTMLVisualServices, dictationLibrary: SharedDictationLibrary? = nil,
+         dictationVoices: DictationVoiceProfiles? = nil) {
         self.backgroundExecution = backgroundExecution
         self.gatewayPolicy = gatewayPolicy
         self.haptics = haptics
@@ -445,7 +446,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             ? DictationRecordingStore<ExecutionTarget>.app
             : DictationRecordingStore<ExecutionTarget>.located(in: storage)
         self.voice = VoiceInputController(access: speechAccess, owner: ExecutionTarget(hostID: host.id),
-            transcriber: RemoteCoderTranscriptionService(access: speechAccess), recordings: recordings, haptics: haptics, library: dictationLibrary)
+            transcriber: RemoteCoderTranscriptionService(access: speechAccess), recordings: recordings, haptics: haptics, library: dictationLibrary,
+            voices: dictationVoices)
         let call = voiceCalls.call
         let callOwner = ExecutionTarget(hostID: host.id)
         let gateway = Self.makeGatewayClient(for: host, routes: routes, deviceTools: deviceTools,

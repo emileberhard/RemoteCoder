@@ -5,6 +5,7 @@ RemoteCoder's license applies to its own code. The components below retain their
 | Distribution | Component | License and notices |
 | --- | --- | --- |
 | iOS and Mac apps | SpeechKit | MIT; [notice](LICENSES/SpeechKit.txt), [source](https://github.com/emileberhard/SpeechKit) |
+| iOS and Mac apps | WeSpeaker ResNet34-LM speaker model, converted to Core ML and 8-bit palettized by SpeechKit | CC BY 4.0; [license](LICENSES/CC-BY-4.0.txt), [weights and attribution](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/tree/f0c48c298fd835726c27956a5d617bad7115627e), [WeSpeaker source](https://github.com/wenet-e2e/wespeaker) |
 | iOS and Mac apps, browser client | Codex mark path from Lobe Icons (`@lobehub/icons-static-svg` 1.95.0) | MIT; [license](LICENSES/LobeHub-icons.txt), [source](https://github.com/lobehub/lobe-icons) |
 | iOS and Mac apps | GitHub Copilot mark path from Primer Octicons (`copilot-24`, as packaged in Simple Icons 16.32.0) | MIT; [license](LICENSES/Primer-Octicons.txt), [source](https://github.com/primer/octicons) |
 | iOS app | WebRTC 156.0.0 | BSD-3-Clause; [WebRTC](LICENSES/WebRTC.txt), [native third-party notices](LICENSES/WebRTC-third-party.md) and [Swift package wrapper](LICENSES/WebRTC-package.txt) |

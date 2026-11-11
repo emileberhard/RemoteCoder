@@ -51,7 +51,7 @@ final class DictationSession {
             try await voice.stopRecording(onCaptureEnded: { feedback?(.commit) })
             let dictation = try await voice.transcribe()
             if !isRetired, let draft {
-                try await receive(dictation.text, recordingID: dictation.recordingID, recording: dictation.recording, into: draft)
+                try await receive(dictation.transcript, recordingID: dictation.recordingID, recording: dictation.recording, into: draft)
             }
         } catch {
             voice.markTranscriptionEnded()
@@ -99,10 +99,10 @@ final class DictationSession {
         ownedTasks.start(.recovery(id)) { [weak self] in
             guard let voice = self?.host?.voice else { return }
             do {
-                let text = try await voice.transcribe(recording)
+                let transcript = try await voice.transcribe(recording)
                 guard let self, !Task.isCancelled, !self.isRetired else { return }
                 do {
-                    try await self.receive(text, recordingID: recording.id, recording: recording, into: draft)
+                    try await self.receive(transcript, recordingID: recording.id, recording: recording, into: draft)
                     feedback(.success)
                 } catch {
                     self.recoveryFailed(id, error: error, feedback: feedback)
@@ -155,9 +155,12 @@ final class DictationSession {
         return ownedTasks.cancelAll()
     }
 
-    private func receive(_ text: String, recordingID: UUID, recording: DictationRecording<ExecutionTarget>?,
+    private func receive(_ transcript: DictationTranscript, recordingID: UUID, recording: DictationRecording<ExecutionTarget>?,
                          into draft: ComposerDraft) async throws {
-        do { try await drafts.appendDictation(text, recordingID: recordingID, to: draft) }
+        do {
+            try await drafts.appendDictation(transcript.text, recordingID: recordingID,
+                everyone: transcript.removedVoices ? transcript.everyone : nil, to: draft)
+        }
         catch { throw DictationError.notAddedToDraft(error) }
         recoverable.removeAll { $0.id == recordingID }
         guard await drafts.flush(), let recording, let voice = host?.voice else { return }

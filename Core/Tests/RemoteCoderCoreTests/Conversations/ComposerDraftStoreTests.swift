@@ -5,6 +5,22 @@ import Testing
 
 @MainActor
 struct ComposerDraftStoreTests {
+    @Test func everyonesTextStaysWithTheDraftAcrossReopening() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ComposerDraftStore(directory: directory)
+        let draft = try #require(await store.draft(for: .newChatFixture))
+        try await store.appendDictation("Mine.", recordingID: UUID(), everyone: "Mine. Background.", to: draft)
+        #expect(await store.flush())
+        let reopened = ComposerDraftStore(directory: directory)
+        let restored = try #require(await reopened.draft(for: .newChatFixture))
+        let document = try #require(restored.document)
+        #expect(document.dictationRestores.count == 1)
+        document.restoreEveryone()
+        #expect(document.content.expandedText == "Mine. Background.")
+        #expect(await reopened.flush())
+    }
+
     @Test func legacyTextAttachmentsRestoreExactWhitespaceAndUsefulPasteIdentity() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

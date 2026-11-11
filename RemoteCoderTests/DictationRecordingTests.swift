@@ -412,8 +412,8 @@ private final class HeldRecoveryTranscriber: TranscriptionService {
     var isHeld: Bool { get async { await gate.isHeld } }
     func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription? { nil }
     @concurrent
-    func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> String {
-        try await gate.read()
+    func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
+        DictationTranscript(text: try await gate.read(), model: configuration.model.batchLibraryID)
     }
 }
 
@@ -513,11 +513,11 @@ private final class ScriptedTranscriber: TranscriptionService {
     }
 
     @concurrent
-    func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> String {
+    func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
         batchCalls.withLock { $0.append(recording.id) }
         _ = try await recording.transcriptionAudio(maximumByteCount: 1_000_000)
         guard let batchText else { throw Failure() }
-        return batchText
+        return DictationTranscript(text: batchText, model: configuration.model.batchLibraryID)
     }
 }
 

@@ -3,6 +3,7 @@ import OSLog
 import Observation
 import SpeechKit
 import DictationLibrary
+import SpeakerRecognition
 
 // MARK: - Voice Input Controller (Recording + Transcribe Orchestration)
 
@@ -34,6 +35,8 @@ final class VoiceInputController {
         let live: LiveTranscription?
         let configuration: TranscriptionConfiguration
         let archive: SharedDictationLibrary.Capture?
+        let recognition: DictationVoiceSession?
+        let recognitionFailed: Bool
     }
 
     private enum SavedAudio {
@@ -56,6 +59,8 @@ final class VoiceInputController {
         let configuration: TranscriptionConfiguration
         let archive: SharedDictationLibrary.Capture?
         let stopRequested: ContinuousClock.Instant
+        let recognition: DictationVoiceSession?
+        let recognitionFailed: Bool
     }
 
     private let access: GatewaySpeechAccess
@@ -66,6 +71,7 @@ final class VoiceInputController {
     private let recordings: DictationRecordingStore<ExecutionTarget>
     private let haptics: HapticService
     let library: SharedDictationLibrary?
+    private let voices: DictationVoiceProfiles?
     private let captureOwner = UUID()
     private let logger = AppLogger(category: "VoiceInput")
 
@@ -90,6 +96,7 @@ final class VoiceInputController {
         recordings: DictationRecordingStore<ExecutionTarget> = .app,
         haptics: HapticService = .shared,
         library: SharedDictationLibrary? = nil,
+        voices: DictationVoiceProfiles? = nil,
         configuration: @escaping @MainActor () -> TranscriptionConfiguration = { .current() }
     ) {
         self.configuration = configuration
@@ -97,6 +104,7 @@ final class VoiceInputController {
         self.owner = owner
         self.haptics = haptics
         self.library = library
+        self.voices = voices
         self.transcriber = transcriber
         self.recorder = recorder
         self.recordings = recordings
@@ -175,6 +183,12 @@ final class VoiceInputController {
             throw DictationError.noActiveRecording
         }
         self.active = nil
+        if let recognition = active.recognition {
+            let service = RemoteCoderTranscriptionService(access: access)
+            await recognition.finish { pcm, uploaded in
+                try await service.speakerPhrases(pcm, configuration: active.configuration, uploadFinished: uploaded)
+            }
+        }
         if let archive = active.archive { library?.finish(archive) }
         let audio = await Self.finish(active.writer)
         switch audio {
@@ -195,7 +209,8 @@ final class VoiceInputController {
         isRecording = false
         recordingStartTime = nil
         stopped = StoppedDictation(recordingID: active.writer.id, audio: audio, live: active.live, configuration: active.configuration,
-                                   archive: active.archive, stopRequested: stopRequested)
+                                   archive: active.archive, stopRequested: stopRequested,
+                                   recognition: active.recognition, recognitionFailed: active.recognitionFailed)
         VoiceModeDiagnostics.log("recording segment stopped")
     }
 
@@ -209,9 +224,11 @@ final class VoiceInputController {
         beginQuiescing()
         _ = await starting?.result
         await active?.live?.dictation.cancel()
+        await active?.recognition?.cancel()
         if active != nil || stopping != nil { try await stopRecording() }
         if let stopped {
             await stopped.live?.dictation.cancel()
+            await stopped.recognition?.cancel()
             self.stopped = nil
             inFlightRecordingID = nil
             isTranscribing = false
@@ -239,6 +256,7 @@ final class VoiceInputController {
             return try await withAccount(stopped.archive?.account) { [self] in try await transcribe(stopped) }
         } catch {
             await stopped.live?.dictation.cancel()
+            await stopped.recognition?.cancel()
             if let archive = stopped.archive, archive.writer != nil {
                 library?.failure(recordingID: stopped.recordingID, plan: archive.plan, error: error)
             }
@@ -252,9 +270,10 @@ final class VoiceInputController {
             do {
                 let raw = try await live.dictation.finish()
                 let model = stopped.configuration.model.libraryID
-                let text = try await archiveResult(raw, recordingID: stopped.recordingID, plan: stopped.archive?.plan, model: model)
-                Self.logTranscribed(stopped, route: "realtime", model: model, characters: text.count)
-                return Dictation(text: text, recordingID: stopped.recordingID, recording: stopped.audio.recording)
+                let result = try await resolveVoices(DictationTranscript(text: raw, model: model), stopped: stopped)
+                let transcript = try await archiveResult(result, recordingID: stopped.recordingID, plan: stopped.archive?.plan)
+                Self.logTranscribed(stopped, route: "realtime", model: transcript.model, characters: transcript.text.count)
+                return Dictation(transcript: transcript, recordingID: stopped.recordingID, recording: stopped.audio.recording)
             } catch let error as RealtimeDictationError {
                 let explained = access.explain(error, provider: live.provider)
                 VoiceModeDiagnostics.log("realtime transcription failed; transcribing the saved recording error=\(explained.localizedDescription)")
@@ -267,10 +286,34 @@ final class VoiceInputController {
         case .partial(_, let error), .unsaved(let error): throw DictationError.recordingNotSaved(error)
         }
         let raw = try await transcribe(recording, configuration: stopped.configuration)
-        let model = stopped.configuration.model.batchLibraryID
-        let text = try await archiveResult(raw, recordingID: recording.id, plan: stopped.archive?.plan, model: model)
-        Self.logTranscribed(stopped, route: route, model: model, characters: text.count)
-        return Dictation(text: text, recordingID: recording.id, recording: recording)
+        let result = try await resolveVoices(raw, stopped: stopped)
+        let transcript = try await archiveResult(result, recordingID: recording.id, plan: stopped.archive?.plan)
+        Self.logTranscribed(stopped, route: route, model: transcript.model, characters: transcript.text.count)
+        return Dictation(transcript: transcript, recordingID: recording.id, recording: recording)
+    }
+
+    private func resolveVoices(_ original: DictationTranscript, stopped: StoppedDictation) async throws -> DictationTranscript {
+        guard let recognition = stopped.recognition else {
+            guard stopped.recognitionFailed else { return original }
+            return DictationTranscript(text: original.text, everyone: original.everyone, model: original.model,
+                everyoneModel: original.everyoneModel, outcome: .failed)
+        }
+        do {
+            let result = try await recognition.resolve(original, waitingUpTo: recognition.waitBudget)
+            if let check = result.result { voices?.checked(check) }
+            else { voices?.failed(CocoaError(.coderInvalidValue)) }
+            let upload = result.upload.map { String(Self.milliseconds($0)) } ?? "unknown"
+            let completion = result.result?.labelledReplyTime.map { String(Self.milliseconds($0)) } ?? "unknown"
+            VoiceModeDiagnostics.log("dictation voice check outcome=\(result.transcript.outcome?.path.rawValue ?? "unknown") upload_ms=\(upload) labelled_reply_ms=\(completion) added_wait_ms=\(Self.milliseconds(result.wait))")
+            await recognition.cancel()
+            return result.transcript
+        } catch is CancellationError where !Task.isCancelled {
+            await recognition.cancel()
+            return original
+        } catch {
+            await recognition.cancel()
+            throw error
+        }
     }
 
     private static func logTranscribed(_ stopped: StoppedDictation, route: StaticString, model: String, characters: Int) {
@@ -285,23 +328,23 @@ final class VoiceInputController {
 
     /// Archived recordings retain their frozen plan; older recovery recordings
     /// use the current local settings.
-    func transcribe(_ recording: DictationRecording<ExecutionTarget>) async throws -> String {
+    func transcribe(_ recording: DictationRecording<ExecutionTarget>) async throws -> DictationTranscript {
         let local = configuration()
         let resolved = try await library?.plan(for: recording.id)
         let configuration = try resolved.map { try TranscriptionConfiguration(plan: $0.plan, local: local) } ?? local
         return try await withAccount(resolved?.account) { [self] in
             let raw = try await transcribe(recording, configuration: configuration)
-            let text = try await archiveResult(raw, recordingID: recording.id, plan: resolved?.plan, model: configuration.model.batchLibraryID)
-            VoiceModeDiagnostics.log("saved recording transcribed characters=\(text.count)")
-            return text
+            let result = try await archiveResult(raw, recordingID: recording.id, plan: resolved?.plan)
+            VoiceModeDiagnostics.log("saved recording transcribed characters=\(result.text.count)")
+            return result
         }
     }
 
-    private func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> String {
+    private func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
         do {
             return try await transcriber.transcribe(recording, configuration: configuration)
         } catch RemoteCoderTranscriptionService.ServiceError.emptyResponse {
-            return ""
+            return DictationTranscript(text: "", model: configuration.model.batchLibraryID)
         } catch {
             VoiceModeDiagnostics.log("transcription failed error=\(error.localizedDescription)")
             throw error
@@ -330,6 +373,7 @@ final class VoiceInputController {
         let archive = try await library?.prepare(configuration: local)
         var recoveryWriter: DictationRecordingWriter<ExecutionTarget>?
         var liveDictation: RealtimeDictation?
+        var recognition: DictationVoiceSession?
         do {
             captureAccountMonitor?.cancel()
             captureAccountMonitor = nil
@@ -341,6 +385,12 @@ final class VoiceInputController {
                 }
             }
             let configuration = try archive.map { try TranscriptionConfiguration(plan: $0.plan, local: local) } ?? local
+            var recognitionFailed = false
+            if configuration.voices == .onlyMine, let voices {
+                do { recognition = DictationVoiceSession(check: try await voices.makeCheck()) }
+                catch is CancellationError { throw CancellationError() }
+                catch { recognitionFailed = true; voices.failed(error) }
+            }
             let realtime = try await transcriber.makeRealtimeTranscription(configuration: configuration)
             if let account = archive?.account { try await library?.validateAccount(account) }
             try Task.checkCancellation()
@@ -364,13 +414,19 @@ final class VoiceInputController {
                 output.configureOriginal = { try original.configure(format: $0) }
                 output.receiveOriginal = { original.append($0) }
             }
+            if let recognition {
+                output.receiveRecognition = { recognition.append($0) }
+                output.recognitionFailed = { recognition.invalidate() }
+            }
             try await recorder.start(output: output)
             if let account = archive?.account { try await library?.validateAccount(account) }
-            active = ActiveDictation(writer: writer, live: live, configuration: configuration, archive: archive)
+            active = ActiveDictation(writer: writer, live: live, configuration: configuration, archive: archive,
+                                     recognition: recognition, recognitionFailed: recognitionFailed)
             inFlightRecordingID = writer.id
         } catch {
             recorder.stop()
             await liveDictation?.cancel()
+            await recognition?.cancel()
             if let recoveryWriter { await recordings.closeAfterFailedStart(recoveryWriter) }
             if let archive { library?.finish(archive) }
             captureAccountMonitor?.cancel()
@@ -383,11 +439,13 @@ final class VoiceInputController {
         starting?.cancel()
         if active?.writer.id == id {
             await active?.live?.dictation.cancel()
+            await active?.recognition?.cancel()
             do { try await stopRecording() }
             catch { logger.error("account-change capture stop failed: \(error.localizedDescription)") }
         }
         if stopped?.recordingID == id {
             await stopped?.live?.dictation.cancel()
+            await stopped?.recognition?.cancel()
             stopped = nil
         }
         if inFlightRecordingID == id { inFlightRecordingID = nil }
@@ -413,9 +471,9 @@ final class VoiceInputController {
         return result
     }
 
-    private func archiveResult(_ text: String, recordingID: UUID, plan: DictationLibrary.DictationPlan?, model: String) async throws -> String {
-        guard let plan, let library else { return text }
-        return try await library.result(text, recordingID: recordingID, plan: plan, model: model, access: access)
+    private func archiveResult(_ transcript: DictationTranscript, recordingID: UUID, plan: DictationLibrary.DictationPlan?) async throws -> DictationTranscript {
+        guard let plan, let library else { return transcript }
+        return try await library.result(transcript, recordingID: recordingID, plan: plan, access: access)
     }
 
     private static func finish(_ writer: DictationRecordingWriter<ExecutionTarget>) async -> SavedAudio {

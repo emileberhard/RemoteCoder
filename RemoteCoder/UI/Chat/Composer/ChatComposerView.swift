@@ -651,6 +651,19 @@ struct ChatComposerView: View {
                 .padding(.vertical, 6)
             }
             ComposerSlashCommandArea(screen: screen, focus: focus)
+            if let draft = screen.currentDraft, let document = draft.document, !document.dictationRestores.isEmpty {
+                HStack {
+                    Button("Restore Everyone", systemImage: "person.2.wave.2") { document.restoreEveryone() }
+                        .buttonStyle(.plain)
+                        .scaledFont(.caption)
+                        .accessibilityIdentifier("restore-everyone")
+                        .disabled(document.isComposing)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .composerControlHitRegion()
+            }
             inputLayout {
                 leadingActions
 

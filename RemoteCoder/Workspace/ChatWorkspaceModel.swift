@@ -120,6 +120,9 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         cluster = ClusterModel(defaults: defaults)
         self.storage = storage
         self.dictationLibrary = dictationLibrary
+        let dictationVoices = DictationVoiceProfiles(defaults: defaults,
+            directory: storage.directory(for: .device).appending(path: "voice-profile"))
+        self.dictationVoices = dictationVoices
         #if DEBUG
         let htmlVisuals = HTMLVisualServices(directory: ProcessInfo.processInfo.arguments.contains("-html-visual-cold-cache")
             ? HTMLVisualServices.coldDirectory("html-visuals-cold")
@@ -145,7 +148,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             ChatTargetModel(host: $0, chatDefaults: defaults, modelPickerPreferences: $1, syncedPreferences: $2, voiceCalls: voiceCalls,
                             backgroundExecution: makeBackgroundExecution(), uploadContinuation: uploadContinuation,
                             gatewayPolicy: gatewayPolicy, storage: storage,
-                            deviceTools: deviceTools, htmlVisuals: htmlVisuals, dictationLibrary: dictationLibrary)
+                            deviceTools: deviceTools, htmlVisuals: htmlVisuals, dictationLibrary: dictationLibrary, dictationVoices: dictationVoices)
         }
         self.loadConversationHeader = loadConversationHeader
         self.notificationApplicationIsActive = notificationApplicationIsActive
@@ -330,6 +333,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     let automationDrafts = AutomationDraftStore()
     let transcriptionSettings = TranscriptionSettingsStore()
     let dictationLibrary: SharedDictationLibrary?
+    let dictationVoices: DictationVoiceProfiles
     let accountDirectory: AccountDirectory
     let modelPickerPreferences: ModelPickerPreferences
     let syncedPreferences: SyncedPreferenceStore
@@ -828,6 +832,11 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         accountDirectory.startForeground()
         for model in connectedHostModels { model.directories.syncFavorites() }
         syncPreferences()
+        dictationVoices.refresh()
+        let dictationModel = dictationLibrary?.model(fallback: transcriptionSettings.model) ?? transcriptionSettings.model
+        if transcriptionSettings.voices(for: dictationModel) == .onlyMine {
+            dictationVoices.learnFromHistory(in: dictationLibrary)
+        } else { dictationVoices.cancelHistoryLearning() }
         retryGatewayIdentities()
         foregroundFanOutTask?.cancel()
         let task = Task { @MainActor [weak self] in
@@ -1354,6 +1363,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         drawerPreferences.reloadMode()
         accountDirectory.names.reload()
         transcriptionSettings.reload()
+        dictationVoices.refresh()
     }
 
     func selectFavorite(_ favorite: FavoriteFolder, from screen: ChatScreenModel, ifStillShowing contextID: UUID) {

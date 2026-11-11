@@ -50,6 +50,41 @@ struct OriginalDictationCaptureTests {
         #expect(retained.capture.sampleRate == 48_000)
     }
 
+    @Test @MainActor func filteredLibraryVersionsKeepEachModelsTextAndParent() async throws {
+        let fixture = try await VoiceFixture(trusted: true)
+        defer { fixture.cleanUp() }
+        let defaultsName = "FilteredLibrary.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let directory = URL.temporaryDirectory.appending(path: defaultsName)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = SharedDictationLibrary(defaults: defaults, directory: directory)
+        library.isEnabled = true
+        library.cancelPublication()
+        defer { library.cancelPublication(); await library.finishArchiving() }
+        let capture = try #require(try await library.prepare(configuration: .init(model: .openAIGPT4oMini, language: .english)))
+        library.isEnabled = false
+        let session = DictationVoiceSession(check: fixture.check)
+        session.append(fixture.mix)
+        await session.finish { _, _ in fixture.phrases }
+        let original = DictationTranscript(text: "Every selected-provider word.", model: "openai/selected")
+        let filtered = try await session.resolve(original, waitingUpTo: .seconds(5))
+        #expect(filtered.transcript.removedVoices)
+        let delivered = try await library.result(filtered.transcript, recordingID: capture.id, plan: capture.plan, access: .fixture)
+        #expect(delivered.text == "Only my words.")
+        await library.finishArchiving()
+        let versions = try archivedResults(in: directory, capture: capture.id)
+        #expect(versions.count == 2)
+        let raw = try #require(versions.first { $0.parentResultID == nil })
+        let final = try #require(versions.first { $0.parentResultID == raw.id })
+        #expect(raw.text == original.text)
+        #expect(raw.model == original.model)
+        #expect(final.text == delivered.text)
+        #expect(final.model == TranscriptionModel.azureMAITranscribe2.batchLibraryID)
+        #expect(versions.allSatisfy { $0.kind == .providerOutput })
+        await session.cancel()
+    }
+
     @Test func archivalSinkReceivesMicrophoneRateBeforeProviderResampling() async throws {
         let native = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let buffer = try #require(AVAudioPCMBuffer(pcmFormat: native, frameCapacity: 4_800))
@@ -88,15 +123,19 @@ struct OriginalDictationCaptureTests {
 }
 
 private func archivedResultTexts(in directory: URL, capture id: UUID) throws -> [String] {
+    try archivedResults(in: directory, capture: id).map(\.text)
+}
+
+private func archivedResults(in directory: URL, capture id: UUID) throws -> [DictationResultVersion] {
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .secondsSince1970
     let partitions = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
     return try partitions.flatMap { partition in
         let results = partition.appending(path: "\(id.uuidString)/results")
-        guard FileManager.default.fileExists(atPath: results.path) else { return [String]() }
+        guard FileManager.default.fileExists(atPath: results.path) else { return [DictationResultVersion]() }
         return try FileManager.default.contentsOfDirectory(at: results, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
-            .map { try decoder.decode(DictationResultVersion.self, from: Data(contentsOf: $0)).text }
+            .map { try decoder.decode(DictationResultVersion.self, from: Data(contentsOf: $0)) }
     }
 }
 
@@ -126,10 +165,10 @@ private final class ArchiveFixtureTranscriber: TranscriptionService {
 
     func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription? { nil }
 
-    @concurrent func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> String {
+    @concurrent func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
         _ = try await recording.transcriptionAudio(maximumByteCount: 1_000_000)
         recorded.withLock { $0.append(recording.id) }
-        return "Synthetic archival dictation"
+        return DictationTranscript(text: "Synthetic archival dictation", model: configuration.model.batchLibraryID)
     }
 }
 

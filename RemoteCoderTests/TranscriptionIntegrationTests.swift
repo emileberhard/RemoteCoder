@@ -3,11 +3,45 @@ import DictationLibrary
 import Foundation
 import Synchronization
 import SpeechKit
+import SpeakerRecognition
 import Testing
 @testable import RemoteCoder
 
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["RUN_REMOTE_CODER_TRANSCRIPTION_INTEGRATION_TESTS"] == "1"), .timeLimit(.minutes(5)))
 struct TranscriptionIntegrationTests {
+    @Test func azureLabelledChecksUseTheRelayAndMeasureUploadCompletionAndAddedWait() async throws {
+        let access = try gatewayAccess()
+        let service = RemoteCoderTranscriptionService(access: access)
+        let configuration = TranscriptionConfiguration(model: .azureMAITranscribe2, language: .english,
+            customVocabulary: ["OpenAI", "AssemblyAI", "ElevenLabs"])
+        for repetitions in [1, 2, 4] {
+            let fixture = try await VoiceFixture(trusted: true)
+            defer { fixture.cleanUp() }
+            let recordings = try TemporaryDictationRecordings()
+            defer { recordings.cleanUp() }
+            var pcm = Data()
+            for _ in 0..<repetitions { pcm.append(fixture.mix) }
+            let writer = try await recordings.store.startRecording(owner: ExecutionTarget(hostID: access.host.id), sampleRate: 16_000)
+            writer.append(pcm)
+            let recording = try await writer.finish()
+            let check = DictationVoiceSession(check: fixture.check)
+            check.append(pcm)
+            await check.finish { pcm, uploaded in
+                try await service.speakerPhrases(pcm, configuration: configuration, uploadFinished: uploaded)
+            }
+            let original = try await service.transcribe(recording, configuration: configuration)
+            let result = try await check.resolve(original, waitingUpTo: check.waitBudget)
+            #expect(!result.transcript.text.isEmpty)
+            #expect(result.transcript.everyone == original.text)
+            #expect(result.transcript.removedVoices)
+            #expect(result.transcript.model == configuration.model.batchLibraryID)
+            let upload = result.upload.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
+            let completion = result.result?.labelledReplyTime.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
+            print("Azure relay voice check audio_ms=\(pcm.count * 1000 / 32_000) upload_ms=\(upload) completion_ms=\(completion) added_wait_ms=\(Int(result.wait / .milliseconds(1)))")
+            await check.cancel()
+        }
+    }
+
     @Test func batchServiceTranscribesSavedAudioWithPersonalVocabulary() async throws {
         let access = try gatewayAccess()
         let recordings = try TemporaryDictationRecordings()
@@ -18,7 +52,7 @@ struct TranscriptionIntegrationTests {
         let configuration = TranscriptionConfiguration(model: .openAIGPT4oMini, language: .english,
                                                        customVocabulary: ["OpenAI", "AssemblyAI", "ElevenLabs"])
         let text = try await RemoteCoderTranscriptionService(access: access).transcribe(recording, configuration: configuration)
-        assertAnchors(text)
+        assertAnchors(text.text)
         #expect(try await recordings.listedIDs() == [recording.id])
     }
 
@@ -204,7 +238,7 @@ private final class AzureTimingTranscriber: TranscriptionService {
         return try await service.makeRealtimeTranscription(configuration: configuration)
     }
 
-    @concurrent func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> String {
+    @concurrent func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
         try await service.transcribe(recording, configuration: configuration)
     }
 }

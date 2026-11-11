@@ -23,6 +23,7 @@ final class ComposerDocument {
         case prepend(ComposerDocumentContent)
         case appendParagraph(ComposerDocumentContent)
         case dictation(String)
+        case filteredDictation(String, everyone: String)
         case updatePaste(UUID, String)
     }
 
@@ -54,6 +55,7 @@ final class ComposerDocument {
         return manager
     }()
     private(set) var revision = 0
+    private(set) var dictationRestores: [ComposerDictationRestore] = []
     @ObservationIgnored private(set) var buffer: NSMutableAttributedString
     @ObservationIgnored var selection = NSRange(location: 0, length: 0)
     private struct MountedEditor {
@@ -69,11 +71,12 @@ final class ComposerDocument {
     @ObservationIgnored private var firstContentLocation: Int?
     @ObservationIgnored private let onChange: () -> Void
 
-    init(content: ComposerDocumentContent, onChange: @escaping () -> Void) {
+    init(content: ComposerDocumentContent, dictationRestores: [ComposerDictationRestore] = [], onChange: @escaping () -> Void) {
         buffer = Self.attributed(content)
         nonWhitespaceCount = Self.contentCount(buffer.string)
         firstContentLocation = Self.firstContent(in: buffer.string)
         self.onChange = onChange
+        self.dictationRestores = dictationRestores
     }
 
     var isEmpty: Bool { _ = revision; return buffer.length == 0 }
@@ -205,6 +208,7 @@ final class ComposerDocument {
         let inserted = Self.attributed(replacement)
         buffer.replaceCharacters(in: range, with: inserted)
         changedCharacters(in: range, removed: removed, inserted: inserted.string)
+        didApply(request.edit, range: range, content: replacement)
         selection = NSRange(location: range.location + inserted.length, length: 0)
         request.complete(.success(()))
     }
@@ -243,7 +247,7 @@ final class ComposerDocument {
             guard !restored.runs.isEmpty else { return nil }
             guard nonWhitespaceCount > 0 else { return (NSRange(location: 0, length: buffer.length), restored) }
             return (NSRange(location: buffer.length, length: 0), .init(runs: [.text("\n\n")] + restored.runs))
-        case .dictation(let text):
+        case .dictation(let text), .filteredDictation(let text, _):
             let before = selection.location > 0 ? buffer.attributedSubstring(from: NSRange(location: selection.location - 1, length: 1)).string : ""
             let after = NSMaxRange(selection) < buffer.length ? buffer.attributedSubstring(from: NSRange(location: NSMaxRange(selection), length: 1)).string : ""
             let insertion = (before.isEmpty || before.last?.isWhitespace == true ? "" : " ") + text
@@ -264,11 +268,39 @@ final class ComposerDocument {
     }
 
     func changedCharacters(in range: NSRange, removed: String, inserted: String) {
+        dictationRestores = dictationRestores.compactMap { current in
+            var restore = current
+            let end = restore.location + restore.length
+            if NSMaxRange(range) <= restore.location {
+                restore.location += (inserted as NSString).length - range.length
+            } else if range.location < end {
+                return nil
+            }
+            return restore
+        }
         nonWhitespaceCount += Self.contentCount(inserted) - Self.contentCount(removed)
         updateFirstContent(in: range, inserted: inserted)
         selection.location = min(selection.location, buffer.length)
         selection.length = min(selection.length, buffer.length - selection.location)
         changed()
+    }
+
+    func didApply(_ edit: Edit, range: NSRange, content: ComposerDocumentContent) {
+        guard case .filteredDictation(let text, let everyone) = edit else { return }
+        let insertion = content.expandedText as NSString
+        let span = insertion.range(of: text)
+        guard span.location != NSNotFound else { return }
+        dictationRestores.append(ComposerDictationRestore(location: range.location + span.location, length: span.length, everyone: everyone))
+        changed()
+    }
+
+    func restoreEveryone() {
+        guard !isRetired, !isComposing else { return }
+        let restores = dictationRestores.sorted { $0.location > $1.location }
+        dictationRestores = []
+        for restore in restores where restore.location >= 0 && restore.location + restore.length <= buffer.length {
+            edit(.replace(NSRange(location: restore.location, length: restore.length), .init(runs: [.text(restore.everyone)])))
+        }
     }
 
     private func updateFirstContent(in range: NSRange, inserted: String) {

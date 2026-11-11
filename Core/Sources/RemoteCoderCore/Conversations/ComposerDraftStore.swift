@@ -280,6 +280,7 @@ final class ComposerDraftStore {
                 draft.text = saved.text
                 draft.modifiedAt = saved.snapshot.modifiedAt
                 draft.newChat = saved.snapshot.newChat
+                draft.dictationRestores = saved.snapshot.dictationRestores
             }
             remember(draft)
             _ = document(for: draft)
@@ -312,7 +313,7 @@ final class ComposerDraftStore {
     func document(for draft: ComposerDraft) -> ComposerDocument {
         if let document = draft.document { return document }
         let content = Self.persistedContent(draft)
-        let document = ComposerDocument(content: content) { [weak self, weak draft] in
+        let document = ComposerDocument(content: content, dictationRestores: draft.dictationRestores ?? []) { [weak self, weak draft] in
             guard let self, let draft else { return }
             self.changed(draft)
         }
@@ -369,7 +370,7 @@ final class ComposerDraftStore {
         document.edit(.dictation(text))
     }
 
-    func appendDictation(_ text: String, recordingID: UUID, to draft: ComposerDraft) async throws {
+    func appendDictation(_ text: String, recordingID: UUID, everyone: String? = nil, to draft: ComposerDraft) async throws {
         try requireActive()
         guard pendingReceipts[recordingID] == nil else { return }
         guard pendingReceipts.count + pendingDictations.count < Self.capacity else { throw DictationEditError.pendingCapacity }
@@ -385,7 +386,8 @@ final class ComposerDraftStore {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let document = document(for: draft)
-        try await document.apply(.dictation(text))
+        if let everyone { try await document.apply(.filteredDictation(text, everyone: everyone)) }
+        else { try await document.apply(.dictation(text)) }
         guard state == .active || state == .retiring else { throw ComposerDraftPersistence.Failure.retired }
         guard !draft.isDiscarded else { return }
         pendingReceipts[recordingID] = .init(draftID: draft.id, requiredRevision: draft.revision, receivedAt: .now)
@@ -637,7 +639,8 @@ final class ComposerDraftStore {
                     return ComposerDraftSnapshot(id: draft.id, destination: draft.destination, revision: draft.revision,
                         content: Self.joined(sending, ahead: document(for: draft).content),
                         attachments: sending.flatMap(\.attachments) + draft.attachments,
-                        modifiedAt: draft.modifiedAt, newChat: draft.newChat)
+                        modifiedAt: draft.modifiedAt, newChat: draft.newChat,
+                        dictationRestores: sending.isEmpty ? document(for: draft).dictationRestores : nil)
                 }
                 if snapshots.contains(where: { Destination.threadID(for: $0.destination) == nil }) { changesUnsentDrafts = true }
                 let included = Set(snapshots.map(\.id))

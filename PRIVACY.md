@@ -45,13 +45,35 @@ Do not assume a displayed visual runs offline.
 
 Dictation sends microphone audio through the configured gateway speech relay
 to the selected speech provider. Supported configurations include OpenAI, Google Gemini,
-ElevenLabs, AssemblyAI and Azure Speech; only the configured feature/provider
-receives the corresponding request. Provider keys stay on the host/router.
+ElevenLabs, AssemblyAI and Azure Speech. Provider keys stay on the host/router.
+
+Only Mine learns a voice template silently from dictations on this device and,
+when the shared library is enabled, recent originals already stored locally.
+The template is separate from the shared dictation profile: it never leaves the
+device, enters diagnostics, syncs to iCloud or enters device backups. Each app
+and device keeps its own template. Everyone stops using and learning it.
+
+Only Mine is the default when the selected dictation model is Azure
+MAI-Transcribe-2. Other models default to Everyone until you explicitly choose
+Only Mine. When another voice is detected and the local template is trusted,
+Only Mine sends the recording to Azure through the gateway for an additional
+speaker-attributed transcription. This can happen even when another speech
+provider is selected, as explained by the setting, and incurs another provider
+request. When voices are removed, delivered text comes from Azure; otherwise
+the selected provider's text is kept. Azure's processing and retention policies
+apply to that additional audio. An unavailable check keeps everyone's text.
+
+Forget My Voice deletes the local template and syncs a forget timestamp through
+the existing gateway preference sync so other devices also forget when they
+connect. It does not delete provider-held audio, transcripts or library copies.
+Filtered dictations keep everyone's text with the local draft until restored,
+sent or replaced, allowing Restore Everyone without another provider request.
 
 Dictation keeps a local recovery recording until its transcribed text is saved.
 The recovery store retains at most five recordings for seven days. If explicitly
 enabled, the shared dictation library separately uploads original recordings,
-text and profile information to the configured CloudKit container. Its copies
+text and dictation settings to the configured CloudKit container, including
+original and filtered transcript versions with their producing models. Its copies
 have a separate lifetime from recovery recordings; deleting a recovery copy does
 not delete a library entry.
 

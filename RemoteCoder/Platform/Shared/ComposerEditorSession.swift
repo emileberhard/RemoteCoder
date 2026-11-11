@@ -94,6 +94,7 @@ final class ComposerEditorSession {
         let resetsUndo: Bool
         if case .replaceAll = request.edit { resetsUndo = true } else { resetsUndo = false }
         editor.replaceComposerCharacters(in: range, with: text, resetsUndo: resetsUndo)
+        document.didApply(request.edit, range: range, content: content)
         activate()
         request.complete(.success(()))
     }

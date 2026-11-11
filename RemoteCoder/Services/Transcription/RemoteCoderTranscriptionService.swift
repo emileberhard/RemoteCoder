@@ -6,7 +6,7 @@ import SpeechKit
 protocol TranscriptionService: Sendable {
     func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription?
     @concurrent
-    func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> String
+    func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript
 }
 
 struct RemoteCoderTranscriptionService: TranscriptionService {
@@ -29,12 +29,24 @@ struct RemoteCoderTranscriptionService: TranscriptionService {
     }
 
     @concurrent
-    func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> String {
+    func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
         let engine = try await batchEngine(for: configuration.model)
         let audio = try await recording.transcriptionAudio(
             maximumByteCount: min(engine.maximumAudioByteCount, GatewaySpeechAccess.maximumRelayedAudioByteCount)
         )
-        return try await transcribe(audio, with: engine, configuration: configuration)
+        return DictationTranscript(text: try await transcribe(audio, with: engine, configuration: configuration), model: configuration.model.batchLibraryID)
+    }
+
+    @concurrent func speakerPhrases(_ pcm16: Data, configuration: TranscriptionConfiguration,
+        uploadFinished: @escaping @Sendable (Duration) -> Void) async throws -> [SpeakerPhrase] {
+        guard pcm16.count <= GatewaySpeechAccess.maximumRelayedAudioByteCount else { throw ServiceError.emptyResponse }
+        let audio = try TranscriptionAudio(data: PCM16WAVFile.data(pcmData: pcm16, sampleRate: 16_000),
+            fileName: "dictation.wav", mimeType: "audio/wav", fileExtension: "wav")
+        do {
+            let provider = AzureSpeechTranscriptionProvider(configuration: try await AzureSpeechConfiguration.make(model: .maiTranscribe2, access: access))
+            return try await provider.transcribeSpeakers(.init(audio: audio, languageHints: configuration.languageHints,
+                customVocabulary: configuration.customVocabulary), uploadFinished: uploadFinished)
+        } catch { throw access.explain(error, provider: .azure) }
     }
 
     private func transcribe(_ audio: TranscriptionAudio, with engine: TranscriptionEngine,
