@@ -481,7 +481,10 @@ The bench gateway is the bundled secondary gateway seed (`macBenchmarkGatewayId`
 whichever Mac is the bench host; other gateway identities, including primary host, are
 rejected, so a benchmark never drives the production gateway. A journey that opens a
 real conversation reads it from that gateway, which must be reachable from the bench
-host. Runs also require the isolated bench HostStore factory before workspace
+host. `build` bundles the bench host's development configuration, the ignored
+`RemoteCoder/Resources/RemoteCoderLocalConfig.json` of its canonical checkout,
+which must hold that seed's `macBookHostname`, `codexGatewayPort` and
+`codexGatewayAuthToken`. Runs also require the isolated bench HostStore factory before workspace
 bootstrap. A missing bundled seed must fail closed; never fall back to a
 persisted primary host host.
 `run --thread ID --label NAME` saves the plan, report, capture and `summary.json`
