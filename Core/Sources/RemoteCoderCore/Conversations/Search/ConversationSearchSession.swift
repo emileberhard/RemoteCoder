@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 struct ConversationSearchHost: Sendable {
     enum Answer<Response: Sendable>: Sendable {
@@ -41,10 +42,13 @@ final class ConversationSearchSession {
     @ObservationIgnored private let clock: any Clock<Duration>
     @ObservationIgnored private var generation: UInt64 = 0
     private enum Activity { case active, suspended, interrupted }
+    private enum QueryOutcome: String { case cancelled, superseded, firstResults }
 
     @ObservationIgnored private var activity = Activity.active
     @ObservationIgnored private var search: Task<Void, Never>?
     @ObservationIgnored private let logger = AppLogger(category: "ConversationSearch")
+    @ObservationIgnored private let signposter = OSSignposter(subsystem: "RemoteCoder", category: .pointsOfInterest)
+    @ObservationIgnored private var queryInterval: OSSignpostIntervalState?
 
     init(clock: any Clock<Duration> = ContinuousClock(), hosts: @escaping @MainActor () -> [ConversationSearchHost]) {
         self.query = ""
@@ -99,19 +103,27 @@ final class ConversationSearchSession {
     }
 
     private func cancelRun() {
+        endQueryInterval(.cancelled)
         generation &+= 1
         search?.cancel()
         search = nil
     }
 
     private func queryChanged() {
+        endQueryInterval(.superseded)
         cancelRun()
-        guard activity == .active else { activity = .interrupted; return }
+        queryInterval = signposter.beginInterval("ConversationSearchQuery", id: signposter.makeSignpostID())
+        guard activity == .active else {
+            activity = .interrupted
+            endQueryInterval(.cancelled)
+            return
+        }
         let typed = query
         guard typed.prefix(4 * ConversationSearchQuery.maximumBytes).contains(where: { !$0.isWhitespace }) else {
             search = nil
             isActive = false
             results = ConversationSearchResults()
+            endQueryInterval(.cancelled)
             return
         }
         if !isActive { isActive = true }
@@ -140,16 +152,30 @@ final class ConversationSearchSession {
         case .clear:
             isActive = false
             results = ConversationSearchResults()
+            signposter.emitEvent("ConversationSearchPublication", "kind=clear")
+            endQueryInterval(.cancelled)
         case let .status(status):
-            if results.status != status { results.status = status }
+            if results.status != status {
+                results.status = status
+                signposter.emitEvent("ConversationSearchPublication", "kind=status")
+            }
         case let .firstPaint(painted):
             results = painted
+            signposter.emitEvent("ConversationSearchPublication", "kind=firstPaint")
+            endQueryInterval(.firstResults)
         case .append(var appended):
             appended.titles.isRevealed = results.titles.isRevealed
             appended.messages.isRevealed = results.messages.isRevealed
             appended.meaning.isRevealed = results.meaning.isRevealed
             results = appended
+            signposter.emitEvent("ConversationSearchPublication", "kind=append")
         }
+    }
+
+    private func endQueryInterval(_ outcome: QueryOutcome) {
+        guard let interval = queryInterval else { return }
+        signposter.endInterval("ConversationSearchQuery", interval, "outcome=\(outcome.rawValue, privacy: .public)")
+        queryInterval = nil
     }
 
     @concurrent
