@@ -2660,6 +2660,59 @@ fn conversation_item(
 }
 
 #[test]
+fn sessions_conversation_hit_destination_matches_catalog_locate() -> Result<()> {
+    let f = fixture();
+    write(
+        &f.codex.with_file_name("child.jsonl"),
+        &[
+            codex_meta("codex-child", None),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"DelegatedChildNeedle"}}),
+        ],
+    );
+    scan(&f);
+    let codex_root = super::session_key(&f.origins[0], "codex-root");
+    let codex_child = super::session_key(&f.origins[0], "codex-child");
+    let claude_root = super::session_key(&f.origins[1], "claude_root");
+    let parents = [(codex_child, Some(codex_root.clone()))]
+        .into_iter()
+        .collect();
+    let codex = conversation_search(&f.store, "DelegatedChildNeedle", 1, parents);
+    let claude = conversation_search(&f.store, "Native child", 1, Default::default());
+    let folded_claude = conversation_search(
+        &f.store,
+        "Native child",
+        1,
+        [(claude_root, Some(codex_root))].into_iter().collect(),
+    );
+    for (result, expected, claude_agent) in [
+        (codex, Some("codex-child"), None),
+        (claude, None, Some("child")),
+        (folded_claude, Some("claude_root"), Some("child")),
+    ] {
+        let conversation = &result.conversations[0];
+        let hit = &conversation.hits[0];
+        let control =
+            super::store::ReadControl::new(Instant::now() + super::conversations::DEADLINE);
+        let located = super::locate::item(
+            &f.store.reader()?,
+            &super::locate::Request {
+                item_key: hit.item_key.clone(),
+            },
+            &control,
+        )?;
+        assert_eq!(hit.agent_thread_id.as_deref(), expected);
+        assert_eq!(located.claude_agent_id.as_deref(), claude_agent);
+        assert_eq!(
+            hit.agent_thread_id
+                .as_deref()
+                .unwrap_or(&conversation.thread_id),
+            located.response.thread_id,
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn sessions_conversations_match_across_messages_fold_and_rank_titles() {
     let f = fixture();
     let outcome = scan(&f);
@@ -2988,39 +3041,41 @@ fn sessions_conversations_defer_expensive_refreshes_without_marking_partial() ->
 }
 
 #[test]
-fn sessions_conversations_cap_only_assistant_document_text() -> Result<()> {
+fn sessions_conversations_cap_both_document_text_columns() -> Result<()> {
     let f = fixture();
     scan(&f);
     let root = super::session_key(&f.origins[0], "codex-root");
     {
         let db = f.store.writer()?;
-        let cap = super::index::ASSISTANT_BYTES as usize;
-        conversation_item(
-            &db,
-            &root,
-            1000,
-            &format!("OldAssistantAnchor {}", "old ".repeat(40)),
-            "assistant",
-            None,
-        );
-        conversation_item(&db, &root, 1001, "TypedTailAnchor", "user", None);
-        let newest = "NewestAssistantAnchor ";
-        conversation_item(
-            &db,
-            &root,
-            1002,
-            &format!("{newest}{}", "cd ".repeat((cap - newest.len() - 16) / 3)),
-            "assistant",
-            None,
-        );
+        let cap = super::index::DOCUMENT_COLUMN_BYTES as usize;
+        for (offset, kind) in [(1000, "assistant"), (1002, "user")] {
+            conversation_item(
+                &db,
+                &root,
+                offset,
+                &format!("Old{kind}Anchor {}", "old ".repeat(40)),
+                kind,
+                None,
+            );
+            let newest = format!("Newest{kind}Anchor ");
+            conversation_item(
+                &db,
+                &root,
+                offset + 1,
+                &format!("{newest}{}", "cd ".repeat((cap - newest.len() - 16) / 3)),
+                kind,
+                None,
+            );
+        }
     }
     let search = |query| conversation_search(&f.store, query, 1, Default::default());
-    assert!(search("OldAssistantAnchor").conversations.is_empty());
-    assert_eq!(search("TypedTailAnchor").conversations[0].session_key, root);
-    assert_eq!(
-        search("NewestAssistantAnchor").conversations[0].session_key,
-        root
-    );
+    for kind in ["assistant", "user"] {
+        assert!(search(&format!("Old{kind}Anchor")).conversations.is_empty());
+        assert_eq!(
+            search(&format!("Newest{kind}Anchor")).conversations[0].session_key,
+            root
+        );
+    }
     let db = f.store.reader()?;
     let status = super::query::sql(&db, "SELECT 1")?;
     assert_eq!(status["coverage"]["conversationSearch"]["cappedRoots"], 1);
@@ -3028,28 +3083,40 @@ fn sessions_conversations_cap_only_assistant_document_text() -> Result<()> {
 }
 
 #[test]
-fn sessions_conversations_timeout_preserves_completed_results() {
+fn sessions_conversations_index_pasted_payload_and_skip_injected_prompt_text() -> Result<()> {
     let f = fixture();
     scan(&f);
-    let control = super::store::ReadControl::new(Instant::now());
-    let completed = Arc::new(std::sync::Mutex::new(Some(
-        super::conversations::Response {
-            schema_version: 1,
-            truncated: false,
-            conversations: vec![],
-        },
-    )));
-    let result = super::conversations::search(
-        &f.store.reader().unwrap(),
-        &super::conversations::Request {
-            query: "drawer".into(),
-            limit: 30,
-        },
-        &control,
-        &completed,
-    )
-    .unwrap();
-    assert!(result.truncated);
+    let root = super::session_key(&f.origins[0], "codex-root");
+    let prompt = format!(
+        "CaptionAnchor\n\n<remotecoder_pasted_text_v1>\n{}\n</remotecoder_pasted_text_v1>\n\n{}- /AttachedPathAnchor\n<remotecoder_note>\nInjectedNoteAnchor\n</remotecoder_note>",
+        json!([{"id":"11111111-2222-4333-8444-555555555555","text":"PastedPayloadAnchor"}]),
+        crate::prompt_summary::ATTACHED_FILES_HEADER,
+    );
+    conversation_item(&f.store.writer()?, &root, 1000, &prompt, "user", None);
+    let found = conversation_search(
+        &f.store,
+        "CaptionAnchor PastedPayloadAnchor",
+        1,
+        Default::default(),
+    );
+    assert_eq!(found.conversations[0].session_key, root);
+    assert!(
+        found.conversations[0].hits[0]
+            .excerpt
+            .contains("PastedPayloadAnchor")
+    );
+    for ignored in ["InjectedNoteAnchor", "AttachedPathAnchor"] {
+        assert!(
+            conversation_search(&f.store, ignored, 1, Default::default())
+                .conversations
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        crate::prompt_summary::prompt_summary(&prompt),
+        "CaptionAnchor"
+    );
+    Ok(())
 }
 
 #[test]

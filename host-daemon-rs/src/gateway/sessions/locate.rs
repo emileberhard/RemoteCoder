@@ -57,11 +57,7 @@ impl Gateway {
         read: &CatalogRead,
         mut item: locate::Item,
     ) -> Result<locate::Response> {
-        let target = if let Some((parent, agent)) =
-            crate::providers::claude::subagent_thread_parts(&item.response.thread_id)
-        {
-            let agent_id = agent.to_owned();
-            item.response.thread_id = crate::providers::claude::claude_thread_id(parent);
+        let target = if let Some(agent_id) = item.claude_agent_id.take() {
             LocateTarget::Agent { agent_id }
         } else {
             LocateTarget::Item {

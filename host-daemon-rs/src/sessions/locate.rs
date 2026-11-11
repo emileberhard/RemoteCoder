@@ -5,6 +5,7 @@ use super::{
 use anyhow::{Context, Result, ensure};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::fs::File;
 
 #[derive(Deserialize, Serialize)]
@@ -26,12 +27,25 @@ pub(crate) struct Response {
 pub(crate) struct Item {
     pub response: Response,
     pub provider: String,
+    pub claude_agent_id: Option<String>,
     pub kind: String,
     pub reference: SourceRef,
     pub part: usize,
     pub text: Option<String>,
     pub provider_item_id: Option<String>,
     pub unique_text: bool,
+}
+
+pub(super) fn destination<'a>(provider: &str, thread: &'a str) -> (Cow<'a, str>, Option<&'a str>) {
+    if provider == "claude"
+        && let Some((parent, agent)) = crate::providers::claude::subagent_thread_parts(thread)
+    {
+        return (
+            crate::providers::claude::claude_thread_id(parent).into(),
+            Some(agent),
+        );
+    }
+    (thread.into(), None)
 }
 
 pub(crate) fn item(db: &Reader, request: &Request, control: &ReadControl) -> Result<Item> {
@@ -80,15 +94,17 @@ pub(crate) fn item(db: &Reader, request: &Request, control: &ReadControl) -> Res
     };
     ensure!(!control.stopped(), "locate interrupted");
     let part = super::item_part(&request.item_key)?;
+    let (thread_id, claude_agent_id) = destination(&provider, &thread_id);
     Ok(Item {
         response: Response {
-            thread_id,
+            thread_id: thread_id.into_owned(),
             turn_id: if provider == "codex" { turn_id } else { None },
             turns_cursor: None,
             items_cursor: None,
             item_id: None,
         },
         provider,
+        claude_agent_id: claude_agent_id.map(str::to_owned),
         kind,
         reference,
         part,

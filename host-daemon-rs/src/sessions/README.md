@@ -205,8 +205,12 @@ Schema-version-1 responses contain `truncated` and ranked `conversations`. Each
 conversation carries its root `sessionKey`, origin `hostId`, `provider`,
 `threadId`, nullable `title`, `cwd` and `lastAt`, `titleMatch`, `hitCount`, and up
 to three `hits`. A hit contains its exact `itemKey`, catalog `kind`, nullable
-`at`, an excerpt of at most 240 Unicode characters, and nullable `agentThreadId`
-for a folded child. Unknown dates and metadata stay null. Deleted sources are
+`at`, an excerpt of at most 240 Unicode characters, and nullable `agentThreadId`.
+A hit opens in `agentThreadId` when present and the conversation's `threadId`
+otherwise. `sessions/locate` returns that same destination for the item key.
+A delegated child opens in its own thread. A native Claude child opens in the
+thread owning its spawning Agent call, which can be the root or a delegated
+thread. Unknown dates and metadata stay null. Deleted sources are
 excluded. Native ancestry and persisted delegated parents fold through at most
 16 links. A missing ancestor stops the walk at the nearest present ancestor.
 Ambiguous delegated ownership and cycles leave the session unfolded.
@@ -226,8 +230,9 @@ that additional conversations or hits may exist. Limiting the final list alone
 leaves `truncated` false.
 Two dedicated reader permits isolate typing from the 16 inventory/mirror readers.
 The one-second deadline includes FIFO, admission and execution. Completed
-snapshots survive timeout with `truncated: true`; no completed stage yields
-instead typed `requestTimedOut`. A request-owned drop guard signals cancellation,
+snapshots survive timeout with `truncated: true`, including when publishing the
+prepared response waits for outbound capacity. Expiry before any stage completes
+yields typed `requestTimedOut`. A request-owned drop guard signals cancellation,
 disconnect and deadline to the same SQLite progress handler, checked every
 1,000 VM instructions, releasing the blocking reader's permit promptly.
 
@@ -238,8 +243,10 @@ origin-owned facts. Codex typed prompts and steers come from native
 `event_msg/user_message` records; model-facing user-role response items are
 system context. Claude uses the history projection's injected-record and queued
 prompt owners. Compaction summaries, task notifications and agent-message
-envelopes never become user items. `prompt_summary` prepares typed text for the
-document while catalog text remains literal for the existing search endpoint.
+envelopes never become user items. The prompt-envelope owner extracts captions
+and pasted payloads for the document, excluding the injected RemoteCoder note
+and attached-file path list. Catalog text remains literal for the existing
+search endpoint.
 
 The origin records Codex names from its native append-only session index and
 current delegated parents from `JobStore`'s authoritative parent tags. The ingest
@@ -267,16 +274,16 @@ document can supply candidates while a refresh waits. That freshness lag does
 not set `truncated`. Initial catalog work, the derived rebuild backlog and
 incomplete coverage do set it.
 
-Documents retain the entire title, folder and typed-user text. Assistant text
-uses the newest indexed items up to 2 MiB across 128 member sessions.
-Earlier assistant terms may be absent from
-candidate selection for a capped root. They remain available in the scoped
-word index for already matched conversations. `sessions/sql` reports the
+Documents retain the entire title and folder. The typed-user and assistant
+columns each use the newest whole items up to 2 MiB of catalog text across
+128 member sessions. An item that would exceed the remaining column budget
+ends that column's window. Earlier terms remain available in the scoped word
+index for already matched conversations. `sessions/sql` reports the
 number of capped roots in `coverage.conversationSearch.cappedRoots`. This count
 is null while the derived schema is being installed.
 
 On a MacBook Pro with an isolated copy of 7,330 sources, 3 of 4,911 roots
-reached the 2 MiB cap. The word and conversation FTS indexes used 196.4 MB and
+reached the 2 MiB assistant cap in derived version 4. The word and conversation FTS indexes used 196.4 MB and
 143.3 MB of SQLite pages. Forty-three warm limit-30 requests at 0.555 load per
 core took 88 ms at p50 and 193 ms at p95, with a 228 ms maximum. The version 4
 derived rebuild took 262 seconds from process start, including an overlapping
@@ -288,8 +295,8 @@ One append to the p95 tree by catalog text bytes and one to the largest tree
 took 37 and 894 ms to refresh the document before commit at 0.595 load per core.
 Those refreshes scheduled 333 ms and 8.05 seconds of cooldown. Adding the
 observed refreshes including WAL commit gives approximately 0.42 and 9.86
-seconds of candidate lag if a new append waits the full cooldown. These are
-measured examples. Typed text remains complete and storage commit time varies.
+seconds of candidate lag if a new append waits the full cooldown. These examples
+predate the typed column cap in derived version 5. Storage commit time varies.
 
 ## Locate a matching item
 

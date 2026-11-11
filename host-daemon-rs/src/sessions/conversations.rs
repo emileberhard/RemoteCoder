@@ -146,7 +146,7 @@ pub(crate) fn search(
             .expect("conversation search progress poisoned") = Some(response.clone());
         let snippets = Snippets::new(control, &expressions)?;
         let mut find_hits = db.prepare("SELECT i.rowid,i.kind,i.at,i.text_bytes FROM item_word_fts JOIN item i ON i.rowid=item_word_fts.rowid WHERE item_word_fts MATCH ?1 ORDER BY item_word_fts.rowid DESC LIMIT ?2")?;
-        let mut hit_text = db.prepare("SELECT i.item_key,s.thread_id,i.session_key,i.text FROM item i JOIN session s USING(session_key) WHERE i.rowid=?1")?;
+        let mut hit_text = db.prepare("SELECT i.item_key,s.thread_id,s.provider,i.text FROM item i JOIN session s USING(session_key) WHERE i.rowid=?1")?;
         for header in candidates.into_iter().take(128) {
             ensure!(!control.stopped(), "conversation search interrupted");
             let title_match: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid WHERE d.session_key=?1 AND conversation_fts MATCH ?2)", params![header.session_key, format!("title:({expression})")], |r| r.get(0))?;
@@ -199,14 +199,16 @@ pub(crate) fn search(
                     response.truncated = true;
                     continue;
                 }
-                let (item_key, thread_id, session_key, text): (String, String, String, String) =
+                let (item_key, thread_id, provider, text): (String, String, String, String) =
                     hit_text
                         .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+                let (destination, _) = super::locate::destination(&provider, &thread_id);
                 excerpts.push(Hit {
                     item_key,
                     kind: hit.kind,
                     at: hit.at,
-                    agent_thread_id: (session_key != header.session_key).then_some(thread_id),
+                    agent_thread_id: (destination != header.thread_id)
+                        .then(|| destination.into_owned()),
                     excerpt: snippets.render(&text)?,
                 });
                 if excerpts.len() == 3 {

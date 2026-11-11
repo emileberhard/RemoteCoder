@@ -2,7 +2,7 @@ use super::{ClientTx, Gateway, QUERY_DEADLINE};
 use crate::gateway::{admission::Admission, sessions::CatalogMethod};
 use crate::rpc::dispatch::ClientRequest;
 use crate::rpc::error::{ErrorKind, RpcCode, RpcData};
-use crate::rpc::{RequestPermit, RpcError};
+use crate::rpc::{RequestPermit, RpcError, RpcResult};
 use crate::tasks::owned_tasks::OwnedTasks;
 use anyhow::{Context as _, Result};
 use futures_util::future::{BoxFuture, poll_fn};
@@ -284,6 +284,12 @@ impl ConnectionQueries {
     }
 }
 
+enum QueryExecution {
+    Catalog(RpcResult),
+    Rejected(RpcError),
+    Dispatched(Result<()>),
+}
+
 async fn run_query(
     gateway: Arc<Gateway>,
     out: ClientTx,
@@ -304,13 +310,12 @@ async fn run_query(
     let work = async {
         let _permits = permits;
         let _admission = admission;
-        match gateway
+        if let Err(error) = gateway
             .validate_dispatch(&request.method, &request.object)
             .await
         {
-            Ok(()) => (),
-            Err(error) => return gateway.send_error_to(&out, Some(&id), &error).await,
-        };
+            return QueryExecution::Rejected(error);
+        }
         let target = request.owned.expect("owned query route").target;
         if let Some(method) = policy.catalog {
             let response = match gateway.validate_member_grant(&out.grant).await {
@@ -326,14 +331,13 @@ async fn run_query(
                 }
                 Err(error) => Err(error),
             };
-            return gateway
-                .respond(&out, id.clone(), response, Some(&request.method))
-                .await
-                .map(|_| ());
+            return QueryExecution::Catalog(response);
         }
-        gateway
-            .handle_owned_rpc(out.id, &out, &request.method, target, &request.object)
-            .await
+        QueryExecution::Dispatched(
+            gateway
+                .handle_owned_rpc(out.id, &out, &request.method, target, &request.object)
+                .await,
+        )
     };
     let outcome = if Instant::now() >= deadline.deadline() {
         drop(work);
@@ -352,7 +356,14 @@ async fn run_query(
         }
     };
     match outcome {
-        Some(result) => result,
+        Some(QueryExecution::Catalog(response)) => gateway
+            .respond(&out, id, response, Some(&method))
+            .await
+            .map(|_| ()),
+        Some(QueryExecution::Rejected(error)) => {
+            gateway.send_error_to(&out, Some(&id), &error).await
+        }
+        Some(QueryExecution::Dispatched(result)) => result,
         None => {
             gateway.journal.transport(
                 "query_timed_out",

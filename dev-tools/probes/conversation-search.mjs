@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import {mkdir, readFile, writeFile} from 'node:fs/promises';
+import {Database} from 'bun:sqlite';
+import {appendFile, mkdir, readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {IsolatedGateway} from './isolated-gateway.mjs';
 
@@ -13,11 +14,17 @@ try {
   const root='11111111-2222-4333-8444-555555555555';
   const records=[
     {type:'user',sessionId:root,uuid:'prompt',cwd:lab.root,timestamp:'2026-11-01T10:00:00Z',message:{role:'user',content:'Drawer jitters'}},
-    {type:'assistant',sessionId:root,uuid:'answer',timestamp:'2026-11-01T10:00:01Z',message:{id:'answer',role:'assistant',content:[{type:'text',text:'Fix the flicker in Malmö'}]}},
+    {type:'assistant',sessionId:root,uuid:'answer',timestamp:'2026-11-01T10:00:01Z',message:{id:'answer',role:'assistant',content:[{type:'text',text:'Fix the flicker in Malmö'},{type:'tool_use',id:'spawn-child',name:'Agent',input:{prompt:'Inspect the child'}}]}},
+    {type:'user',sessionId:root,uuid:'agent-result',toolUseResult:{agentId:'child'},message:{content:[{type:'tool_result',tool_use_id:'spawn-child',content:'Done'}]}},
   ];
   await writeFile(join(project,`${root}.jsonl`),records.map(v=>JSON.stringify(v)+'\n').join(''));
+  const nativeChild=join(project,root,'subagents','agent-child.jsonl');
+  await mkdir(join(project,root,'subagents'),{recursive:true});
+  await writeFile(nativeChild,JSON.stringify({type:'assistant',sessionId:root,uuid:'child-answer',message:{role:'assistant',content:[{type:'text',text:'ClaudeNativeChildNeedle'}]}})+'\n');
   const codexThread='22222222-3333-4444-8555-666666666666';
   const codexNeedle='GatewayNativeLocateFixture';
+  const delegatedChild='33333333-4444-4555-8666-777777777777';
+  const delegatedNeedle='CodexDelegatedChildNeedle';
   const codexAt='2026-11-01T10:00:00.000Z';
   const codexEvent=(type,payload)=>({timestamp:codexAt,type:'event_msg',payload:{type,...payload}});
   const codexSessions=join(lab.nativeDefault,'sessions','2026','11','01');
@@ -32,6 +39,14 @@ try {
     codexEvent('task_complete',{turn_id:'fixture-turn-2',last_agent_message:null}),
   ];
   await writeFile(join(codexSessions,`rollout-2026-11-01T10-00-00-${codexThread}.jsonl`),rollout.map(row=>JSON.stringify(row)+'\n').join(''),{mode:0o600});
+  const childRollout=join(codexSessions,`rollout-2026-11-01T10-00-00-${delegatedChild}.jsonl`);
+  const childRecords=[
+    {...rollout[0],payload:{...rollout[0].payload,id:delegatedChild,session_id:delegatedChild}},
+    codexEvent('task_started',{turn_id:'delegated-turn',model_context_window:8192}),
+    codexEvent('user_message',{message:delegatedNeedle}),
+    codexEvent('task_complete',{turn_id:'delegated-turn',last_agent_message:null}),
+  ];
+  await writeFile(childRollout,childRecords.map(row=>JSON.stringify(row)+'\n').join(''),{mode:0o600});
   const provider = lab.path('meaning.sh');
   await writeFile(provider,`cat >/dev/null\nprintf '%s' '${JSON.stringify({conversations:[{sessionId:'unknown',provider:'claude',excerpt:'omit',score:2},{sessionId:root,provider:'claude',excerpt:'Drawer reveal stutter',score:1}]})}'\n`);
   const config=lab.path('meaning.json');
@@ -60,6 +75,16 @@ try {
   const page=await rpc('thread/turns/list',{threadId:located.result.threadId,cursor:located.result.turnsCursor,sortDirection:'asc',itemsView:'full',limit:1});
   assert.equal(page.result.data[0].id,located.result.turnId);
   assert.ok(JSON.stringify(page.result).includes(located.result.itemId));
+  const native=await lab.waitFor(async()=>{
+    const reply=await rpc('sessions/conversations/search',{query:'ClaudeNativeChildNeedle',limit:30});
+    return reply.result?.conversations[0];
+  },30);
+  const nativeHit=native.hits[0];
+  const nativeLocated=(await rpc('sessions/locate',{itemKey:nativeHit.itemKey})).result;
+  assert.equal(native.threadId,`claude_${root}`);
+  assert.equal(nativeHit.agentThreadId,null);
+  assert.equal(nativeLocated.threadId,nativeHit.agentThreadId??native.threadId);
+  assert.equal(nativeLocated.itemId,'spawn-child');
   const codex=await lab.waitFor(async()=>{
     const reply=await rpc('sessions/conversations/search',{query:codexNeedle,limit:30});
     const conversation=reply.result?.conversations[0];
@@ -72,6 +97,27 @@ try {
   const codexItems=await rpc('thread/items/list',{threadId:codexThread,cursor:codexLocated.result.itemsCursor,sortDirection:'asc',limit:10});
   assert.equal(codexItems.result.data[0].item.id,codexLocated.result.itemId);
   assert.ok(codexItems.result.data.some(row=>row.turnId==='fixture-turn-2'));
+  await lab.waitFor(async()=>{
+    const reply=await rpc('sessions/conversations/search',{query:delegatedNeedle,limit:30});
+    return reply.result?.conversations[0]?.threadId===delegatedChild;
+  },30);
+  const catalog=new Database(lab.path('.remote-coder/sessions/v1/catalog.sqlite3'));
+  try {
+    catalog.exec('PRAGMA busy_timeout=1000');
+    const update=catalog.run('UPDATE session SET delegated_parent_known=1,delegated_parent_session_key=?1 WHERE thread_id=?2',[codex.sessionKey,delegatedChild]);
+    assert.equal(update.changes,1);
+  } finally { catalog.close(); }
+  await appendFile(childRollout,'\n');
+  const delegated=await lab.waitFor(async()=>{
+    const reply=await rpc('sessions/conversations/search',{query:delegatedNeedle,limit:30});
+    const conversation=reply.result?.conversations[0];
+    return conversation?.threadId===codexThread&&conversation;
+  },30);
+  const delegatedHit=delegated.hits[0];
+  const delegatedLocated=(await rpc('sessions/locate',{itemKey:delegatedHit.itemKey})).result;
+  assert.equal(delegatedHit.agentThreadId,delegatedChild);
+  assert.equal(delegatedLocated.threadId,delegatedHit.agentThreadId??delegated.threadId);
+  assert.equal(delegatedLocated.turnId,'delegated-turn');
   const folded=await rpc('sessions/conversations/search',{query:'malmo',limit:30});
   assert.equal(folded.result.conversations.length,1);
   const meaning=await rpc('sessions/conversations/searchByMeaning',{query:'the sidebar has a stutter when it is being revealed',limit:20});
@@ -94,7 +140,7 @@ try {
   assert.equal((await lab.within(cancelled,3000,'Meaning cancellation did not answer')).error.data.kind,'requestCancelled');
   await lab.waitFor(async()=>{try{process.kill(pid,0);return false;}catch{return true;}},3);
   ws.removeEventListener('message',listener);
-  console.log(JSON.stringify({ok:true,search:true,diacritics:true,locate:located.result,codexLocate:codexLocated.result,meaning:true}));
+  console.log(JSON.stringify({ok:true,search:true,diacritics:true,locate:located.result,codexLocate:codexLocated.result,nativeChildLocate:nativeLocated,delegatedChildLocate:delegatedLocated,meaning:true}));
 } catch(error) {failure=error;}
 finally {
   try {await lab.stop();} catch(error) {failure??=error;await lab.forceStop();}
