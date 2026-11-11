@@ -81,7 +81,7 @@ struct TranscriptionSettingsSection: View {
                     .confirmationDialog("Forget My Voice?", isPresented: $confirmsVoiceForget) {
                         Button("Forget My Voice", role: .destructive) { Task { await voices.forget() } }
                     } message: {
-                        Text("This resets your voice template on synced devices. Provider and library copies stay.")
+                        Text("Your voice is forgotten on all your devices and learned again from new dictations. Saved recordings are not deleted.")
                     }
             }
 
@@ -131,12 +131,14 @@ struct TranscriptionSettingsSection: View {
                 Text("Shared settings and archived recordings use your private iCloud library.")
             }
         }
-        .task(id: workspace.dictationVoiceSelection) {
+        .task(id: HistoryInputs(voices: workspace.dictationVoiceSelection, libraryEnabled: library?.isEnabled == true)) {
             workspace.refreshDictationVoices()
         }
-        .task(id: library?.isEnabled == true && workspace.dictationVoiceSelection == .onlyMine) {
-            workspace.refreshDictationVoices()
-        }
+    }
+
+    private struct HistoryInputs: Equatable {
+        let voices: DictationVoiceSelection
+        let libraryEnabled: Bool
     }
 
     private var selectedModel: TranscriptionModel {

@@ -1851,8 +1851,9 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   selected gateway; without a selected gateway the settings show profile state.
   History replay runs at utility priority, pauses for energy conservation and
   retries on foreground. The workspace owns effective Voices and replay admission.
-- Only Mine feeds the shared `VoiceCheck` and its bounded upload buffer with
-  identical 16 kHz PCM16 from the capture sink, including for 24 kHz providers.
+- Only Mine feeds the shared `VoiceCheck` with 16 kHz PCM16 from the capture
+  sink, including for 24 kHz providers. The check hands its admitted audio to
+  the label request.
   Azure labels use the existing relay. Failure, an untrusted profile or no
   rejected label preserves the selected provider's transcript. Filter before
   cleanup, retain everyone's text, and carry actual model provenance through

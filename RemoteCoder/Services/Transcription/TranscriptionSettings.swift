@@ -284,6 +284,7 @@ final class TranscriptionSettingsStore {
         if model != appliedModel { appliedModel = model }
         let language = TranscriptionSettings.language()
         if language != appliedLanguage { appliedLanguage = language }
-        appliedVoices = TranscriptionSettings.voiceChoice(defaults: AppStorageScope.current.defaults)
+        let voices = TranscriptionSettings.voiceChoice(defaults: AppStorageScope.current.defaults)
+        if voices != appliedVoices { appliedVoices = voices }
     }
 }

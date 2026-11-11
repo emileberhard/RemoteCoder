@@ -268,15 +268,17 @@ final class ComposerDocument {
     }
 
     func changedCharacters(in range: NSRange, removed: String, inserted: String) {
-        dictationRestores = dictationRestores.compactMap { current in
-            var restore = current
-            let end = restore.location + restore.length
-            if NSMaxRange(range) <= restore.location {
-                restore.location += (inserted as NSString).length - range.length
-            } else if range.location < end {
-                return nil
+        if !dictationRestores.isEmpty {
+            dictationRestores = dictationRestores.compactMap { current in
+                var restore = current
+                let end = restore.location + restore.length
+                if NSMaxRange(range) <= restore.location {
+                    restore.location += (inserted as NSString).length - range.length
+                } else if range.location < end {
+                    return nil
+                }
+                return restore
             }
-            return restore
         }
         nonWhitespaceCount += Self.contentCount(inserted) - Self.contentCount(removed)
         updateFirstContent(in: range, inserted: inserted)

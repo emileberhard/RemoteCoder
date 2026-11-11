@@ -149,7 +149,7 @@ final class DictationVoiceProfiles {
         appliedForget = max(appliedForget, date)
     }
 
-    @concurrent private static func profileExists(at url: URL) -> Bool {
+    @concurrent private static func profileExists(at url: URL) async -> Bool {
         FileManager.default.fileExists(atPath: url.path)
     }
 
