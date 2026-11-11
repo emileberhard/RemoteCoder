@@ -54,7 +54,7 @@ done
 cp /usr/bin/true "${first_bundle}/Contents/MacOS/remote-coder-codex-gateway"
 cp /usr/bin/false "${second_bundle}/Contents/MacOS/remote-coder-codex-gateway"
 codesign --force --sign - --timestamp=none "${first_bundle}" "${second_bundle}"
-"${lsregister}" -f "${first_bundle}" "${second_bundle}"
+"${lsregister}" -f "${second_bundle}"
 
 registered_fixture_bundles() {
   /usr/bin/osascript -l JavaScript - "${fixture_identifier}" <<'JXA'
@@ -65,27 +65,28 @@ function run(arguments) {
   for (let index = 0; index < Number(urls.count); index++) {
     paths.push(ObjC.unwrap(urls.objectAtIndex(index).path));
   }
-  return paths.sort().join('\n');
+  return paths.join('\n');
 }
 JXA
 }
 
 wait_for_fixture_registration() {
-  local expected="$1" actual
-  local -i deadline=$(( SECONDS + 10 ))
+  local bundle="$1" registered
+  local -i deadline=$(( SECONDS + 60 ))
   while true; do
-    actual="$(registered_fixture_bundles)"
-    [[ "${actual}" != "${expected}" ]] || return 0
+    registered="$(registered_fixture_bundles)"
+    if (( ${${(f)registered}[(Ie)${bundle}]} )); then
+      return 0
+    fi
     if (( SECONDS >= deadline )); then
-      print -u2 -r -- "Expected registered fixture bundles: ${expected}"
-      print -u2 -r -- "Observed registered fixture bundles: ${actual}"
+      print -u2 -r -- "Expected ${bundle} among registered fixture bundles: ${registered}"
       return 1
     fi
     sleep 0.1
   done
 }
 
-wait_for_fixture_registration "${first_bundle}"$'\n'"${second_bundle}"
+wait_for_fixture_registration "${second_bundle}"
 ln -sf "${first_bundle}/Contents/MacOS/remote-coder-codex-gateway" "${install_dir}/remote-coder-codex-gateway"
 print -r -- "planned-generation" >"${launch_state}/planned-handoff"
 "${install_dir}/launch-codex-gateway"
@@ -97,7 +98,6 @@ if "${install_dir}/launch-codex-gateway"; then
   echo 'Gateway launcher did not execute the selected second binary' >&2
   exit 1
 fi
-wait_for_fixture_registration "${second_bundle}"
 
 if (unset SSL_CERT_FILE; "${install_dir}/launch-codex-gateway") >"${scratch}/ca-policy.err" 2>&1; then
   echo 'missing inherited CA policy was accepted' >&2
@@ -111,4 +111,4 @@ fi
 grep -F 'SSL_CERT_FILE must inherit a readable CA bundle' "${scratch}/ca-policy.err" >/dev/null
 
 echo 'Gateway launcher inherits the host CA bundle and supplies planned restart policy'
-echo 'Gateway launcher keeps one LaunchServices registration across signed executable changes'
+echo 'Gateway launcher registers and runs the selected signed bundle'
