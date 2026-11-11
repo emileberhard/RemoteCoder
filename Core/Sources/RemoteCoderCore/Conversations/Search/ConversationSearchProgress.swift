@@ -64,8 +64,12 @@ nonisolated struct ConversationSearchProgress {
             if let name = pending.removeValue(forKey: request), request.tier == .keyword,
                !results.status.unsupportedHosts.contains(name) { results.status.unsupportedHosts.append(name) }
         case let .failed(request):
-            if let name = pending.removeValue(forKey: request), !results.status.unansweredHosts.contains(name) {
-                results.status.unansweredHosts.append(name)
+            guard let name = pending.removeValue(forKey: request) else { return nil }
+            switch request.tier {
+            case .keyword:
+                if !results.status.unansweredHosts.contains(name) { results.status.unansweredHosts.append(name) }
+            case .meaning:
+                if !results.status.failedMeaningHosts.contains(name) { results.status.failedMeaningHosts.append(name) }
             }
         }
         results.status.isSearching = !isFinished

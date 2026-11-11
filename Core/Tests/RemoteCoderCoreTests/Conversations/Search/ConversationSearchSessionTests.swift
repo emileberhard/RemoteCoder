@@ -173,7 +173,7 @@ struct ConversationSearchSessionTests {
             ConversationSearchHost(id: book, name: "MacBook", gatewayID: linux, headers: [], marks: marks(), availability: .unreachable),
         ]
         let response = ConversationSearchResponse(schemaVersion: 1, truncated: false, conversations: [
-            hit("titled", on: mini, title: nil, hitCount: 4, excerpt: "a flicker"),
+            hit("titled", on: mini, title: nil, hitCount: 400, excerpt: "a flicker"),
             hit("untitled", on: mini, title: nil, hitCount: 1, excerpt: "the flicker"),
             hit("probe", on: mini, excerpt: "flicker"),
             hit("unknown", on: UUID(), excerpt: "flicker"),
@@ -186,11 +186,13 @@ struct ConversationSearchSessionTests {
                                         ConversationAddress(hostID: book, threadID: "migrated")])
         guard case .title("Known title") = rows[0].headline else { Issue.record("expected the local title"); return }
         #expect(rows[0].excerpt.map { String($0.characters) } == "a flicker")
-        #expect(rows[0].additionalHitCount == 3)
+        #expect(rows[0].additionalHitCount == 399)
+        #expect(rows[0].additionalHitLabel == "5+ more")
         guard case let .excerpt(excerpt) = rows[1].headline else { Issue.record("expected the excerpt headline"); return }
         #expect(String(excerpt.characters) == "the flicker")
         #expect(rows[1].excerpt == nil)
         #expect(rows[1].additionalHitCount == 0)
+        #expect(rows[1].additionalHitLabel == nil)
         #expect(rows.map(\.hostName) == ["Mini", "Mini", "MacBook"])
         #expect(rows[2].excerpt == nil)
     }
@@ -232,12 +234,12 @@ struct ConversationSearchSessionTests {
 
     @Test func decodesTheContractResult() throws {
         let json = Data("""
-        {"schemaVersion":1,"truncated":false,"conversations":[
+        {"schemaVersion":1,"truncated":true,"conversations":[
           {"sessionKey":"\(mini.uuidString):claude:home:claude_1","hostId":"\(mini.uuidString)","provider":"claude",
            "threadId":"claude_1","title":"Fix sidebar open hitch","cwd":"/Users/emil/RemoteCoder",
            "lastAt":"2026-11-03T14:02:11Z","titleMatch":false,"hitCount":5,
            "hits":[{"itemKey":"k@item:1","kind":"assistant","at":"2026-11-03T13:58:40.250Z",
-                    "excerpt":"…the drawer still shows a flicker…","agentThreadId":null}]},
+                    "excerpt":"…the drawer still shows a flicker…","agentThreadId":"child-thread"}]},
           {"sessionKey":"\(mini.uuidString):codex:home:t2","hostId":"\(mini.uuidString)","provider":"codex",
            "threadId":"t2","title":null,"cwd":null,"lastAt":null,"titleMatch":true,"hitCount":0,"hits":[]}
         ]}
@@ -246,10 +248,12 @@ struct ConversationSearchSessionTests {
         decoder.dateDecodingStrategy = ConversationSearchResponse.dateDecoding
         let response = try decoder.decode(ConversationSearchResponse.self, from: json)
         #expect(response.schemaVersion == 1)
+        #expect(response.truncated)
         #expect(response.conversations.map(\.threadId) == ["claude_1", "t2"])
         let first = response.conversations[0]
         #expect(first.hostId == mini && first.provider == .claude && first.hitCount == 5 && !first.titleMatch)
         #expect(first.lastAt == Date(timeIntervalSince1970: 1_793_714_531))
+        #expect(first.hits.first?.agentThreadId == "child-thread")
         #expect(first.hits.map(\.excerpt) == ["…the drawer still shows a flicker…"])
         let second = response.conversations[1]
         #expect(second.title == nil && second.cwd == nil && second.lastAt == nil && second.titleMatch && second.hits.isEmpty)
@@ -306,7 +310,10 @@ struct ConversationSearchSessionTests {
         #expect(await waitUntil { !session.results.status.isSearching })
         #expect(ids(session.results.messages) == ["current"])
         #expect(session.results.meaning.rows.isEmpty)
-        #expect(session.results.status.unansweredHosts == ["Mini"])
+        #expect(session.results.status.unansweredHosts.isEmpty)
+        #expect(session.results.status.failedMeaningHosts == ["Mini"])
+        #expect(session.results.status.summary == "By meaning failed on Mini")
+        #expect(!session.results.status.isComplete)
     }
 
     @Test func aKeystrokeBeforeTheMeaningDeadlinePreventsTheOldRequest() async throws {

@@ -23,6 +23,9 @@ struct ConversationSearchRow: Identifiable, Sendable {
     let additionalHitCount: Int
 
     var id: String { address.id }
+    var additionalHitLabel: String? {
+        additionalHitCount > 0 ? "\(min(5, additionalHitCount))+ more" : nil
+    }
     var openingAddress: ConversationAddress {
         ConversationAddress(hostID: address.hostID, threadID: agentThreadID ?? address.threadID)
     }
@@ -71,15 +74,17 @@ struct ConversationSearchStatus: Equatable, Sendable {
     var unansweredHosts: [String] = []
     var unsupportedHosts: [String] = []
     var partialHosts: [String] = []
+    var failedMeaningHosts: [String] = []
 
     var isComplete: Bool {
-        !isSearching && unansweredHosts.isEmpty && unsupportedHosts.isEmpty && partialHosts.isEmpty
+        !isSearching && unansweredHosts.isEmpty && unsupportedHosts.isEmpty && partialHosts.isEmpty && failedMeaningHosts.isEmpty
     }
 
     var summary: String? {
         var parts: [String] = []
         if isSearching { parts.append("Searching…") }
         if !partialHosts.isEmpty { parts.append("Search incomplete on \(partialHosts.formatted(.list(type: .and)))") }
+        if !failedMeaningHosts.isEmpty { parts.append("By meaning failed on \(failedMeaningHosts.formatted(.list(type: .and)))") }
         if !unansweredHosts.isEmpty { parts.append("No answer from \(unansweredHosts.formatted(.list(type: .and)))") }
         if !unsupportedHosts.isEmpty { parts.append("\(unsupportedHosts.formatted(.list(type: .and))) can't search messages yet") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")

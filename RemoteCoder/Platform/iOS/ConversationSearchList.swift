@@ -105,8 +105,8 @@ private struct ConversationSearchCard: View, Equatable {
                             .layoutPriority(1)
                     }
                     Spacer(minLength: 6)
-                    if row.additionalHitCount > 0 {
-                        Text("+\(row.additionalHitCount) more")
+                    if let label = row.additionalHitLabel {
+                        Text(label)
                             .monospacedDigit()
                             .layoutPriority(1)
                     }

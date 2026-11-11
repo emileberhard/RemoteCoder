@@ -3091,8 +3091,10 @@ show 4, 10 and 10 rows and retain at most 50, 100 and 100. The status stays
 searching until all requests settle. Each keyword response carries required
 `truncated` coverage through the reducer into the status. Partial hosts appear
 as “Search incomplete on …” beside unanswered and unsupported hosts while
-returned rows stay visible. The empty-results view requires complete coverage
-from every host. Opening a card logs only its section and rank.
+returned rows stay visible. A failed meaning request has its own “By meaning
+failed on …” status, independent of keyword replies. The empty-results view
+requires complete coverage from every host and tier. Further-hit labels show
+lower bounds capped at “5+ more”. Opening a card logs only its section and rank.
 
 A result card keeps the root conversation address for its title, grouping and
 deduplication. A message hit opens the exact `agentThreadId` destination supplied
@@ -3114,8 +3116,8 @@ and highlights the target. An exact tool hit expands its existing action group,
 and the find bar is seeded with the best matching term without taking keyboard
 focus or issuing a competing jump.
 
-Ask an agent starts an ordinary new chat with the query and asks for verified
-links. `ChatRootView` accepts
+Ask an agent starts an ordinary new chat with the query and asks it to use
+its available conversation-search tools and return verified links. `ChatRootView` accepts
 `remotecoder://chat/conversation?host=<hostId>&thread=<threadId>&item=<itemKey>` through
 `ExternalEventRouter`. The optional `item` uses the same locate path. The
 configured host must resolve uniquely. A new window claims its matching item
