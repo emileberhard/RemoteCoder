@@ -113,7 +113,7 @@ struct DictationRecordingTests {
         #expect(try await controller.savedRecordings().isEmpty)
         let dictation = try await controller.transcribe()
 
-        #expect(dictation.text == "spoken live")
+        #expect(dictation.transcript.text == "spoken live")
         let recording = try #require(dictation.recording)
         #expect(recording.id == dictation.recordingID)
         #expect(recording.owner == owner)
@@ -137,7 +137,7 @@ struct DictationRecordingTests {
         try await controller.stopRecording()
         let dictation = try await controller.transcribe()
 
-        #expect(dictation.text == "from batch")
+        #expect(dictation.transcript.text == "from batch")
         #expect(transcriber.batchRecordingIDs == [dictation.recordingID])
         #expect(dictation.recording?.duration == .milliseconds(100))
     }
@@ -355,7 +355,7 @@ struct DictationRecordingTests {
         #expect(recorder.didStop)
         #expect(!controller.isRecording)
         let dictation = try await controller.transcribe()
-        #expect(dictation.text == "said while starting")
+        #expect(dictation.transcript.text == "said while starting")
         #expect(dictation.recording?.duration == .milliseconds(100))
         #expect(transcriber.batchRecordingIDs == [dictation.recordingID])
     }

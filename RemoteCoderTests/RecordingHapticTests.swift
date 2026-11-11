@@ -64,7 +64,7 @@ struct RecordingHapticTests {
         try await controller.stopRecording { acknowledged = true }
         #expect(!acknowledged)
         #expect(fixture.native.events.isEmpty)
-        #expect(try await controller.transcribe().text == "retained")
+        #expect(try await controller.transcribe().transcript.text == "retained")
     }
 
     @Test func failedAudioActivationReleasesSuppressionWithoutFalseReadiness() async throws {

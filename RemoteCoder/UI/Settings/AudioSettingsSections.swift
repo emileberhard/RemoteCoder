@@ -5,6 +5,7 @@ struct TranscriptionSettingsSection: View {
     @Bindable var settings: TranscriptionSettingsStore
     let library: SharedDictationLibrary?
     let voices: DictationVoiceProfiles
+    let hostID: UUID?
     @State private var confirmsAccountAssignment = false
     @State private var confirmsLocalRelease = false
     @State private var localReleaseAccount: DictationAccountSession?
@@ -65,7 +66,7 @@ struct TranscriptionSettingsSection: View {
             }
             .drillDownPickerStyle()
             if settings.voices(for: selectedModel) == .onlyMine {
-                LabeledContent("My Voice", value: voices.status.rawValue)
+                LabeledContent("My Voice", value: voices.status(for: hostID).rawValue)
                 if selectedModel != .azureMAITranscribe2 {
                     Text("When another voice is heard, audio is also sent to Azure through your gateway. Filtered text comes from Azure.")
                         .scaledFont(.footnote)
@@ -120,9 +121,11 @@ struct TranscriptionSettingsSection: View {
                 Text("Shared settings and archived recordings use your private iCloud library.")
             }
         }
-        .task { voices.refresh() }
+        .task(id: settings.voices(for: selectedModel)) {
+            voices.refresh(active: settings.voices(for: selectedModel) == .onlyMine)
+        }
         .task(id: library?.isEnabled == true && settings.voices(for: selectedModel) == .onlyMine) {
-            if settings.voices(for: selectedModel) == .onlyMine, library?.isEnabled == true { voices.learnFromHistory(in: library) }
+            if settings.voices(for: selectedModel) == .onlyMine, library?.isEnabled == true { voices.learnFromHistory() }
             else { voices.cancelHistoryLearning() }
         }
     }

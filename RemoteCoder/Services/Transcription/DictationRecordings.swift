@@ -39,7 +39,6 @@ extension DictationRecordingStore where Owner == ExecutionTarget {
 
 struct Dictation: Sendable {
     let transcript: DictationTranscript
-    var text: String { transcript.text }
     let recordingID: UUID
     let recording: DictationRecording<ExecutionTarget>?
 }

@@ -1845,7 +1845,10 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   choice and forget timestamp sync; the device-local template never leaves its
   app directory or enters backup. Derive the default from the resolved capture
   model in `TranscriptionSettings.defaultVoices`: Azure uses Only Mine; other
-  models use Everyone until explicitly changed.
+  models use Everyone until explicitly changed. Do not load or create the
+  profile under Everyone, except to apply an actual synced forget date: its
+  creation time bounds the first history replay. Availability is scoped to the
+  selected gateway; without a selected gateway the settings show profile state.
 - Only Mine feeds the shared `VoiceCheck` and its bounded upload buffer with
   identical 16 kHz PCM16 from the capture sink, including for 24 kHz providers.
   Azure labels use the existing relay. Failure, an untrusted profile or no
@@ -1855,8 +1858,10 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   My Voice shows Unavailable only after a missing/refused Azure route; a slow
   check or learning error keeps profile status and reports its own failure.
   The composer document owns persisted restore ranges; edits outside move them,
-  edits replacing their text remove them, and sending clears them. Voice Mode
-  bypasses this path.
+  edits replacing their text remove them, and sending clears them. Pressing
+  Send accepts the text, including failed sends; native undo/redo do not carry
+  restoration data. Saved recovery recordings keep everyone's text because
+  they have no live watcher evidence. Voice Mode bypasses this path.
 
 - `GatewaySpeechAccess` is the app's only speech-credential path. Each chat
   model binds it to its host, which hands SpeechKit a `.relay` at

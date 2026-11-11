@@ -302,8 +302,8 @@ final class VoiceInputController {
         do {
             let result = try await recognition.resolve(original)
             switch result.check {
-            case .success(let check): voices?.checked(check)
-            case .failure(let error): voices?.failed(error)
+            case .success(let check): voices?.checked(check, hostID: owner.hostID)
+            case .failure(let error): voices?.failed(error, hostID: owner.hostID)
             }
             let upload = result.upload.map { String(Self.milliseconds($0)) } ?? "unknown"
             let completion = (try? result.check.get())?.labelledReplyTime.map { String(Self.milliseconds($0)) } ?? "unknown"
@@ -390,9 +390,9 @@ final class VoiceInputController {
             let configuration = try archive.map { try TranscriptionConfiguration(plan: $0.plan, local: local) } ?? local
             var recognitionFailed = false
             if configuration.voices == .onlyMine, let voices {
-                do { recognition = DictationVoiceSession(check: try await voices.makeCheck()) }
+                do { recognition = DictationVoiceSession(check: try await voices.makeCheck(for: owner.hostID)) }
                 catch is CancellationError { throw CancellationError() }
-                catch { recognitionFailed = true; voices.failed(error) }
+                catch { recognitionFailed = true; voices.failed(error, hostID: owner.hostID) }
             }
             let realtime = try await transcriber.makeRealtimeTranscription(configuration: configuration)
             if let account = archive?.account { try await library?.validateAccount(account) }

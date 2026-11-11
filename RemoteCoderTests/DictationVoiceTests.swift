@@ -16,7 +16,7 @@ struct DictationVoiceTests {
         defer { defaults.removePersistentDomain(forName: name) }
         let directory = URL.temporaryDirectory.appending(path: name)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let voices = DictationVoiceProfiles(defaults: defaults, directory: directory)
+        let voices = DictationVoiceProfiles(defaults: defaults, directory: directory, history: { nil })
         let recorder = VoiceFixtureRecorder()
         let controller = VoiceInputController(access: .fixture, owner: ExecutionTarget(hostID: UUID()),
             transcriber: StubTranscriber(text: "Selected provider text."), recorder: recorder, recordings: recordings.store,
@@ -25,9 +25,37 @@ struct DictationVoiceTests {
         try await controller.startAsync()
         try await controller.stopRecording()
         let result = try await controller.transcribe()
-        #expect(result.text == "Selected provider text.")
+        #expect(result.transcript.text == "Selected provider text.")
         #expect(result.transcript.outcome == nil)
         #expect(!recorder.recognitionWasAttached)
+    }
+
+    @Test @MainActor func enablingOnlyMineReplaysOriginalsCompletedUnderEveryone() async throws {
+        let name = "HistoryAfterEveryone.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let directory = URL.temporaryDirectory.appending(path: name)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = try #require(Bundle(for: VoiceFixtureBundle.self).url(forResource: "speaker-owner", withExtension: "wav"))
+        let finishedAt = Date.now.addingTimeInterval(0.05)
+        let recording = VoiceHistoryRecording(url: original, startedAt: finishedAt.addingTimeInterval(-6), finishedAt: finishedAt)
+        let validated = Mutex(false)
+        let voices = DictationVoiceProfiles(defaults: defaults, directory: directory, history: {
+            DictationVoiceHistory(recordings: [recording], validate: { validated.withLock { $0 = true } })
+        })
+        voices.refresh(active: false)
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "VoiceProfile.json").path))
+        try await Task.sleep(for: .milliseconds(100))
+        voices.refresh(active: true)
+        voices.learnFromHistory()
+        #expect(await waitUntil(timeout: .seconds(15)) { validated.withLock { $0 } })
+        let profileURL = directory.appending(path: "VoiceProfile.json")
+        #expect(try await waitUntil {
+            guard let data = try? Data(contentsOf: profileURL),
+                  let profile = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let candidates = profile["candidates"] as? [Any] else { return false }
+            return !candidates.isEmpty
+        })
     }
 
     @Test @MainActor func transientFailuresKeepProfileStatusAndRefusalMarksTheRoute() async throws {
@@ -36,13 +64,16 @@ struct DictationVoiceTests {
         defer { defaults.removePersistentDomain(forName: name) }
         let directory = URL.temporaryDirectory.appending(path: name)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let voices = DictationVoiceProfiles(defaults: defaults, directory: directory)
-        voices.failed(URLError(.timedOut))
-        #expect(voices.status == .learning)
+        let voices = DictationVoiceProfiles(defaults: defaults, directory: directory, history: { nil })
+        let hostID = UUID()
+        voices.failed(URLError(.timedOut), hostID: hostID)
+        #expect(voices.status(for: hostID) == .learning)
         voices.failed(SpeechKitError.invalidResponse, stage: .learning)
-        #expect(voices.status == .learning)
-        voices.failed(SpeechKitError.relayRejected(kind: "credentialsUnavailable"))
-        #expect(voices.status == .unavailable)
+        #expect(voices.status(for: hostID) == .learning)
+        voices.failed(SpeechKitError.relayRejected(kind: "credentialsUnavailable"), hostID: hostID)
+        #expect(voices.status(for: hostID) == .unavailable)
+        #expect(voices.status(for: UUID()) == .learning)
+        #expect(voices.status(for: nil) == .learning)
     }
 
     @Test(arguments: [false, true]) @MainActor func controllerUsesItsInjectedSpeakerRequest(refused: Bool) async throws {
@@ -53,9 +84,10 @@ struct DictationVoiceTests {
         let name = "InjectedVoice.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
-        let voices = DictationVoiceProfiles(defaults: defaults, directory: fixture.directory)
-        let transcriber = InjectedVoiceTranscriber(phrases: fixture.phrases, refused: refused)
-        let controller = VoiceInputController(access: .fixture, owner: ExecutionTarget(hostID: UUID()),
+        let voices = DictationVoiceProfiles(defaults: defaults, directory: fixture.directory, history: { nil })
+        let transcriber = InjectedVoiceTranscriber(phrases: fixture.phrases, refused: refused, waitsForRequest: true)
+        let hostID = UUID()
+        let controller = VoiceInputController(access: .fixture, owner: ExecutionTarget(hostID: hostID),
             transcriber: transcriber, recorder: VoiceFixtureRecorder(pcm: fixture.mix), recordings: recordings.store,
             voices: voices, configuration: { .init(model: .openAIGPT4oMini, language: .english, voiceChoice: .onlyMine) })
         controller.markRecordingRequested()
@@ -64,11 +96,11 @@ struct DictationVoiceTests {
         let result = try await controller.transcribe()
         #expect(result.transcript.everyone == "Selected provider text.")
         if refused {
-            #expect(result.text == "Selected provider text.")
+            #expect(result.transcript.text == "Selected provider text.")
             #expect(result.transcript.outcome?.path == .failed)
-            #expect(await waitUntil { voices.status == .unavailable })
+            #expect(await waitUntil { voices.status(for: hostID) == .unavailable })
         } else {
-            #expect(result.text == "Only my words.")
+            #expect(result.transcript.text == "Only my words.")
             #expect(result.transcript.model == TranscriptionModel.azureMAITranscribe2.batchLibraryID)
         }
         #expect(transcriber.requestCount.withLock { $0 } == 1)
@@ -112,23 +144,28 @@ struct DictationVoiceTests {
         await session.cancel()
     }
 
-    @Test(arguments: [false, true])
-    func untrustedAndOneVoiceDeliveryNeverFetchLabels(trusted: Bool) async throws {
+    @Test(arguments: [false, true]) @MainActor
+    func untrustedAndOneVoiceControllersKeepTextWithoutRequestingAzure(trusted: Bool) async throws {
         let fixture = try await VoiceFixture(trusted: trusted)
         defer { fixture.cleanUp() }
-        let session = DictationVoiceSession(check: fixture.check)
-        let called = Mutex(false)
-        session.append(fixture.owner)
-        await session.finish { _, _ in
-            called.withLock { $0 = true }
-            throw URLError(.cannotConnectToHost)
-        }
-        let original = DictationTranscript(text: "Original selected text.", model: "selected/model")
-        let result = try await session.resolve(original)
-        #expect(result.transcript.text == original.text)
-        #expect(result.transcript.model == original.model)
-        #expect(!called.withLock { $0 })
-        await session.cancel()
+        let recordings = try TemporaryDictationRecordings()
+        defer { recordings.cleanUp() }
+        let name = "UnchangedVoices.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let voices = DictationVoiceProfiles(defaults: defaults, directory: fixture.directory, history: { nil })
+        let transcriber = InjectedVoiceTranscriber(phrases: fixture.phrases, refused: false, waitsForRequest: false)
+        let controller = VoiceInputController(access: .fixture, owner: ExecutionTarget(hostID: UUID()),
+            transcriber: transcriber, recorder: VoiceFixtureRecorder(pcm: fixture.owner), recordings: recordings.store,
+            voices: voices, configuration: { .init(model: .openAIGPT4oMini, language: .english, voiceChoice: .onlyMine) })
+        controller.markRecordingRequested()
+        try await controller.startAsync()
+        try await controller.stopRecording()
+        let result = try await controller.transcribe()
+        #expect(result.transcript.text == "Selected provider text.")
+        #expect(result.transcript.model == TranscriptionModel.openAIGPT4oMini.batchLibraryID)
+        #expect(transcriber.requestCount.withLock { $0 } == 0)
+        #expect(try await recordings.listedIDs() == [result.recordingID])
     }
 
     @Test(arguments: [false, true])
@@ -146,7 +183,9 @@ struct DictationVoiceTests {
         }
         for await _ in requested.stream { break }
         let original = DictationTranscript(text: "Every selected word.", model: "selected/model")
+        let started = ContinuousClock.now
         let result = try await session.resolve(original)
+        #expect(started.duration(to: .now) < .seconds(1))
         #expect(result.transcript.text == original.text)
         #expect(result.transcript.model == original.model)
         #expect(result.transcript.outcome?.path == .failed)
@@ -173,15 +212,27 @@ struct DictationVoiceTests {
         await session.cancel()
     }
 
-    @Test func cancelledDictationDoesNotDeliverText() async throws {
+    @Test @MainActor func cancelledControllerRetainsRecordingWithoutDeliveringText() async throws {
         let fixture = try await VoiceFixture(trusted: true)
         defer { fixture.cleanUp() }
-        let session = DictationVoiceSession(check: fixture.check)
-        session.append(fixture.mix)
-        await session.cancel()
-        await #expect(throws: CancellationError.self) {
-            try await session.resolve(DictationTranscript(text: "Kept audio.", model: "selected/model"))
-        }
+        let recordings = try TemporaryDictationRecordings()
+        defer { recordings.cleanUp() }
+        let name = "CancelledVoices.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let voices = DictationVoiceProfiles(defaults: defaults, directory: fixture.directory, history: { nil })
+        let transcriber = InjectedVoiceTranscriber(phrases: fixture.phrases, refused: false, waitsForRequest: true, labelledDelay: .seconds(30))
+        let controller = VoiceInputController(access: .fixture, owner: ExecutionTarget(hostID: UUID()),
+            transcriber: transcriber, recorder: VoiceFixtureRecorder(pcm: fixture.mix), recordings: recordings.store,
+            voices: voices, configuration: { .init(model: .openAIGPT4oMini, language: .english, voiceChoice: .onlyMine) })
+        controller.markRecordingRequested()
+        try await controller.startAsync()
+        try await controller.stopRecording()
+        let delivery = Task { try await controller.transcribe() }
+        #expect(await waitUntil { transcriber.requestCount.withLock { $0 } == 1 })
+        delivery.cancel()
+        await #expect(throws: CancellationError.self) { try await delivery.value }
+        #expect(try await recordings.listedIDs().count == 1)
     }
 
     @Test func captureKeepsThe24KilohertzProviderFeedAndAdds16KilohertzRecognition() async throws {
@@ -266,10 +317,17 @@ private final class InjectedVoiceTranscriber: TranscriptionService {
     private let requested = AsyncStream<Void>.makeStream()
     let phrases: [SpeakerPhrase]
     let refused: Bool
-    init(phrases: [SpeakerPhrase], refused: Bool) { self.phrases = phrases; self.refused = refused }
+    let waitsForRequest: Bool
+    let labelledDelay: Duration
+    init(phrases: [SpeakerPhrase], refused: Bool, waitsForRequest: Bool, labelledDelay: Duration = .zero) {
+        self.phrases = phrases
+        self.refused = refused
+        self.waitsForRequest = waitsForRequest
+        self.labelledDelay = labelledDelay
+    }
     func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription? { nil }
     @concurrent func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
-        for await _ in requested.stream { break }
+        if waitsForRequest { for await _ in requested.stream { break } }
         return DictationTranscript(text: "Selected provider text.", model: configuration.model.batchLibraryID)
     }
     @concurrent func speakerPhrases(_ pcm16: Data, configuration: TranscriptionConfiguration,
@@ -279,6 +337,7 @@ private final class InjectedVoiceTranscriber: TranscriptionService {
         requested.continuation.finish()
         uploadFinished(.milliseconds(10))
         if refused { throw SpeechKitError.relayRejected(kind: "credentialsUnavailable") }
+        if labelledDelay > .zero { try await Task.sleep(for: labelledDelay) }
         return phrases
     }
 }

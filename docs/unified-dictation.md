@@ -45,7 +45,9 @@ an explicit choice before a second Azure request. The workspace owns one local
 voice template independently of this library, with live learning and one replay
 of recent local originals when the library is enabled. Filtering happens before
 cleanup. Composer drafts retain everyone’s text for Restore Everyone until the
-filtered text is sent or replaced.
+filtered text is sent or replaced. Saved recovery recordings deliver everyone's
+text because no live watcher ran for them; retrying does not send an extra Azure
+request.
 
 Failure versions contain the error type, never a credential or
 provider response body. Publication retries on capture completion and foreground

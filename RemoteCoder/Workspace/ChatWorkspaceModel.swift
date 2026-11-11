@@ -121,7 +121,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         self.storage = storage
         self.dictationLibrary = dictationLibrary
         let dictationVoices = DictationVoiceProfiles(defaults: defaults,
-            directory: storage.directory(for: .device).appending(path: "voice-profile"))
+            directory: storage.directory(for: .device).appending(path: "voice-profile"),
+            history: { try await dictationLibrary?.localVoiceHistory() })
         self.dictationVoices = dictationVoices
         #if DEBUG
         let htmlVisuals = HTMLVisualServices(directory: ProcessInfo.processInfo.arguments.contains("-html-visual-cold-cache")
@@ -1363,9 +1364,10 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     private func refreshDictationVoices() {
-        dictationVoices.refresh()
         let model = dictationLibrary?.model(fallback: transcriptionSettings.model) ?? transcriptionSettings.model
-        if transcriptionSettings.voices(for: model) == .onlyMine { dictationVoices.learnFromHistory(in: dictationLibrary) }
+        let active = transcriptionSettings.voices(for: model) == .onlyMine
+        dictationVoices.refresh(active: active)
+        if active { dictationVoices.learnFromHistory() }
         else { dictationVoices.cancelHistoryLearning() }
     }
 

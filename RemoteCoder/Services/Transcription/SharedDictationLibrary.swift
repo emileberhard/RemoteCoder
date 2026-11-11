@@ -344,15 +344,16 @@ final class SharedDictationLibrary {
         try await store().validateAccountSession(account)
     }
 
-    func localVoiceHistory() async throws -> (recordings: [VoiceHistoryRecording], account: DictationAccountSession) {
+    func localVoiceHistory() async throws -> DictationVoiceHistory? {
+        guard isEnabled else { return nil }
         let store = try await store()
-        guard isEnabled, let account = store.accountSession() else { throw DictationLibraryError.accountUnavailable }
+        guard let account = store.accountSession() else { throw DictationLibraryError.accountUnavailable }
         let entries = try await store.entries()
         try store.validateAccountSession(account)
-        return (entries.compactMap { entry in
+        return DictationVoiceHistory(recordings: entries.compactMap { entry in
             guard let url = entry.originalURL, let finished = entry.capture.finishedAt else { return nil }
             return VoiceHistoryRecording(url: url, startedAt: entry.capture.startedAt, finishedAt: finished)
-        }, account)
+        }, validate: { try await self.validateAccount(account) })
     }
 
     func waitForAccountChange(from account: DictationAccountSession) async throws {

@@ -4,6 +4,11 @@ import Observation
 import SpeakerRecognition
 import SpeechKit
 
+struct DictationVoiceHistory: Sendable {
+    let recordings: [VoiceHistoryRecording]
+    let validate: @MainActor @Sendable () async throws -> Void
+}
+
 @MainActor
 @Observable
 final class DictationVoiceProfiles {
@@ -14,8 +19,12 @@ final class DictationVoiceProfiles {
     }
 
     private var isTrusted = false
-    private var routeUnavailable = false
-    var status: Status { routeUnavailable ? .unavailable : isTrusted ? .learned : .learning }
+    private var unavailableHosts: Set<UUID> = []
+    func status(for hostID: UUID?) -> Status {
+        if let hostID, unavailableHosts.contains(hostID) { return .unavailable }
+        return isTrusted ? .learned : .learning
+    }
+    @ObservationIgnored private let history: @MainActor () async throws -> DictationVoiceHistory?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let store: VoiceProfileStore
     @ObservationIgnored private var appliedForget = Date.distantPast
@@ -23,7 +32,8 @@ final class DictationVoiceProfiles {
     @ObservationIgnored private var historyTask: Task<Void, Never>?
     @ObservationIgnored private let logger = AppLogger(category: "DictationVoices")
 
-    init(defaults: UserDefaults, directory: URL) {
+    init(defaults: UserDefaults, directory: URL, history: @escaping @MainActor () async throws -> DictationVoiceHistory?) {
+        self.history = history
         self.defaults = defaults
         store = VoiceProfileStore(accountDirectory: directory)
     }
@@ -34,12 +44,14 @@ final class DictationVoiceProfiles {
         store.retire()
     }
 
-    func refresh() {
+    func refresh(active: Bool) {
         refreshTask?.cancel()
+        guard active || forgottenAt > .distantPast else { return }
         refreshTask = Task { [weak self] in
             guard let self else { return }
             do {
                 try await applyForget()
+                guard active else { return }
                 let profile = try await store.profile()
                 try Task.checkCancellation()
                 isTrusted = profile.isTrusted
@@ -48,17 +60,17 @@ final class DictationVoiceProfiles {
         }
     }
 
-    func makeCheck() async throws -> VoiceCheck {
+    func makeCheck(for hostID: UUID) async throws -> VoiceCheck {
         try await applyForget()
         let profile = try await store.profile()
         return try VoiceCheck(profile: profile, store: store, startedAt: .now) { [weak self] stage, failure in
-            Task { @MainActor in self?.failed(failure, stage: stage) }
+            Task { @MainActor in self?.failed(failure, stage: stage, hostID: hostID) }
         }
     }
 
-    func checked(_ result: VoiceCheckResult) {
-        if result.outcome.path != .failed, result.labelledReplyTime != nil { routeUnavailable = false }
-        refresh()
+    func checked(_ result: VoiceCheckResult, hostID: UUID) {
+        if result.outcome.path != .failed, result.labelledReplyTime != nil { unavailableHosts.remove(hostID) }
+        refresh(active: true)
     }
 
     func forget() async {
@@ -73,27 +85,26 @@ final class DictationVoiceProfiles {
 
     func cancelHistoryLearning() { historyTask?.cancel() }
 
-    func learnFromHistory(in library: SharedDictationLibrary?) {
-        guard historyTask == nil, let library, library.isEnabled else { return }
+    func learnFromHistory() {
+        guard historyTask == nil else { return }
         historyTask = Task { [weak self] in
             guard let self else { return }
             defer { historyTask = nil }
             do {
                 try await applyForget()
-                guard let window = try await store.beginHistory() else { return }
-                let originals = try await library.localVoiceHistory()
+                guard let originals = try await history(), let window = try await store.beginHistory() else { return }
                 let history = try await VoiceHistory.learn(from: originals.recordings, in: window, decode: Self.decode)
                 try Task.checkCancellation()
-                try await library.validateAccount(originals.account)
+                try await originals.validate()
                 _ = try await store.learnHistory(history.candidates, in: window)
-                refresh()
+                refresh(active: true)
             } catch is CancellationError {
             } catch { failed(error, stage: .learning) }
         }
     }
 
-    func failed(_ error: any Error, stage: VoiceFilterStage = .filter) {
-        if stage == .filter, Self.routeRefused(error) { routeUnavailable = true }
+    func failed(_ error: any Error, stage: VoiceFilterStage = .filter, hostID: UUID? = nil) {
+        if stage == .filter, let hostID, Self.routeRefused(error) { unavailableHosts.insert(hostID) }
         logger.error("Optional voice check failed stage=\(stage.rawValue) error=\(Self.failureDescription(error))")
     }
 
