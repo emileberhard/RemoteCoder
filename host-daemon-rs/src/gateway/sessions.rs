@@ -208,9 +208,14 @@ impl Gateway {
                     .await;
                     match update {
                         Ok(Some(parents)) => {
-                            previous = parents.clone();
+                            let changed = parents
+                                .iter()
+                                .filter(|(key, value)| previous.get(*key) != Some(*value))
+                                .map(|(key, value)| (key.clone(), value.clone()))
+                                .collect();
+                            previous = parents;
                             if let Some(runtime) = gateway.session_runtime.get() {
-                                runtime.worker.parents(parents);
+                                runtime.worker.parents(changed);
                             }
                         }
                         Ok(None) => (),

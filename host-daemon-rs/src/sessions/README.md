@@ -239,12 +239,21 @@ disconnect and deadline to the same SQLite progress handler, checked every
 
 ## Projection and search-index rebuilds
 
-Schema 7 is the single transcript rebuild for typed-user classification and
-origin-owned facts. Codex typed prompts and steers come from native
-`event_msg/user_message` records. Older sources retain typed user-role response
-items through the provider's legacy contextual-message rules. A matching native
-event replaces the legacy copy within that turn, and subsequent model-facing
-response items remain system context. Claude uses the history projection's injected-record and queued
+Schema 6 used model-facing user roles; schema 7 uses typed-user evidence. SQL
+and literal-search consumers filtering `kind='user'` therefore exclude injected
+context after the rebuild. Schema 7 is the single transcript rebuild for typed-user classification and
+origin-owned facts. Codex typed prompts and steers primarily use paginated
+`event_msg/item_completed` records whose item is `UserMessage`, using the fork's
+prepared user input. Legacy-history `event_msg/user_message` records are the
+other authoritative shape. Sources without either shape classify user-role
+response records with the provider's contextual-message rules. The first
+authoritative event demotes response-user rows after the last assistant item,
+reconciling only its current prompt; earlier completed turns keep their typed
+text. All later response rows remain system context. This source-level choice does
+not compare text, so image labels and attached-file wrappers cannot duplicate
+a prompt. Both authoritative shapes can coexist during a history-mode change.
+Agent-message and injected-notification envelopes remain system items.
+Claude uses the history projection's injected-record and queued
 prompt owners. Compaction summaries, task notifications and agent-message
 envelopes never become user items. The prompt-envelope owner extracts captions
 and pasted payloads for the document, excluding the injected RemoteCoder note
@@ -253,7 +262,7 @@ search endpoint.
 
 The origin records Codex names from its native append-only session index and
 current delegated parents from `JobStore`'s authoritative parent tags. The ingest
-worker applies these facts outside request lifetimes, on ownership changes and
+worker applies these facts outside request lifetimes, only for changed identities on ownership changes and
 when a new transcript can resolve a previously missing identity. Searches never consult the
 job store. Optional `sessionMetadata` fields on mirror page envelopes carry the
 facts with transcript evidence. Entry shapes and mirror schemaVersion remain
@@ -285,21 +294,43 @@ index for already matched conversations. `sessions/sql` reports the
 number of capped roots in `coverage.conversationSearch.cappedRoots`. This count
 is null while the derived schema is being installed.
 
-On a MacBook Pro with an isolated copy of 7,330 sources, 3 of 4,911 roots
-reached the 2 MiB assistant cap in derived version 4. The word and conversation FTS indexes used 196.4 MB and
-143.3 MB of SQLite pages. Forty-three warm limit-30 requests at 0.555 load per
-core took 88 ms at p50 and 193 ms at p95, with a 228 ms maximum. The version 4
-derived rebuild took 262 seconds from process start, including an overlapping
-build. Health was ready in 2.1 seconds at 0.637 load per core, compared with
-39.6 seconds at 0.267 before the reset moved to the worker. With 7,330 sources
-pending, inventory and search took 1.38 and 1.28 ms at 0.401 load per core.
+Measured with isolated catalogs, the user/assistant word index and conversation
+index occupied 196.4 MB and 143.3 MB on a fully re-ingested 7,330-source copy.
+On a newer 7,394-session copy reprojected from prior canonical rows, version 5
+used 402.3 MB and 310.4 MB after persisted ownership folding. That second sample
+has 3,716 roots: 11 exceed the typed budget, 3 exceed the assistant budget, and
+12 exceed either (0.32%). One additional root exceeds the member window.
+These are different classification samples, not an index-size A/B comparison.
+The initial version-5 derived pass over the copied rows took 227 seconds; the
+fully re-ingested corpus's prior derived pass took 262 seconds including an
+overlapping build. Neither pass read transcripts.
 
-One append to the p95 tree by catalog text bytes and one to the largest tree
-took 37 and 894 ms to refresh the document before commit at 0.595 load per core.
-Those refreshes scheduled 333 ms and 8.05 seconds of cooldown. Adding the
-observed refreshes including WAL commit gives approximately 0.42 and 9.86
-seconds of candidate lag if a new append waits the full cooldown. These examples
-predate the typed column cap in derived version 5. Storage commit time varies.
+Forty-three warm limit-30 requests on the MacBook took 88 ms at p50 and 193 ms at
+p95, with a 228 ms maximum at 0.555 load per core. On the newer copied-row corpus,
+the same query sample on Linux took 159 ms at p50 and 296 ms at p95, with a 420 ms
+maximum at 0.549–0.575 load per core. Every Linux response was finished, including
+`search` with 1,654 matching candidates. Both samples stayed within the one-second
+deadline. The host and corpus changes prevent attributing the difference to
+statement preparation alone.
+
+A sampled largest root refresh reads about 2.09 MB from each column, compared
+with its earlier unbounded 4.85 MB typed column. It took 153 ms before commit,
+734 ms including commit, and scheduled 1.38 seconds of cooldown (about 2.11 seconds
+of candidate lag including a full cooldown). That Linux timing began at 0.560
+load per core but ended at 0.729 and is unqualified. A p95 tree on the earlier
+corpus took 37 ms before commit and 92 ms including commit, with 333 ms cooldown
+and about 0.43 seconds of candidate lag at 0.595 load per core. Storage commit
+time varies. The utility worker's cost-based cooldown limits tokenizing duty
+cycle; inventory and history reads use their separate read paths.
+
+Moving derived reset off startup reduced health readiness from 39.6 seconds to
+2.1 seconds on the MacBook (0.267 and 0.637 load per core respectively). While
+7,330 sources were pending, inventory and search answered in 1.38 and 1.28 ms at
+0.401 load per core. A complete schema-6-to-7 replay of 197 copied Linux sources
+(348 MB) became searchable in 41.7 seconds at 0.205–0.269 load per core. Headers
+were available before content completed, and exact provider history reads
+continued during ingestion. The one-time schema rebuild ingests oldest sources
+first to preserve the existing literal-search rowid order.
 
 ## Locate a matching item
 

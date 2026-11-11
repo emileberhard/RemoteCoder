@@ -726,42 +726,107 @@ async fn sessions_conversations_mirror_origin_metadata_without_entry_changes() -
 }
 
 #[test]
-fn sessions_conversations_retain_legacy_codex_typed_messages_without_duplicate_native_events()
--> Result<()> {
+fn sessions_conversations_select_codex_user_evidence_by_source_shape() -> Result<()> {
+    let completed = |id: &str, text: &str| json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","item":{"type":"UserMessage","id":id,"content":[{"type":"text","text":text},{"type":"image","image_url":"data:image/png;base64,aGVsbG8="}]}}});
+    let old_event = json!({"type":"event_msg","payload":{"type":"user_message","message":"AuthoritativeTypedAnchor"}});
+    let response = json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"ResponseTypedAnchor"}]}});
+    for (shape, events, expected) in [
+        ("response-only", vec![], vec!["ResponseTypedAnchor"]),
+        (
+            "legacy-event",
+            vec![old_event.clone()],
+            vec!["AuthoritativeTypedAnchor"],
+        ),
+        (
+            "paginated",
+            vec![
+                completed("native-first", "AuthoritativeTypedAnchor"),
+                completed("native-steer", "SteerTypedAnchor"),
+            ],
+            vec!["AuthoritativeTypedAnchor", "SteerTypedAnchor"],
+        ),
+        (
+            "switched",
+            vec![
+                old_event,
+                response.clone(),
+                completed("native-steer", "SteerTypedAnchor"),
+            ],
+            vec!["AuthoritativeTypedAnchor", "SteerTypedAnchor"],
+        ),
+    ] {
+        let f = fixture();
+        let mut records = vec![
+            codex_meta("codex-root", None),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\n<INSTRUCTIONS>context</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>context</environment_context>"}]}}),
+            response.clone(),
+        ];
+        records.extend(events);
+        write(&f.codex, &records);
+        scan(&f);
+        let key = crate::sessions::session_key(&f.origins[0], "codex-root");
+        let users: Vec<String> = f
+            .store
+            .reader()?
+            .prepare("SELECT text FROM item WHERE session_key=?1 AND kind='user' ORDER BY seq")?
+            .query_map([&key], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        assert_eq!(users, expected, "{shape}");
+        for query in expected {
+            assert_eq!(
+                conversation_search(&f.store, query, 1, Default::default()).conversations[0]
+                    .session_key,
+                key,
+                "{shape}"
+            );
+        }
+        if shape == "paginated" {
+            let item: String = f.store.reader()?.query_row("SELECT item_key FROM item WHERE session_key=?1 AND kind='user' ORDER BY seq LIMIT 1",[&key],|r|r.get(0))?;
+            let control = crate::sessions::store::ReadControl::new(
+                Instant::now() + crate::sessions::conversations::DEADLINE,
+            );
+            let located = crate::sessions::locate::item(
+                &f.store.reader()?,
+                &crate::sessions::locate::Request { item_key: item },
+                &control,
+            )?;
+            assert_eq!(located.provider_item_id.as_deref(), Some("native-first"));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn sessions_conversations_preserve_response_prompts_before_authoritative_history() -> Result<()> {
     let f = fixture();
     write(
         &f.codex,
         &[
             codex_meta("codex-root", None),
-            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"legacy"}}),
-            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\n<INSTRUCTIONS>context</INSTRUCTIONS>"}]}}),
-            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"LegacyTypedAnchor"}]}}),
-            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"native"}}),
-            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"NativeTypedAnchor"}]}}),
-            json!({"type":"event_msg","payload":{"type":"user_message","message":"NativeTypedAnchor"}}),
-            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>context</environment_context>"}]}}),
-            json!({"type":"event_msg","payload":{"type":"user_message","message":"SteerTypedAnchor"}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"first"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"EarlierFirstAnchor"}]}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"First reply"}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"second"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"EarlierSecondAnchor"}]}}),
+            json!({"type":"response_item","payload":{"type":"agent_message","content":[{"type":"output_text","text":"Second reply"}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"third"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Image wrapper"},{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="},{"type":"input_text","text":"Third prompt"}]}}),
+            json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":"third","item":{"type":"UserMessage","id":"third-user","content":[{"type":"text","text":"Third"},{"type":"image","image_url":"data:image/png;base64,aGVsbG8="},{"type":"text","text":"prompt"}]}}}),
         ],
     );
     scan(&f);
     let key = crate::sessions::session_key(&f.origins[0], "codex-root");
-    let users: Vec<String> = f
+    let texts: Vec<String> = f
         .store
         .reader()?
         .prepare("SELECT text FROM item WHERE session_key=?1 AND kind='user' ORDER BY seq")?
-        .query_map([&key], |r| r.get(0))?
+        .query_map([key], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     assert_eq!(
-        users,
-        ["LegacyTypedAnchor", "NativeTypedAnchor", "SteerTypedAnchor"]
+        texts,
+        ["EarlierFirstAnchor", "EarlierSecondAnchor", "Third\nprompt"]
     );
-    for query in ["LegacyTypedAnchor", "NativeTypedAnchor", "SteerTypedAnchor"] {
-        assert_eq!(
-            conversation_search(&f.store, query, 1, Default::default()).conversations[0]
-                .session_key,
-            key
-        );
-    }
     Ok(())
 }
 

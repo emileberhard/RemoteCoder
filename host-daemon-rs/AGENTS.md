@@ -537,7 +537,11 @@ blocks startup or provider journal retirement.
 - `sessions/conversations/search` is a local-catalog Query-lifetime read,
   advertised by `host/info.conversationSearch`. Independently versioned word
   indexes match all terms across root conversation documents, with final-term
-  prefixes and diacritic folding. The worker persists origin titles and delegated
+  prefixes and diacritic folding. Codex typed input comes from completed
+  `UserMessage` items or legacy user-message events; contextual response
+  classification is used only when a source has neither authoritative shape.
+  The first authoritative event reconciles response rows after the last
+  assistant item without text comparison, preserving earlier prompts. The worker persists origin titles and delegated
   parents, mirrors them in optional page metadata, and rebuilds derived indexes
   from catalog rows after the listener is bound. Search treats a pending schema
   reset as initial backfill. Requests never scan every header, read the job store or

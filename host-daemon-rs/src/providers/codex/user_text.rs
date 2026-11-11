@@ -2,11 +2,10 @@ use serde_json::Value;
 
 const SUMMARY_PREFIX: &str = "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:";
 
-pub(crate) fn is_typed(text: &str) -> bool {
+fn is_response_text(text: &str) -> bool {
     let text = text.trim();
-    !crate::agents::envelope::is_message(text)
+    is_authoritative_text(text)
         && !text.starts_with(SUMMARY_PREFIX)
-        && !crate::providers::claude::timeline::is_injected_user_text(text)
         && ![
             ("# AGENTS.md instructions", "</INSTRUCTIONS>"),
             ("<environment_context>", "</environment_context>"),
@@ -36,7 +35,7 @@ pub(crate) fn is_typed(text: &str) -> bool {
         )
 }
 
-pub(crate) fn legacy_message(content: &Value) -> Option<String> {
+pub(crate) fn response_message(content: &Value) -> Option<String> {
     let parts = content.as_array()?;
     let texts: Vec<_> = parts
         .iter()
@@ -45,6 +44,22 @@ pub(crate) fn legacy_message(content: &Value) -> Option<String> {
         .collect();
     texts
         .iter()
-        .all(|text| is_typed(text))
+        .all(|text| is_response_text(text))
         .then(|| texts.join("\n"))
+}
+
+pub(crate) fn is_authoritative_text(text: &str) -> bool {
+    !crate::agents::envelope::is_message(text)
+        && !crate::providers::claude::timeline::is_injected_user_text(text)
+}
+
+pub(crate) fn completed_message(content: &Value) -> String {
+    content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|part| part["type"] == "text")
+        .filter_map(|part| part["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }

@@ -30,7 +30,7 @@ pub(super) struct State {
     pub effort: Option<String>,
     pub turn_seq: i64,
     #[serde(default)]
-    native_user_messages: bool,
+    authoritative_user_events: bool,
 }
 
 pub(super) struct Record<'a> {
@@ -119,27 +119,24 @@ impl Record<'_> {
             }
             Some("event_msg") => match p["type"].as_str() {
                 Some("user_message") => {
-                    let text = p["message"].as_str().unwrap_or_default();
-                    if !state.native_user_messages
-                        && let Some(thread) = &state.thread
-                    {
-                        self.db.execute("UPDATE item SET kind='system' WHERE session_key=?1 AND turn_id IS ?2 AND kind='user' AND text=?3 AND json_extract(source_ref,'$.pointer')='/payload/content'", params![super::super::session_key(self.origin,thread),state.turn,text])?;
-                    }
-                    state.native_user_messages = true;
-                    self.item(
+                    self.codex_user_event(
                         state,
                         at,
-                        0,
-                        if crate::providers::codex::user_text::is_typed(text) {
-                            "user"
-                        } else {
-                            "system"
-                        },
-                        text.to_owned(),
+                        p["message"].as_str().unwrap_or_default().to_owned(),
                         "/payload/message",
                         p,
-                        None,
-                        None,
+                    )?;
+                }
+                Some("item_completed") if p["item"]["type"] == "UserMessage" => {
+                    state.turn = string(&p["turn_id"]).or(state.turn.take());
+                    self.codex_user_event(
+                        state,
+                        at,
+                        crate::providers::codex::user_text::completed_message(
+                            &p["item"]["content"],
+                        ),
+                        "/payload/item/content",
+                        &p["item"]["content"],
                     )?;
                 }
                 Some("task_started") => {
@@ -171,13 +168,13 @@ impl Record<'_> {
                 let kind = p["type"].as_str().unwrap_or("");
                 match kind {
                     "message" => {
-                        let legacy = (p["role"] == "user" && !state.native_user_messages)
+                        let response = (p["role"] == "user" && !state.authoritative_user_events)
                             .then(|| {
-                                crate::providers::codex::user_text::legacy_message(&p["content"])
+                                crate::providers::codex::user_text::response_message(&p["content"])
                             })
                             .flatten();
                         let role = match p["role"].as_str() {
-                            Some("user") if legacy.is_some() => "user",
+                            Some("user") if response.is_some() => "user",
                             Some("user") => "system",
                             Some("assistant") => "assistant",
                             _ => "system",
@@ -187,7 +184,20 @@ impl Record<'_> {
                             at,
                             0,
                             role,
-                            legacy.unwrap_or_else(|| text(&p["content"])),
+                            response.unwrap_or_else(|| text(&p["content"])),
+                            "/payload/content",
+                            &p["content"],
+                            None,
+                            None,
+                        )?;
+                    }
+                    "agent_message" => {
+                        self.item(
+                            state,
+                            at,
+                            0,
+                            "assistant",
+                            text(&p["content"]),
                             "/payload/content",
                             &p["content"],
                             None,
@@ -465,6 +475,37 @@ impl Record<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn codex_user_event(
+        &self,
+        state: &mut State,
+        at: Option<&str>,
+        text: String,
+        pointer: &str,
+        value: &Value,
+    ) -> Result<()> {
+        if !state.authoritative_user_events
+            && let Some(thread) = &state.thread
+        {
+            self.db.execute("UPDATE item SET kind='system' WHERE session_key=?1 AND kind='user' AND seq>coalesce((SELECT seq FROM item WHERE session_key=?1 AND kind='assistant' ORDER BY seq DESC LIMIT 1),-1) AND json_extract(source_ref,'$.pointer')='/payload/content'", [super::super::session_key(self.origin,thread)])?;
+        }
+        state.authoritative_user_events = true;
+        self.item(
+            state,
+            at,
+            0,
+            if crate::providers::codex::user_text::is_authoritative_text(&text) {
+                "user"
+            } else {
+                "system"
+            },
+            text,
+            pointer,
+            value,
+            None,
+            None,
+        )
+    }
+
     fn item(
         &self,
         state: &State,

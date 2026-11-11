@@ -27,15 +27,16 @@ try {
   const delegatedNeedle='CodexDelegatedChildNeedle';
   const codexAt='2026-11-01T10:00:00.000Z';
   const codexEvent=(type,payload)=>({timestamp:codexAt,type:'event_msg',payload:{type,...payload}});
+  const codexUser=(thread,turn,id,text)=>codexEvent('item_completed',{thread_id:thread,turn_id:turn,item:{type:'UserMessage',id,content:[{type:'text',text,text_elements:[]}]},started_at_ms:Date.parse(codexAt),completed_at_ms:Date.parse(codexAt)});
   const codexSessions=join(lab.nativeDefault,'sessions','2026','11','01');
   await mkdir(codexSessions,{recursive:true});
   const rollout=[
     {timestamp:codexAt,type:'session_meta',payload:{id:codexThread,session_id:codexThread,timestamp:codexAt,cwd:lab.root,originator:'codex_cli_rs',cli_version:'0.0.0',source:'cli',model_provider:'openai'}},
     codexEvent('task_started',{turn_id:'fixture-turn-1',model_context_window:8192}),
-    codexEvent('user_message',{message:codexNeedle}),
+    codexUser(codexThread,'fixture-turn-1','item-1',codexNeedle),
     codexEvent('task_complete',{turn_id:'fixture-turn-1',last_agent_message:null}),
     codexEvent('task_started',{turn_id:'fixture-turn-2',model_context_window:8192}),
-    codexEvent('user_message',{message:'The second turn follows.'}),
+    codexUser(codexThread,'fixture-turn-2','item-2','The second turn follows.'),
     codexEvent('task_complete',{turn_id:'fixture-turn-2',last_agent_message:null}),
   ];
   await writeFile(join(codexSessions,`rollout-2026-11-01T10-00-00-${codexThread}.jsonl`),rollout.map(row=>JSON.stringify(row)+'\n').join(''),{mode:0o600});
@@ -43,7 +44,7 @@ try {
   const childRecords=[
     {...rollout[0],payload:{...rollout[0].payload,id:delegatedChild,session_id:delegatedChild}},
     codexEvent('task_started',{turn_id:'delegated-turn',model_context_window:8192}),
-    codexEvent('user_message',{message:delegatedNeedle}),
+    codexUser(delegatedChild,'delegated-turn','item-1',delegatedNeedle),
     codexEvent('task_complete',{turn_id:'delegated-turn',last_agent_message:null}),
   ];
   await writeFile(childRollout,childRecords.map(row=>JSON.stringify(row)+'\n').join(''),{mode:0o600});
