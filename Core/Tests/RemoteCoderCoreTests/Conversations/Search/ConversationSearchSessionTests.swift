@@ -307,7 +307,7 @@ struct ConversationSearchSessionTests {
 
     private func meaningHit(_ id: String) -> ConversationMeaningResponse.Conversation {
         .init(sessionKey: "\(mini.uuidString):codex:home:\(id)", hostId: mini, provider: .codex,
-              threadId: id, title: "Remembered work", cwd: nil, lastAt: nil, summary: "Remembered sidebar motion")
+              threadId: id, title: "Remembered work", cwd: nil, lastAt: nil, excerpt: "Remembered sidebar motion")
     }
 
     private func session(hosts: [ConversationSearchHost]) -> ConversationSearchSession {

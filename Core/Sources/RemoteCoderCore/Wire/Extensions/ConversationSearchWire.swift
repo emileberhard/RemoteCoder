@@ -49,7 +49,7 @@ struct ConversationMeaningResponse: Decodable, Sendable {
         let title: String?
         let cwd: String?
         let lastAt: Date?
-        let summary: String
+        let excerpt: String
     }
 
     let schemaVersion: Int

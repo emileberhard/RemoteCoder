@@ -166,7 +166,7 @@ enum ConversationSearchMerge {
                 address: ConversationAddress(hostID: host.id, threadID: conversation.threadId), section: .meaning,
                 itemKey: nil, findTerm: nil, sessionKey: conversation.sessionKey, generation: generation,
                 headline: conversation.title.map(ConversationSearchRow.Headline.title) ?? .untitled,
-                excerpt: AttributedString(conversation.summary),
+                excerpt: AttributedString(conversation.excerpt),
                 dateLabel: conversation.lastAt.map { dateLabel($0, now: now) }, provider: conversation.provider,
                 folder: conversation.cwd.flatMap(folder(of:)), hostName: showsHostLabels ? host.name : nil,
                 additionalHitCount: 0), titleMatch: false, recency: conversation.lastAt)

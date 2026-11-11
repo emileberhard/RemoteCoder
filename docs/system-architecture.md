@@ -3084,7 +3084,7 @@ its search when it detaches.
 
 Titles and Messages use the first paint hold of up to 150 ms. An early meaning
 answer joins that paint. Later answers append in provider order inside By
-meaning and use the provider summary as a tinted excerpt. Rows keep their order
+meaning and show the provider excerpt tinted. Rows keep their order
 within each section and deduplicate by address and session key. Unknown or
 ambiguous origin hosts and probe conversations are omitted. Sections initially
 show 4, 10 and 10 rows and retain at most 50, 100 and 100. The status stays
