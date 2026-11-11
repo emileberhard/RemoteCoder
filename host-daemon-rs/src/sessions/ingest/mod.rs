@@ -504,6 +504,86 @@ fn ingest_source(
     ensure!(before.is_file(), "Session source is not a regular file");
     let stamp = identity(&before);
     let original = origin.original(path)?.to_string_lossy().into_owned();
+    let prior = previous_source(db, origin, &original)?;
+    let companions = if mode != ReadMode::Inventory {
+        companions(origin, path)?
+    } else {
+        Vec::new()
+    };
+    let read = SourceRead {
+        origin,
+        path,
+        stop,
+        mode,
+        before: &before,
+        stamp: &stamp,
+        prior: prior.as_ref(),
+        companions,
+    };
+    let changes = dependency_changes(db, origin, read.prior, &read.companions)?;
+    let previous = match read.plan(db, &mut file, changes)? {
+        ReadPlan::Finished(outcome) => return Ok(outcome),
+        ReadPlan::Parse(previous) => previous,
+    };
+    let can_checkpoint = previous.is_some()
+        || read
+            .prior
+            .is_none_or(|previous| previous.offset == 0 || previous.stamp.is_empty());
+    let mut progress = RecordProgress::from_previous(previous)?;
+    let revision = prior.as_ref().map_or(1, |previous| previous.revision + 1);
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    tx.execute("INSERT OR IGNORE INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}')",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy()])?;
+    let source: i64 = tx.query_row(
+        "SELECT source_id FROM source WHERE origin_host=?1 AND path=?2",
+        params![origin.host, original],
+        |row| row.get(0),
+    )?;
+    let metadata = if previous.is_some() {
+        None
+    } else {
+        let metadata = super::metadata::source_metadata(&tx, source)?;
+        tx.execute("DELETE FROM session WHERE source_id=?1", [source])?;
+        tx.execute("DELETE FROM dependency WHERE source_id=?1", [source])?;
+        metadata
+    };
+    let target = RecordTarget {
+        db: &tx,
+        source,
+        revision,
+    };
+    let checkpointed = match read.records(
+        &mut file,
+        &target,
+        &mut progress,
+        can_checkpoint,
+        inventory_waiting,
+    )? {
+        RecordBoundary::Yield => return Ok(ReadOutcome::Yield),
+        RecordBoundary::Checkpoint => true,
+        RecordBoundary::End => false,
+    };
+    normalize::save_session(&tx, origin, source, &progress.state)?;
+    if previous.is_none() {
+        super::metadata::source_replaced(
+            &tx,
+            origin,
+            metadata.as_ref(),
+            progress.state.thread.as_deref(),
+        )?;
+    }
+    if mode != ReadMode::Inventory && !checkpointed {
+        refresh_dependencies(&tx, origin, source, &read.companions)?;
+    }
+    read.save(&mut file, &target, progress, previous, checkpointed)?;
+    tx.commit()?;
+    Ok(if checkpointed {
+        ReadOutcome::Checkpoint
+    } else {
+        ReadOutcome::Saved
+    })
+}
+
+fn previous_source(db: &Connection, origin: &Origin, original: &str) -> Result<Option<Previous>> {
     let prior = db.query_row("SELECT source_id,file_identity,ingested_offset,prefix_hash,parser_state,revision,present,append_state,size FROM source WHERE origin_host=?1 AND path=?2", params![origin.host,original], |row| {
         let unsigned = |index: usize| -> rusqlite::Result<u64> {
             u64::try_from(row.get::<_,i64>(index)?).map_err(|error|rusqlite::Error::FromSqlConversionFailure(index,rusqlite::types::Type::Integer,Box::new(error)))
@@ -512,14 +592,23 @@ fn ingest_source(
         let append = serde_json::from_str(&saved).map_err(|error| rusqlite::Error::FromSqlConversionFailure(7,rusqlite::types::Type::Text,Box::new(error)))?;
         Ok(Previous {id:row.get(0)?,stamp:row.get(1)?,offset:unsigned(2)?,chain:row.get(3)?,parser:row.get(4)?,revision:row.get(5)?,present:row.get(6)?,append,size:unsigned(8)?})
     }).optional()?;
-    let companions = if mode != ReadMode::Inventory {
-        companions(origin, path)?
-    } else {
-        Vec::new()
-    };
+    Ok(prior)
+}
+
+struct DependencyChanges {
+    sidecar: bool,
+    evidence: bool,
+}
+
+fn dependency_changes(
+    db: &Connection,
+    origin: &Origin,
+    prior: Option<&Previous>,
+    companions: &[PathBuf],
+) -> Result<DependencyChanges> {
     let mut sidecar_changed = false;
     let mut evidence_changed = false;
-    if let Some(previous) = &prior {
+    if let Some(previous) = prior {
         let dependencies: Vec<(String, String, String, Option<String>)> = db
             .prepare("SELECT path,local_path,kind,identity FROM dependency WHERE source_id=?1")?
             .query_map([previous.id], |row| {
@@ -537,267 +626,320 @@ fn ingest_source(
             }
             known.insert(path);
         }
-        for companion in &companions {
+        for companion in companions {
             evidence_changed |=
                 !known.contains(&origin.original(companion)?.to_string_lossy().into_owned());
         }
     }
-    let same_stamp = prior
-        .as_ref()
-        .is_some_and(|previous| previous.stamp == stamp && previous.present);
-    let resuming = prior
-        .as_ref()
-        .is_some_and(|previous| previous.append.checkpointed);
-    let mut verified = true;
-    if let Some(previous) = &prior
-        && mode != ReadMode::Inventory
-        && previous.offset > 0
-        && !sidecar_changed
-    {
-        let mut append = previous.append.clone();
-        let check = (mode == ReadMode::Full
-            && (!same_stamp
-                || (!resuming && previous.append.verified_revision != previous.revision)))
-            || (!same_stamp && before.len() == previous.size);
-        if check {
-            verified = before.len() >= previous.offset
-                && verify_prefix(path, previous.offset, &previous.chain, stop)?;
-            append.verified_revision = previous.revision;
-        }
-        if !resuming && verified && before.len() == previous.size && !previous.stamp.is_empty() {
-            if !check && !evidence_changed {
-                return Ok(ReadOutcome::Unchanged);
-            }
-            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            if check {
-                tx.execute(
-                    "UPDATE source SET file_identity=?1,mtime_ns=?2,present=1,append_state=?3 WHERE source_id=?4",
-                    params![stamp, before.mtime() * 1_000_000_000 + before.mtime_nsec(), serde_json::to_string(&append)?, previous.id],
-                )?;
-            }
-            if evidence_changed {
-                refresh_dependencies(&tx, origin, previous.id, &companions)?;
-            }
-            tx.commit()?;
-            return Ok(if evidence_changed {
-                ReadOutcome::Saved
-            } else {
-                ReadOutcome::Unchanged
-            });
-        }
-    } else if same_stamp && !sidecar_changed && !evidence_changed {
-        return Ok(ReadOutcome::Unchanged);
+    Ok(DependencyChanges {
+        sidecar: sidecar_changed,
+        evidence: evidence_changed,
+    })
+}
+
+struct SourceRead<'a> {
+    origin: &'a Origin,
+    path: &'a Path,
+    stop: &'a AtomicBool,
+    mode: ReadMode,
+    before: &'a Metadata,
+    stamp: &'a str,
+    prior: Option<&'a Previous>,
+    companions: Vec<PathBuf>,
+}
+
+enum ReadPlan<'a> {
+    Finished(ReadOutcome),
+    Parse(Option<&'a Previous>),
+}
+
+struct RecordTarget<'a> {
+    db: &'a Connection,
+    source: i64,
+    revision: i64,
+}
+
+struct RecordProgress {
+    state: normalize::State,
+    offset: u64,
+    chain: blake3::Hash,
+    gap_records: u64,
+    first_gap: Option<(u64, u64)>,
+}
+
+impl RecordProgress {
+    fn from_previous(previous: Option<&Previous>) -> Result<Self> {
+        Ok(match previous {
+            Some(previous) => Self {
+                state: serde_json::from_str(&previous.parser)?,
+                offset: previous.offset,
+                chain: previous.chain.parse()?,
+                gap_records: previous.append.gap_records,
+                first_gap: previous.append.first_gap,
+            },
+            None => Self {
+                state: normalize::State::default(),
+                offset: 0,
+                chain: blake3::hash(&[]),
+                gap_records: 0,
+                first_gap: None,
+            },
+        })
     }
-    let append = if let Some(previous) = &prior {
-        previous.present
+}
+
+enum RecordBoundary {
+    End,
+    Checkpoint,
+    Yield,
+}
+
+impl SourceRead<'_> {
+    fn plan(
+        &self,
+        db: &mut Connection,
+        file: &mut File,
+        changes: DependencyChanges,
+    ) -> Result<ReadPlan<'_>> {
+        let DependencyChanges {
+            sidecar: sidecar_changed,
+            evidence: evidence_changed,
+        } = changes;
+        let same_stamp = self
+            .prior
+            .is_some_and(|previous| previous.stamp == self.stamp && previous.present);
+        let resuming = self
+            .prior
+            .is_some_and(|previous| previous.append.checkpointed);
+        let mut verified = true;
+        if let Some(previous) = self.prior
+            && self.mode != ReadMode::Inventory
+            && previous.offset > 0
+            && !sidecar_changed
+        {
+            let mut append = previous.append.clone();
+            let check = (self.mode == ReadMode::Full
+                && (!same_stamp
+                    || (!resuming && previous.append.verified_revision != previous.revision)))
+                || (!same_stamp && self.before.len() == previous.size);
+            if check {
+                verified = self.before.len() >= previous.offset
+                    && verify_prefix(self.path, previous.offset, &previous.chain, self.stop)?;
+                append.verified_revision = previous.revision;
+            }
+            if !resuming
+                && verified
+                && self.before.len() == previous.size
+                && !previous.stamp.is_empty()
+            {
+                if !check && !evidence_changed {
+                    return Ok(ReadPlan::Finished(ReadOutcome::Unchanged));
+                }
+                let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                if check {
+                    tx.execute(
+                    "UPDATE source SET file_identity=?1,mtime_ns=?2,present=1,append_state=?3 WHERE source_id=?4",
+                    params![self.stamp, self.before.mtime() * 1_000_000_000 + self.before.mtime_nsec(), serde_json::to_string(&append)?, previous.id],
+                )?;
+                }
+                if evidence_changed {
+                    refresh_dependencies(&tx, self.origin, previous.id, &self.companions)?;
+                }
+                tx.commit()?;
+                return Ok(ReadPlan::Finished(if evidence_changed {
+                    ReadOutcome::Saved
+                } else {
+                    ReadOutcome::Unchanged
+                }));
+            }
+        } else if same_stamp && !sidecar_changed && !evidence_changed {
+            return Ok(ReadPlan::Finished(ReadOutcome::Unchanged));
+        }
+        let Some(previous) = self.prior else {
+            return Ok(ReadPlan::Parse(None));
+        };
+        let append = previous.present
             && verified
             && !sidecar_changed
             && previous.offset > 0
-            && (before.len() > previous.size || (resuming && before.len() >= previous.offset))
-            && fingerprint(&mut file, previous.offset)?
-                == (previous.append.head.clone(), previous.append.tail.clone())
-    } else {
-        false
-    };
-    let can_checkpoint = append
-        || prior
-            .as_ref()
-            .is_none_or(|previous| previous.offset == 0 || previous.stamp.is_empty());
-    let mut checkpointed = false;
-    let mut state = if append {
-        serde_json::from_str(
-            &prior
-                .as_ref()
-                .context("Append needs previous state")?
-                .parser,
-        )?
-    } else {
-        normalize::State::default()
-    };
-    let mut offset = if append {
-        prior
-            .as_ref()
-            .context("Append needs previous state")?
-            .offset
-    } else {
-        0
-    };
-    let revision = prior.as_ref().map_or(1, |previous| previous.revision + 1);
-    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    tx.execute("INSERT OR IGNORE INTO source(origin_host,provider,provider_home,path,local_path,file_identity,size,mtime_ns,ingested_offset,revision,present,prefix_hash,parser_state) VALUES(?1,?2,?3,?4,?5,'',0,0,0,0,1,'','{}')",params![origin.host,origin.provider,origin.provider_home.to_string_lossy(),original,path.to_string_lossy()])?;
-    let source: i64 = tx.query_row(
-        "SELECT source_id FROM source WHERE origin_host=?1 AND path=?2",
-        params![origin.host, original],
-        |row| row.get(0),
-    )?;
-    let metadata = if append {
-        None
-    } else {
-        let metadata = super::metadata::source_metadata(&tx, source)?;
-        tx.execute("DELETE FROM session WHERE source_id=?1", [source])?;
-        tx.execute("DELETE FROM dependency WHERE source_id=?1", [source])?;
-        metadata
-    };
-    let mut chain = if append {
-        prior
-            .as_ref()
-            .context("Append needs previous state")?
-            .chain
-            .parse::<blake3::Hash>()?
-    } else {
-        blake3::hash(&[])
-    };
-    file.seek(SeekFrom::Start(offset))?;
-    let mut reader = RecordReader::new((&mut file).take(before.len() - offset));
-    let mut line = Vec::new();
-    let mut records = 0;
-    let mut gap_records = if append {
-        prior
-            .as_ref()
-            .context("Append needs previous state")?
-            .append
-            .gap_records
-    } else {
-        0
-    };
-    let mut first_gap = if append {
-        prior
-            .as_ref()
-            .context("Append needs previous state")?
-            .append
-            .first_gap
-    } else {
-        None
-    };
-    if origin.provider == "claude" && state.thread.is_none() {
-        normalize::Record {
-            db: &tx,
-            origin,
+            && (self.before.len() > previous.size
+                || (resuming && self.before.len() >= previous.offset))
+            && fingerprint(file, previous.offset)?
+                == (previous.append.head.clone(), previous.append.tail.clone());
+        Ok(ReadPlan::Parse(append.then_some(previous)))
+    }
+
+    fn records(
+        &self,
+        file: &mut File,
+        target: &RecordTarget<'_>,
+        progress: &mut RecordProgress,
+        can_checkpoint: bool,
+        inventory_waiting: &dyn Fn() -> bool,
+    ) -> Result<RecordBoundary> {
+        let RecordTarget {
+            db,
             source,
             revision,
-            path,
+        } = *target;
+        file.seek(SeekFrom::Start(progress.offset))?;
+        let mut reader = RecordReader::new(file.take(self.before.len() - progress.offset));
+        let mut line = Vec::new();
+        let mut records = 0;
+        if self.origin.provider == "claude" && progress.state.thread.is_none() {
+            normalize::Record {
+                db,
+                origin: self.origin,
+                source,
+                revision,
+                path: self.path,
+                offset: progress.offset,
+                bytes: &[],
+            }
+            .apply(&mut progress.state, Value::Null)?;
+        }
+        if self.mode != ReadMode::Inventory || self.origin.provider != "claude" {
+            loop {
+                ensure!(
+                    !self.stop.load(Ordering::Acquire),
+                    "Session ingestion cancelled"
+                );
+                line.clear();
+                reader.hash.reset();
+                let bound = if self.mode == ReadMode::Inventory {
+                    8 << 20
+                } else {
+                    MAX_SESSION_RECORD_BYTES
+                };
+                let (read, kind) = read_bounded_line(&mut reader, &mut line, bound)?;
+                if read == 0 || kind == LineKind::Partial {
+                    break;
+                }
+                let bad = if kind == LineKind::Oversized {
+                    true
+                } else if line.iter().all(u8::is_ascii_whitespace) {
+                    false
+                } else if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+                    normalize::Record {
+                        db,
+                        origin: self.origin,
+                        source,
+                        revision,
+                        path: self.path,
+                        offset: progress.offset,
+                        bytes: &line,
+                    }
+                    .apply(&mut progress.state, value)?;
+                    false
+                } else {
+                    true
+                };
+                if bad {
+                    progress.gap_records = progress
+                        .gap_records
+                        .checked_add(1)
+                        .context("Too many record gaps")?;
+                    progress.first_gap.get_or_insert((progress.offset, read));
+                }
+                progress.chain = chain_record(progress.chain, reader.hash.finalize());
+                progress.offset += read;
+                records += 1;
+                if progress.offset < self.before.len() && inventory_waiting() {
+                    if !can_checkpoint {
+                        return Ok(RecordBoundary::Yield);
+                    }
+                    if progress.state.thread.is_some() {
+                        return Ok(RecordBoundary::Checkpoint);
+                    }
+                }
+                if self.mode == ReadMode::Inventory {
+                    if progress.state.thread.is_some() {
+                        break;
+                    }
+                    if records >= 128 || progress.offset >= 8 << 20 {
+                        return Err(InvalidHeader(
+                            "Transcript has no identity within the inventory header budget",
+                        )
+                        .into());
+                    }
+                }
+            }
+        }
+        Ok(RecordBoundary::End)
+    }
+
+    fn save(
+        &self,
+        file: &mut File,
+        target: &RecordTarget<'_>,
+        progress: RecordProgress,
+        previous: Option<&Previous>,
+        checkpointed: bool,
+    ) -> Result<()> {
+        let RecordTarget {
+            db,
+            source,
+            revision,
+        } = *target;
+        let RecordProgress {
+            state,
             offset,
-            bytes: &[],
-        }
-        .apply(&mut state, Value::Null)?;
-    }
-    if mode != ReadMode::Inventory || origin.provider != "claude" {
-        loop {
-            ensure!(!stop.load(Ordering::Acquire), "Session ingestion cancelled");
-            line.clear();
-            reader.hash.reset();
-            let bound = if mode == ReadMode::Inventory {
-                8 << 20
-            } else {
-                MAX_SESSION_RECORD_BYTES
-            };
-            let (read, kind) = read_bounded_line(&mut reader, &mut line, bound)?;
-            if read == 0 || kind == LineKind::Partial {
-                break;
-            }
-            let bad = if kind == LineKind::Oversized {
-                true
-            } else if line.iter().all(u8::is_ascii_whitespace) {
-                false
-            } else if let Ok(value) = serde_json::from_slice::<Value>(&line) {
-                normalize::Record {
-                    db: &tx,
-                    origin,
-                    source,
-                    revision,
-                    path,
-                    offset,
-                    bytes: &line,
-                }
-                .apply(&mut state, value)?;
-                false
-            } else {
-                true
-            };
-            if bad {
-                gap_records = gap_records.checked_add(1).context("Too many record gaps")?;
-                first_gap.get_or_insert((offset, read));
-            }
-            chain = chain_record(chain, reader.hash.finalize());
-            offset += read;
-            records += 1;
-            if offset < before.len() && inventory_waiting() {
-                if !can_checkpoint {
-                    return Ok(ReadOutcome::Yield);
-                }
-                if state.thread.is_some() {
-                    checkpointed = true;
-                    break;
-                }
-            }
-            if mode == ReadMode::Inventory {
-                if state.thread.is_some() {
-                    break;
-                }
-                if records >= 128 || offset >= 8 << 20 {
-                    return Err(InvalidHeader(
-                        "Transcript has no identity within the inventory header budget",
-                    )
-                    .into());
-                }
-            }
-        }
-    }
-    drop(reader);
-    normalize::save_session(&tx, origin, source, &state)?;
-    if !append {
-        super::metadata::source_replaced(&tx, origin, metadata.as_ref(), state.thread.as_deref())?;
-    }
-    if mode != ReadMode::Inventory && !checkpointed {
-        refresh_dependencies(&tx, origin, source, &companions)?;
-    }
-    let prefix = chain.to_hex().to_string();
-    let (head, tail) = fingerprint(&mut file, offset)?;
-    let after = std::fs::metadata(path)?;
-    ensure!(
-        before.dev() == after.dev() && before.ino() == after.ino() && before.len() <= after.len(),
-        "Source replaced during ingestion"
-    );
-    let stable = FileRevision::from(before.clone()) == FileRevision::from(after.clone());
-    if !stable && mode == ReadMode::Full {
+            chain,
+            gap_records,
+            first_gap,
+        } = progress;
+        let Self {
+            before,
+            path,
+            mode,
+            stop,
+            stamp,
+            prior,
+            ..
+        } = *self;
+        let prefix = chain.to_hex().to_string();
+        let (head, tail) = fingerprint(file, offset)?;
+        let after = std::fs::metadata(path)?;
         ensure!(
-            verify_prefix(path, offset, &prefix, stop)?,
-            "Source changed during ingestion"
+            before.dev() == after.dev()
+                && before.ino() == after.ino()
+                && before.len() <= after.len(),
+            "Source replaced during ingestion"
         );
-    } else if !stable && append {
-        let previous = prior.as_ref().context("Append needs previous state")?;
-        ensure!(
-            fingerprint(&mut file, previous.offset)?
-                == (previous.append.head.clone(), previous.append.tail.clone()),
-            "Source changed during ingestion"
-        );
-    }
-    if state.thread.is_none() && offset > 0 {
-        return Err(InvalidHeader("Transcript has no exact provider identity").into());
-    }
-    let verified_revision =
-        if mode == ReadMode::Full || (!append && stable && mode != ReadMode::Inventory) {
+        let stable = FileRevision::from(before.clone()) == FileRevision::from(after.clone());
+        if !stable && mode == ReadMode::Full {
+            ensure!(
+                verify_prefix(path, offset, &prefix, stop)?,
+                "Source changed during ingestion"
+            );
+        } else if !stable && let Some(previous) = previous {
+            ensure!(
+                fingerprint(file, previous.offset)?
+                    == (previous.append.head.clone(), previous.append.tail.clone()),
+                "Source changed during ingestion"
+            );
+        }
+        if state.thread.is_none() && offset > 0 {
+            return Err(InvalidHeader("Transcript has no exact provider identity").into());
+        }
+        let verified_revision = if mode == ReadMode::Full
+            || (previous.is_none() && stable && mode != ReadMode::Inventory)
+        {
             revision
         } else {
-            prior
-                .as_ref()
-                .map_or(0, |previous| previous.append.verified_revision)
+            prior.map_or(0, |previous| previous.append.verified_revision)
         };
-    let append_state = AppendState {
-        head,
-        tail,
-        verified_revision,
-        gap_records,
-        first_gap,
-        checkpointed,
-    };
-    tx.execute("UPDATE source SET local_path=?1,file_identity=?2,size=?3,mtime_ns=?4,ingested_offset=?5,revision=?6,present=1,prefix_hash=?7,parser_state=?8,failure=?9,append_state=?10 WHERE source_id=?11",params![path.to_string_lossy(),if mode != ReadMode::Inventory {&stamp} else {""},i64::try_from(before.len())?,before.mtime()*1_000_000_000+before.mtime_nsec(),i64::try_from(offset)?,revision,prefix,serde_json::to_string(&state)?,if gap_records>0 {Some("record_gap")} else if offset<before.len(){Some("partial_record")}else{None},serde_json::to_string(&append_state)?,source])?;
-    tx.commit()?;
-    Ok(if checkpointed {
-        ReadOutcome::Checkpoint
-    } else {
-        ReadOutcome::Saved
-    })
+        let append_state = AppendState {
+            head,
+            tail,
+            verified_revision,
+            gap_records,
+            first_gap,
+            checkpointed,
+        };
+        db.execute("UPDATE source SET local_path=?1,file_identity=?2,size=?3,mtime_ns=?4,ingested_offset=?5,revision=?6,present=1,prefix_hash=?7,parser_state=?8,failure=?9,append_state=?10 WHERE source_id=?11",params![path.to_string_lossy(),if mode != ReadMode::Inventory {stamp} else {""},i64::try_from(before.len())?,before.mtime()*1_000_000_000+before.mtime_nsec(),i64::try_from(offset)?,revision,prefix,serde_json::to_string(&state)?,if gap_records>0 {Some("record_gap")} else if offset<before.len(){Some("partial_record")}else{None},serde_json::to_string(&append_state)?,source])?;
+        Ok(())
+    }
 }
 
 pub(super) fn file_identity(path: &Path) -> Result<Option<String>> {
