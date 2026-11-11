@@ -223,5 +223,6 @@ to measurement start; delayed ticks catch up without dropping content. These are
 synthetic-input measurements, not evidence of real gateway or trackpad timing.
 
 `mac-bench` takes `--bench-host` and `--host` (gateway UUID), or the optional
-maintainer roles `macBenchHost` and `macBenchmarkGatewayId`. Voice probes accept
+maintainer roles `macBenchHost` and `macBenchmarkGatewayId`; maintainer
+`macBenchBusyProcesses` names the processes that mark the bench host as in use. Voice probes accept
 `--cwd`; otherwise they use the selected gateway's reported home directory.
