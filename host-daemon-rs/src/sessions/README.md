@@ -217,8 +217,9 @@ uses the same user, assistant and reasoning kinds as the document. It covers
 at most 128 member sessions and finds 64 newest hits per term per
 candidate, with lookaheads setting `truncated`. Ranking reads metadata. The
 gateway applies SQLite's tokenizer to the selected text of at most three hits
-per result to build excerpts. Items larger than 1 MiB are skipped for excerpts
-and set `truncated`. Hits prefer distinct-term coverage, user/assistant text,
+per result to build excerpts. Items larger than 1 MiB set `truncated` and still
+count toward `hitCount`. A conversation can match with zero excerpts.
+Hits prefer distinct-term coverage, user/assistant text,
 then recency. `hitCount`
 counts unique items inside these bounded windows. Candidate or hit-window
 lookahead sets `truncated`. The app can present completed results while indicating

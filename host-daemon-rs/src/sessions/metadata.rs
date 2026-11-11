@@ -78,8 +78,8 @@ pub(crate) fn titles(db: &Connection, origins: &[Origin]) -> Result<()> {
         }
 
         let mut updates = HashMap::new();
-        for line in BufReader::new(std::io::Read::take(file, revision.len())).lines() {
-            let value: serde_json::Value = match serde_json::from_str(&line?) {
+        for line in BufReader::new(std::io::Read::take(file, revision.len())).split(b'\n') {
+            let value: serde_json::Value = match serde_json::from_slice(&line?) {
                 Ok(value) => value,
                 Err(_) => continue,
             };

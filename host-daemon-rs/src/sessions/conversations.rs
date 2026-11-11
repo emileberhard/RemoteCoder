@@ -208,12 +208,6 @@ pub(crate) fn search(
                     break;
                 }
             }
-            if !title_match && excerpts.is_empty() {
-                *completed
-                    .lock()
-                    .expect("conversation search progress poisoned") = Some(response.clone());
-                continue;
-            }
             response.conversations.push(Conversation {
                 session_key: header.session_key,
                 host_id: header.host_id,

@@ -3159,6 +3159,7 @@ fn sessions_native_titles_resume_after_complete_lines_and_replay_a_rewrite() -> 
     super::metadata::titles(&db, &f.origins)?;
     assert_eq!(current()?, "First title");
     let mut file = OpenOptions::new().append(true).open(&path)?;
+    file.write_all(b"\xff\n")?;
     write!(
         file,
         "{{\"id\":\"codex-root\",\"thread_name\":\"Append title\""
@@ -3259,6 +3260,32 @@ fn sessions_conversations_excerpt_finds_a_deep_prefix() {
     let excerpt = &result.conversations[0].hits[0].excerpt;
     assert!(excerpt.contains("DeepMalmöFlickering"));
     assert!(excerpt.chars().count() <= 240);
+}
+
+#[test]
+fn sessions_conversations_count_matches_without_bounded_excerpts() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let key = super::session_key(&f.origins[0], "codex-root");
+    {
+        let db = f.store.writer()?;
+        conversation_item(
+            &db,
+            &key,
+            446,
+            &format!("OversizeMatch {}", "a".repeat(1 << 20)),
+            "assistant",
+            None,
+        );
+    }
+    let result = conversation_search(&f.store, "oversizematch", 1, Default::default());
+    assert!(result.truncated);
+    assert_eq!(result.conversations.len(), 1);
+    let conversation = &result.conversations[0];
+    assert!(!conversation.title_match);
+    assert_eq!(conversation.hit_count, 1);
+    assert!(conversation.hits.is_empty());
+    Ok(())
 }
 
 #[test]

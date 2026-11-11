@@ -32,6 +32,7 @@ impl QueryPolicy {
         }
     }
 }
+
 const RUNNING_LIMIT: usize = 8;
 const QUEUE_LIMIT: usize = 64;
 const QUERY_BYTES: usize = 2 * 1024 * 1024;
