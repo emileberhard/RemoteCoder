@@ -40,6 +40,7 @@ struct ConversationHistoryList: View, Equatable {
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 bottomBar
             }
+            .scrollEdgeEffectHidden(true, for: .bottom)
         }
     }
 
