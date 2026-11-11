@@ -81,32 +81,6 @@ struct DictationVoiceTests {
         #expect(!FileManager.default.fileExists(atPath: second.directory.appending(path: "VoiceProfile.json").path))
     }
 
-    @Test @MainActor func compareRecordingStartWithEveryoneAndAnUntrustedProfile() async throws {
-        var timings: [DictationVoiceSelection: [Double]] = [:]
-        for _ in 0..<8 {
-            for selection in [DictationVoiceSelection.everyone, .onlyMine] {
-                let recordings = try TemporaryDictationRecordings()
-                defer { recordings.cleanUp() }
-                let recorder = VoiceFixtureRecorder()
-                let transcriber = InjectedVoiceTranscriber(phrases: [], refused: false, waitsForRequest: false, startupDelay: .milliseconds(15))
-                let controller = VoiceInputController(access: .fixture, owner: ExecutionTarget(hostID: UUID()),
-                    transcriber: transcriber, recorder: recorder, recordings: recordings.store, voices: recordings.voiceProfiles,
-                    configuration: { .init(model: .azureMAITranscribe2, language: .english, voiceChoice: selection) })
-                controller.markRecordingRequested()
-                let start = ContinuousClock.now
-                try await controller.startAsync()
-                let captured = try #require(recorder.startedAt)
-                timings[selection, default: []].append(start.duration(to: captured) / .milliseconds(1))
-                try await controller.stopRecording()
-                _ = try await controller.transcribe()
-            }
-        }
-        for selection in [DictationVoiceSelection.everyone, .onlyMine] {
-            let values = try #require(timings[selection]).sorted()
-            print("Dictation start selection=\(selection.rawValue) n=\(values.count) min_ms=\(values[0]) median_ms=\(values[values.count / 2]) max_ms=\(values[values.count - 1])")
-        }
-    }
-
     @Test @MainActor func transientFailuresKeepProfileStatusAndRefusalMarksTheRoute() async throws {
         let name = "VoiceStatus.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: name))
@@ -345,14 +319,12 @@ private final class VoiceFixtureBundle: NSObject {}
 @MainActor
 private final class VoiceFixtureRecorder: VoiceInputRecording {
     private(set) var recognitionWasAttached = false
-    private(set) var startedAt: ContinuousClock.Instant?
     private let pcm: Data
     init(pcm: Data = Data(repeating: 0, count: 3_200)) { self.pcm = pcm }
     func ensurePermission() async throws {}
     func activateSession() async throws {}
     func deactivateSession() async throws {}
     func start(output: PCM16CaptureOutput) async throws {
-        startedAt = .now
         recognitionWasAttached = output.receiveRecognition != nil
         output.receive(pcm)
         output.receiveRecognition?(pcm)
@@ -368,18 +340,13 @@ private final class InjectedVoiceTranscriber: TranscriptionService {
     let refused: Bool
     let waitsForRequest: Bool
     let labelledDelay: Duration
-    let startupDelay: Duration
-    init(phrases: [SpeakerPhrase], refused: Bool, waitsForRequest: Bool, labelledDelay: Duration = .zero, startupDelay: Duration = .zero) {
+    init(phrases: [SpeakerPhrase], refused: Bool, waitsForRequest: Bool, labelledDelay: Duration = .zero) {
         self.phrases = phrases
         self.refused = refused
         self.waitsForRequest = waitsForRequest
         self.labelledDelay = labelledDelay
-        self.startupDelay = startupDelay
     }
-    func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription? {
-        if startupDelay > .zero { try await Task.sleep(for: startupDelay) }
-        return nil
-    }
+    func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription? { nil }
     @concurrent func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
         if waitsForRequest { for await _ in requested.stream { break } }
         return DictationTranscript(text: "Selected provider text.", model: configuration.model.batchLibraryID)
