@@ -199,7 +199,10 @@ search uses only document matches as candidates. It cannot find terms that occur
 only in tool calls, tool output, reasoning or injected context. The existing trigram RPC
 `sessions/search` retains literal substring access to that evidence. A grouped
 result requires an all-terms title match or a message hit. Ranking never fetches
-full message text.
+full message text. Codex assistant text uses model-facing response records as its
+single owner. Native-only final answers with delivery/questions metadata are
+not indexed; the copied 200-source audit found 2 among 2,633 completed assistant
+events. Inter-agent response records are not assistant text.
 
 Schema-version-1 responses contain `truncated` and ranked `conversations`. Each
 conversation carries its root `sessionKey`, origin `hostId`, `provider`,

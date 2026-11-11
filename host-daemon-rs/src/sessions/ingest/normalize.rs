@@ -461,7 +461,6 @@ impl Record<'_> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn codex_user_event(
         &self,
         state: &mut State,
@@ -493,6 +492,7 @@ impl Record<'_> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn item(
         &self,
         state: &State,
