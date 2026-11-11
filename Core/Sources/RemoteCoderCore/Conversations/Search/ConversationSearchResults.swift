@@ -66,9 +66,16 @@ struct ConversationSearchStatus: Equatable, Sendable {
     var isSearching = false
     var unansweredHosts: [String] = []
     var unsupportedHosts: [String] = []
+    var partialHosts: [String] = []
 
-    var unavailableSummary: String? {
+    var isComplete: Bool {
+        !isSearching && unansweredHosts.isEmpty && unsupportedHosts.isEmpty && partialHosts.isEmpty
+    }
+
+    var summary: String? {
         var parts: [String] = []
+        if isSearching { parts.append("Searching…") }
+        if !partialHosts.isEmpty { parts.append("Search incomplete on \(partialHosts.formatted(.list(type: .and)))") }
         if !unansweredHosts.isEmpty { parts.append("No answer from \(unansweredHosts.formatted(.list(type: .and)))") }
         if !unsupportedHosts.isEmpty { parts.append("\(unsupportedHosts.formatted(.list(type: .and))) can't search messages yet") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")

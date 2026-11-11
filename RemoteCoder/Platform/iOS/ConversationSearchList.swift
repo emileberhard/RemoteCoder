@@ -15,7 +15,7 @@ struct ConversationSearchList: View {
                         isFirst: results.titles.rows.isEmpty)
                 section(results.meaning, title: "By meaning", systemImage: "sparkles",
                         isFirst: results.titles.rows.isEmpty && results.messages.rows.isEmpty)
-                if results.isPainted, results.isEmpty, !results.status.isSearching {
+                if results.isPainted, results.isEmpty, results.status.isComplete {
                     ContentUnavailableView.search
                         .padding(.vertical, 20)
                 }
@@ -151,14 +151,12 @@ private struct ConversationSearchStatusRow: View {
             if status.isSearching {
                 ProgressView()
                     .controlSize(.mini)
-                Text("Searching…")
-            } else if let summary = status.unavailableSummary {
-                Text(summary)
             }
+            if let summary = status.summary { Text(summary) }
         }
         .font(.footnote)
         .foregroundStyle(.secondary)
-        .lineLimit(2, reservesSpace: true)
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)

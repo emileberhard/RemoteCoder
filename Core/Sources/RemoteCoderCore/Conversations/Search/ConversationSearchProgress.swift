@@ -8,9 +8,14 @@ nonisolated struct ConversationSearchProgress {
         let tier: Tier
     }
 
+    struct Answer: Sendable {
+        let candidates: [ConversationSearchCandidate]
+        let truncated: Bool
+    }
+
     enum Event: Sendable {
         case holdElapsed
-        case answered(Request, [ConversationSearchCandidate])
+        case answered(Request, Answer)
         case unsupported(Request)
         case failed(Request)
     }
@@ -50,10 +55,11 @@ nonisolated struct ConversationSearchProgress {
         switch event {
         case .holdElapsed:
             if !results.isPainted { answer = [] }
-        case let .answered(request, candidates):
-            pending[request] = nil
-            if request.tier == .meaning, !results.isPainted { heldMeaning += candidates }
-            else { answer = candidates }
+        case let .answered(request, response):
+            if let name = pending.removeValue(forKey: request), response.truncated,
+               !results.status.partialHosts.contains(name) { results.status.partialHosts.append(name) }
+            if request.tier == .meaning, !results.isPainted { heldMeaning += response.candidates }
+            else { answer = response.candidates }
         case let .unsupported(request):
             if let name = pending.removeValue(forKey: request), request.tier == .keyword,
                !results.status.unsupportedHosts.contains(name) { results.status.unsupportedHosts.append(name) }

@@ -157,8 +157,9 @@ final class ConversationSearchSession {
                 group.addTask {
                     await request(keywordRequest) {
                         try await keyword(keywordParams)
-                    } candidates: {
-                        ConversationSearchMerge.candidates(from: $0, hosts: hosts, query: query, generation: generation, now: now)
+                    } prepare: {
+                        .init(candidates: ConversationSearchMerge.candidates(from: $0, hosts: hosts, query: query,
+                            generation: generation, now: now), truncated: $0.truncated)
                     }
                 }
                 if let meaning {
@@ -168,8 +169,9 @@ final class ConversationSearchSession {
                             try await clock.sleep(for: meaningDebounce - debounce)
                             try Task.checkCancellation()
                             return try await meaning(meaningParams)
-                        } candidates: {
-                            ConversationSearchMerge.meaningCandidates(from: $0, hosts: hosts, generation: generation, now: now)
+                        } prepare: {
+                            .init(candidates: ConversationSearchMerge.meaningCandidates(from: $0, hosts: hosts,
+                                generation: generation, now: now), truncated: false)
                         }
                     }
                 }
@@ -201,12 +203,12 @@ final class ConversationSearchSession {
     private nonisolated static func request<Response: Sendable>(
         _ request: ConversationSearchProgress.Request,
         search: () async throws -> ConversationSearchHost.Answer<Response>,
-        candidates: (Response) -> [ConversationSearchCandidate]
+        prepare: (Response) -> ConversationSearchProgress.Answer
     ) async -> ConversationSearchProgress.Event {
         do {
             try Task.checkCancellation()
             switch try await search() {
-            case let .results(response): return .answered(request, candidates(response))
+            case let .results(response): return .answered(request, prepare(response))
             case .unsupported: return .unsupported(request)
             }
         } catch {

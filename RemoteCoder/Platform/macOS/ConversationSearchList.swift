@@ -12,7 +12,7 @@ struct ConversationSearchList: View {
             section(results.titles, title: "Titles")
             section(results.messages, title: "Messages")
             section(results.meaning, title: "By meaning")
-            if results.isPainted, results.isEmpty, !results.status.isSearching { ContentUnavailableView.search }
+            if results.isPainted, results.isEmpty, results.status.isComplete { ContentUnavailableView.search }
             ConversationSearchStatusRow(status: results.status)
             Button(action: ask) { Label("Ask an agent", systemImage: "sparkle.magnifyingglass") }
                 .accessibilityIdentifier("ask-conversation-search")
@@ -125,14 +125,12 @@ private struct ConversationSearchStatusRow: View {
             if status.isSearching {
                 ProgressView()
                     .controlSize(.mini)
-                Text("Searching…")
-            } else if let summary = status.unavailableSummary {
-                Text(summary)
             }
+            if let summary = status.summary { Text(summary) }
         }
         .scaledFont(.footnote)
         .foregroundStyle(.secondary)
-        .lineLimit(2, reservesSpace: true)
+        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }

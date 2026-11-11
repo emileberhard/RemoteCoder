@@ -27,6 +27,7 @@ struct ConversationSearchResponse: Decodable, Sendable {
     }
 
     let schemaVersion: Int
+    let truncated: Bool
     let conversations: [Conversation]
 
     static let dateDecoding = JSONDecoder.DateDecodingStrategy.custom { decoder in

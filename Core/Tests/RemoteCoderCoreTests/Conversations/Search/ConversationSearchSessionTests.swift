@@ -73,6 +73,37 @@ struct ConversationSearchSessionTests {
         #expect(ids(session.results.messages) == ["shared", "fresh"])
     }
 
+    @Test func anEmptyTruncatedAnswerKeepsCoverageIncomplete() async throws {
+        let decoder = JSONDecoder()
+        let partial = try decoder.decode(ConversationSearchResponse.self,
+            from: Data(#"{"schemaVersion":1,"truncated":true,"conversations":[]}"#.utf8))
+        let session = session(hosts: [host(mini, "Mini")])
+        try await ask(session, "drawer", hosts: 1)
+        requests.answer(mini, truncated: partial.truncated, with: partial.conversations)
+        try #require(await waitUntil { session.results.isPainted && !session.results.status.isSearching })
+        #expect(session.results.isEmpty)
+        #expect(!session.results.status.isComplete)
+        #expect(session.results.status.partialHosts == ["Mini"])
+        #expect(session.results.status.summary == "Search incomplete on Mini")
+    }
+
+    @Test func aPartialHostKeepsItsRowsBesideAnotherHostsCompleteAnswer() async throws {
+        let session = session(hosts: [host(mini, "Mini"), host(book, "MacBook")])
+        try await ask(session, "drawer", hosts: 2)
+        requests.answer(mini, truncated: true, with: [hit("partial", on: mini)])
+        try #require(await waitUntil { ids(session.results.messages) == ["partial"] })
+        #expect(session.results.status.isSearching)
+        #expect(session.results.status.summary == "Searching… · Search incomplete on Mini")
+
+        requests.answer(book, with: [hit("complete", on: book)])
+        try #require(await waitUntil { !session.results.status.isSearching })
+        #expect(ids(session.results.messages) == ["partial", "complete"])
+        #expect(session.results.status.partialHosts == ["Mini"])
+        #expect(session.results.status.unansweredHosts.isEmpty)
+        #expect(session.results.status.unsupportedHosts.isEmpty)
+        #expect(!session.results.status.isComplete)
+    }
+
     @Test func sectionsShowAFixedNumberOfRowsUntilRevealed() async throws {
         let titles = try (0..<6).map { try header("title-\($0)", "Search \($0)", at: Int64(100 - $0)) }
         let session = session(hosts: [host(mini, "Mini", headers: titles)])
@@ -141,7 +172,7 @@ struct ConversationSearchSessionTests {
                  marks: marks(purposes: ["probe": .probe])),
             ConversationSearchHost(id: book, name: "MacBook", gatewayID: linux, headers: [], marks: marks(), availability: .unreachable),
         ]
-        let response = ConversationSearchResponse(schemaVersion: 1, conversations: [
+        let response = ConversationSearchResponse(schemaVersion: 1, truncated: false, conversations: [
             hit("titled", on: mini, title: nil, hitCount: 4, excerpt: "a flicker"),
             hit("untitled", on: mini, title: nil, hitCount: 1, excerpt: "the flicker"),
             hit("probe", on: mini, excerpt: "flicker"),
@@ -297,7 +328,7 @@ struct ConversationSearchSessionTests {
     }
 
     @Test func messageHitsCarryTheExactItemKeyAndTheLongestMatchingFindTerm() throws {
-        let response = ConversationSearchResponse(schemaVersion: 1, conversations: [hit("one", on: mini, excerpt: "the drawer flickered")])
+        let response = ConversationSearchResponse(schemaVersion: 1, truncated: false, conversations: [hit("one", on: mini, excerpt: "the drawer flickered")])
         let query = try #require(ConversationSearchQuery("drawer flicker absent"))
         let row = try #require(ConversationSearchMerge.candidates(from: response, hosts: [host(mini, "Mini")],
             query: query, generation: 1, now: now).first?.row)
@@ -391,9 +422,10 @@ private nonisolated final class SearchRequests: Sendable {
         }
     }
 
-    func answer(_ host: UUID, query: String? = nil, with conversations: [ConversationSearchResponse.Conversation]) {
+    func answer(_ host: UUID, query: String? = nil, truncated: Bool = false,
+                with conversations: [ConversationSearchResponse.Conversation]) {
         take(host, query: query)?.continuation.resume(
-            returning: .results(ConversationSearchResponse(schemaVersion: 1, conversations: conversations)))
+            returning: .results(ConversationSearchResponse(schemaVersion: 1, truncated: truncated, conversations: conversations)))
     }
 
     func fail(_ host: UUID) {

@@ -3088,8 +3088,11 @@ meaning and show the provider excerpt tinted. Rows keep their order
 within each section and deduplicate by address and session key. Unknown or
 ambiguous origin hosts and probe conversations are omitted. Sections initially
 show 4, 10 and 10 rows and retain at most 50, 100 and 100. The status stays
-searching until all requests settle. Opening a card logs only its section and
-rank.
+searching until all requests settle. Each keyword response carries required
+`truncated` coverage through the reducer into the status. Partial hosts appear
+as “Search incomplete on …” beside unanswered and unsupported hosts while
+returned rows stay visible. The empty-results view requires complete coverage
+from every host. Opening a card logs only its section and rank.
 
 A message hit sends its exact item key to `sessions/locate` on its own host.
 `GatewayHistoryService` reads the inclusive item cursor ascending through the

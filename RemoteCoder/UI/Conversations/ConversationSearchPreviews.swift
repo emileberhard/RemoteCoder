@@ -33,8 +33,7 @@ private struct ConversationSearchFixture: View {
     @State private var theme = AppThemeStore()
     @State private var search: ConversationSearchSession
 
-    init(status: ConversationSearchStatus = .init(), byMeaning: Bool = false) {
-        let results = SearchFixture.results(status: status, byMeaning: byMeaning)
+    init(_ results: ConversationSearchResults) {
         _search = State(initialValue: ConversationSearchSession(previewQuery: "drawer flicker", results: results))
     }
 
@@ -57,19 +56,19 @@ private struct ConversationSearchFixture: View {
 }
 
 #Preview("Results") {
-    ConversationSearchFixture()
+    ConversationSearchFixture(SearchFixture.results(status: .init(), byMeaning: false))
 }
 
 #Preview("Unavailable hosts") {
-    ConversationSearchFixture(status: .init(unansweredHosts: ["Linux"], unsupportedHosts: ["MacBook"]))
+    ConversationSearchFixture(SearchFixture.results(status: .init(unansweredHosts: ["Linux"], unsupportedHosts: ["MacBook"]), byMeaning: false))
 }
 
 #Preview("Searching") {
-    ConversationSearchFixture(status: .init(isSearching: true), byMeaning: true)
+    ConversationSearchFixture(SearchFixture.results(status: .init(isSearching: true), byMeaning: true))
 }
 
 #Preview("By meaning and Ask") {
-    ConversationSearchFixture(byMeaning: true)
+    ConversationSearchFixture(SearchFixture.results(status: .init(), byMeaning: true))
 }
 
 #Preview("Located message") {
@@ -89,5 +88,17 @@ private struct ConversationSearchFixture: View {
         .padding(16)
     }
     .environment(AppThemeStore())
+}
+#Preview("Incomplete empty") {
+    ConversationSearchFixture(.init(status: .init(partialHosts: ["Mini"]), isPainted: true))
+}
+
+#Preview("Incomplete results") {
+    ConversationSearchFixture(SearchFixture.results(status: .init(partialHosts: ["Mini"]), byMeaning: false))
+}
+
+#Preview("Incomplete and unavailable") {
+    ConversationSearchFixture(SearchFixture.results(
+        status: .init(unansweredHosts: ["Linux"], unsupportedHosts: ["MacBook"], partialHosts: ["Mini"]), byMeaning: false))
 }
 #endif
