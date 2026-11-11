@@ -164,6 +164,7 @@ def test_captures_are_copied_before_scope_teardown_and_failures_still_quit(
         timeout=180,
         sample=10 if failure in {"sample-term", "sample-kill", "sample-exit"} else None,
         sample_interval=5,
+        check_interaction=None,
     )
     bench = {"label": "fixture", "quit": False}
     quits = []
@@ -214,6 +215,7 @@ def test_captures_are_copied_before_scope_teardown_and_failures_still_quit(
             "refreshHz": 120,
             "measurementHost": "fixture-macbook",
             "outputDirectory": str(directory),
+            "input": {"postedPixels": 0, "movedPixels": 0},
         },
     )
     if failure == "copy":
@@ -282,7 +284,7 @@ def test_measurement_launch_does_not_inherit_caller_secrets(tmp_path, monkeypatc
     mode = mac_bench.expected_display("1797x1162@120/2")
     args = argparse.Namespace(
         expected_display=mode, disable=None, mount_cap=None, scrollbars=None,
-        timeout=180, sample=None,
+        timeout=180, sample=None, check_interaction=None,
     )
     spawn = subprocess.run
     probe = """import json,os,sys
@@ -310,6 +312,7 @@ observed = {
     monkeypatch.setattr(mac_bench, "measured_display_mode", lambda: mode)
     monkeypatch.setattr(mac_bench, "analyze_run", lambda _: {
         "display": mode, "refreshHz": 120, "measurementHost": "fixture-macbook",
+        "input": {"postedPixels": 0, "movedPixels": 0},
     })
     sentinel = "fixture-secret-must-not-reach-measurement"
     with patch.dict(os.environ, {
