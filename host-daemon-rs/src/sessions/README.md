@@ -241,8 +241,10 @@ disconnect and deadline to the same SQLite progress handler, checked every
 
 Schema 7 is the single transcript rebuild for typed-user classification and
 origin-owned facts. Codex typed prompts and steers come from native
-`event_msg/user_message` records; model-facing user-role response items are
-system context. Claude uses the history projection's injected-record and queued
+`event_msg/user_message` records. Older sources retain typed user-role response
+items through the provider's legacy contextual-message rules. A matching native
+event replaces the legacy copy within that turn, and subsequent model-facing
+response items remain system context. Claude uses the history projection's injected-record and queued
 prompt owners. Compaction summaries, task notifications and agent-message
 envelopes never become user items. The prompt-envelope owner extracts captions
 and pasted payloads for the document, excluding the injected RemoteCoder note

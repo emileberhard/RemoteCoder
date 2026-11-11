@@ -447,15 +447,6 @@ pub(crate) struct Location {
 }
 
 impl Projection {
-    pub(crate) fn build(
-        file: &File,
-        length: u64,
-        index: &Index,
-        active_turn: Option<&str>,
-    ) -> Result<Self> {
-        Self::build_checked(file, length, index, active_turn, None)
-    }
-
     pub(super) fn build_checked(
         file: &File,
         length: u64,

@@ -46,7 +46,7 @@ fn project(home: &Path, thread_id: &str, path: &Path, active: Option<&str>) -> (
     let file = File::open(path).unwrap();
     let length = file.metadata().unwrap().len();
     (
-        Projection::build(&file, length, &index, active).unwrap(),
+        Projection::build_checked(&file, length, &index, active, None).unwrap(),
         file,
     )
 }

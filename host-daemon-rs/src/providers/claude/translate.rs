@@ -974,6 +974,7 @@ mod tests {
                 &t.thread_id,
                 &path,
                 None,
+                &|| Ok(()),
                 |projection, file| {
                     projection.turns_page(
                         file,

@@ -723,6 +723,46 @@ async fn sessions_conversations_mirror_origin_metadata_without_entry_changes() -
 }
 
 #[test]
+fn sessions_conversations_retain_legacy_codex_typed_messages_without_duplicate_native_events()
+-> Result<()> {
+    let f = fixture();
+    write(
+        &f.codex,
+        &[
+            codex_meta("codex-root", None),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"legacy"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\n<INSTRUCTIONS>context</INSTRUCTIONS>"}]}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"LegacyTypedAnchor"}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"native"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"NativeTypedAnchor"}]}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"NativeTypedAnchor"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>context</environment_context>"}]}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"SteerTypedAnchor"}}),
+        ],
+    );
+    scan(&f);
+    let key = crate::sessions::session_key(&f.origins[0], "codex-root");
+    let users: Vec<String> = f
+        .store
+        .reader()?
+        .prepare("SELECT text FROM item WHERE session_key=?1 AND kind='user' ORDER BY seq")?
+        .query_map([&key], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(
+        users,
+        ["LegacyTypedAnchor", "NativeTypedAnchor", "SteerTypedAnchor"]
+    );
+    for query in ["LegacyTypedAnchor", "NativeTypedAnchor", "SteerTypedAnchor"] {
+        assert_eq!(
+            conversation_search(&f.store, query, 1, Default::default()).conversations[0]
+                .session_key,
+            key
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn sessions_conversations_preserve_origin_facts_through_replacement() -> Result<()> {
     let f = fixture();
     scan(&f);

@@ -29,6 +29,8 @@ pub(super) struct State {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub turn_seq: i64,
+    #[serde(default)]
+    native_user_messages: bool,
 }
 
 pub(super) struct Record<'a> {
@@ -118,16 +120,20 @@ impl Record<'_> {
             Some("event_msg") => match p["type"].as_str() {
                 Some("user_message") => {
                     let text = p["message"].as_str().unwrap_or_default();
+                    if !state.native_user_messages
+                        && let Some(thread) = &state.thread
+                    {
+                        self.db.execute("UPDATE item SET kind='system' WHERE session_key=?1 AND turn_id IS ?2 AND kind='user' AND text=?3 AND json_extract(source_ref,'$.pointer')='/payload/content'", params![super::super::session_key(self.origin,thread),state.turn,text])?;
+                    }
+                    state.native_user_messages = true;
                     self.item(
                         state,
                         at,
                         0,
-                        if crate::providers::claude::timeline::is_injected_user_text(text)
-                            || crate::agents::envelope::is_message(text)
-                        {
-                            "system"
-                        } else {
+                        if crate::providers::codex::user_text::is_typed(text) {
                             "user"
+                        } else {
+                            "system"
                         },
                         text.to_owned(),
                         "/payload/message",
@@ -165,7 +171,13 @@ impl Record<'_> {
                 let kind = p["type"].as_str().unwrap_or("");
                 match kind {
                     "message" => {
+                        let legacy = (p["role"] == "user" && !state.native_user_messages)
+                            .then(|| {
+                                crate::providers::codex::user_text::legacy_message(&p["content"])
+                            })
+                            .flatten();
                         let role = match p["role"].as_str() {
+                            Some("user") if legacy.is_some() => "user",
                             Some("user") => "system",
                             Some("assistant") => "assistant",
                             _ => "system",
@@ -175,7 +187,7 @@ impl Record<'_> {
                             at,
                             0,
                             role,
-                            text(&p["content"]),
+                            legacy.unwrap_or_else(|| text(&p["content"])),
                             "/payload/content",
                             &p["content"],
                             None,
