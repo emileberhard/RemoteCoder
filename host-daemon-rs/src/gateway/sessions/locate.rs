@@ -57,11 +57,7 @@ impl Gateway {
         read: &CatalogRead,
         mut item: locate::Item,
     ) -> Result<locate::Response> {
-        let target = if let Some((parent, agent)) =
-            crate::providers::claude::subagent_thread_parts(&item.response.thread_id)
-        {
-            let agent_id = agent.to_owned();
-            item.response.thread_id = crate::providers::claude::claude_thread_id(parent);
+        let target = if let Some(agent_id) = item.claude_agent_id.take() {
             LocateTarget::Agent { agent_id }
         } else {
             LocateTarget::Item {
@@ -122,6 +118,7 @@ impl Gateway {
             return Ok(item.response);
         };
         let fallback = item.response.clone();
+        let timed_out = fallback.clone();
         let gateway = self.clone();
         let control = read.control.clone();
         let (reply, result) = tokio::sync::oneshot::channel();
@@ -129,7 +126,12 @@ impl Gateway {
             .locate_tasks
             .spawn("sessions_locate_native", async move {
                 let _permit = permit;
-                let response = gateway.locate_native_item(item, control).await;
+                let response = tokio::time::timeout_at(
+                    control.deadline().into(),
+                    gateway.locate_native_item(item, control),
+                )
+                .await
+                .unwrap_or(timed_out);
                 let _ = reply.send(response);
                 Ok(())
             })

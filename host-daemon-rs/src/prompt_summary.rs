@@ -25,11 +25,8 @@ pub(crate) fn without_remote_coder_note(text: &str) -> &str {
     }
 }
 
-pub(crate) fn prompt_summary(text: &str) -> Cow<'_, str> {
-    const START: &str = "<remotecoder_pasted_text_v1>\n";
-    const END: &str = "\n</remotecoder_pasted_text_v1>";
-    let text = without_remote_coder_note(text).trim();
-    let body = match text.rsplit_once(ATTACHED_FILES_HEADER) {
+fn without_attached_files(text: &str) -> &str {
+    match text.rsplit_once(ATTACHED_FILES_HEADER) {
         Some((body, paths))
             if (body.is_empty() || body.ends_with("\n\n"))
                 && !paths.is_empty()
@@ -40,20 +37,20 @@ pub(crate) fn prompt_summary(text: &str) -> Cow<'_, str> {
             body.trim_end()
         }
         _ => text,
-    };
-    if let Some(summary) = inline_summary(body) {
+    }
+}
+
+pub(crate) fn prompt_summary(text: &str) -> Cow<'_, str> {
+    let text = without_remote_coder_note(text).trim();
+    let body = without_attached_files(text);
+    if let Some(summary) = inline_text(body, |_| "[Pasted text]") {
         return Cow::Owned(summary);
     }
-    if let Some((caption, payload)) = body
-        .strip_suffix(END)
-        .and_then(|body| body.rsplit_once(START))
-        && (caption.is_empty() || caption.ends_with("\n\n"))
-        && valid_pasted_entries(payload)
-    {
-        return Cow::Borrowed(if caption.trim().is_empty() {
+    if let Some((caption, _)) = pasted_entries(body) {
+        return Cow::Borrowed(if caption.is_empty() {
             "Pasted text"
         } else {
-            caption.trim()
+            caption
         });
     }
     Cow::Borrowed(if body.is_empty() && body.len() != text.len() {
@@ -63,12 +60,34 @@ pub(crate) fn prompt_summary(text: &str) -> Cow<'_, str> {
     })
 }
 
-fn valid_pasted_entries(payload: &str) -> bool {
-    let Ok(Value::Array(entries)) = serde_json::from_str(payload) else {
-        return false;
-    };
+pub(crate) fn searchable_prompt(text: &str) -> Cow<'_, str> {
+    let body = without_attached_files(without_remote_coder_note(text).trim());
+    if let Some(text) = inline_text(body, |payload| payload) {
+        return Cow::Owned(text);
+    }
+    if let Some((caption, entries)) = pasted_entries(body) {
+        let mut text = caption.to_owned();
+        for entry in entries {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(entry["text"].as_str().expect("validated pasted text"));
+        }
+        return Cow::Owned(text);
+    }
+    Cow::Borrowed(body)
+}
+
+fn pasted_entries(body: &str) -> Option<(&str, Vec<Value>)> {
+    const START: &str = "<remotecoder_pasted_text_v1>\n";
+    const END: &str = "\n</remotecoder_pasted_text_v1>";
+    let (caption, payload) = body.strip_suffix(END)?.rsplit_once(START)?;
+    if !caption.is_empty() && !caption.ends_with("\n\n") {
+        return None;
+    }
+    let entries: Vec<Value> = serde_json::from_str(payload).ok()?;
     let mut ids = HashSet::with_capacity(entries.len());
-    !entries.is_empty()
+    let valid = !entries.is_empty()
         && entries.iter().all(|entry| {
             let id = entry["id"].as_str().and_then(crate::ids::parse_uuid);
             let text = entry["text"].as_str();
@@ -76,10 +95,11 @@ fn valid_pasted_entries(payload: &str) -> bool {
                 (Some(id), Some(text)) => !text.trim().is_empty() && ids.insert(id),
                 _ => false,
             }
-        })
+        });
+    valid.then_some((caption.trim(), entries))
 }
 
-fn inline_summary(text: &str) -> Option<String> {
+fn inline_text(text: &str, pasted_text: impl for<'a> Fn(&'a str) -> &'a str) -> Option<String> {
     const START: &str = "<remotecoder_pasted_text_v2 id=\"";
     const LITERAL: &str = "<remotecoder_literal_text_v2 bytes=\"";
     const LITERAL_END: &str = "\n</remotecoder_literal_text_v2>";
@@ -94,13 +114,13 @@ fn inline_summary(text: &str) -> Option<String> {
         search = start + "<remotecoder_".len();
         let marked = &text[start..];
         let (replacement, next) = if let Some(marked) = marked.strip_prefix(START) {
-            let Some((id, end)) = inline_paste_end(marked) else {
+            let Some((id, payload, end)) = inline_paste(marked) else {
                 continue;
             };
             if !ids.insert(id) {
                 return None;
             }
-            ("[Pasted text]", start + START.len() + end)
+            (pasted_text(payload), start + START.len() + end)
         } else if let Some(marked) = marked.strip_prefix(LITERAL) {
             let Some((literal, end)) = inline_payload(marked, LITERAL_END) else {
                 continue;
@@ -160,7 +180,7 @@ fn visual_reply(marked: &str) -> Option<(&str, usize)> {
     Some((payload, marked.len() - attributes.len() + end))
 }
 
-fn inline_paste_end(marked: &str) -> Option<(crate::ids::UuidBytes, usize)> {
+fn inline_paste(marked: &str) -> Option<(crate::ids::UuidBytes, &str, usize)> {
     const END: &str = "\n</remotecoder_pasted_text_v2>";
     let id = crate::ids::parse_uuid(marked.get(..36)?)?;
     let attributes = marked.get(36..)?.strip_prefix("\" bytes=\"")?;
@@ -168,7 +188,7 @@ fn inline_paste_end(marked: &str) -> Option<(crate::ids::UuidBytes, usize)> {
     if payload.trim().is_empty() {
         return None;
     }
-    Some((id, marked.len() - attributes.len() + end))
+    Some((id, payload, marked.len() - attributes.len() + end))
 }
 
 fn inline_payload<'a>(marked: &'a str, end: &str) -> Option<(&'a str, usize)> {

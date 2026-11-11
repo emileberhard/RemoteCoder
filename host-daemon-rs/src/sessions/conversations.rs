@@ -81,8 +81,6 @@ pub(crate) struct Conversation {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Hit {
     pub item_key: String,
-    pub kind: String,
-    pub at: Option<String>,
     pub excerpt: String,
     pub agent_thread_id: Option<String>,
 }
@@ -131,88 +129,28 @@ pub(crate) fn search(
                 conversations: Vec::new(),
             });
         }
-        let incomplete: bool = db.query_row("SELECT (SELECT value FROM meta WHERE key='catalog_ready')<>'1' OR EXISTS(SELECT 1 FROM meta WHERE key='mirror_rebuilding') OR EXISTS(SELECT 1 FROM search_dirty WHERE backfill=1) OR EXISTS(SELECT 1 FROM coverage WHERE stale_reason IS NOT NULL OR complete_through IS NULL)", [], |r| r.get(0))?;
-        let mut statement = db.prepare("SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid JOIN session s ON s.session_key=d.session_key JOIN source src USING(source_id) WHERE conversation_fts MATCH ?1 AND src.present=1 ORDER BY bm25(conversation_fts,8,4,1,0),s.last_at DESC,s.session_key LIMIT 129")?;
-        let candidates: Vec<_> = statement
-            .query_map([&expression], super::query::session_header)?
-            .collect::<rusqlite::Result<_>>()?;
+        let incomplete: bool = db.query_row("SELECT (SELECT value FROM meta WHERE key='catalog_ready')<>'1' OR EXISTS(SELECT 1 FROM meta WHERE key='mirror_rebuilding') OR EXISTS(SELECT 1 FROM search_dirty WHERE backfill=1)", [], |r| r.get(0))?;
+        let candidates = candidates(db, &expression)?;
         let mut response = Response {
             schema_version: 1,
-            truncated: incomplete || candidates.len() > 128,
+            truncated: incomplete,
             conversations: Vec::new(),
         };
         *completed
             .lock()
             .expect("conversation search progress poisoned") = Some(response.clone());
         let snippets = Snippets::new(control, &expressions)?;
-        let mut find_hits = db.prepare("SELECT i.rowid,i.kind,i.at,i.text_bytes FROM item_word_fts JOIN item i ON i.rowid=item_word_fts.rowid WHERE item_word_fts MATCH ?1 ORDER BY item_word_fts.rowid DESC LIMIT ?2")?;
-        let mut hit_text = db.prepare("SELECT i.item_key,s.thread_id,i.session_key,i.text FROM item i JOIN session s USING(session_key) WHERE i.rowid=?1")?;
         for header in candidates.into_iter().take(128) {
             ensure!(!control.stopped(), "conversation search interrupted");
-            let title_match: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid WHERE d.session_key=?1 AND conversation_fts MATCH ?2)", params![header.session_key, format!("title:({expression})")], |r| r.get(0))?;
-            let (scopes, capped) = super::index::member_scopes(db, &header.session_key)?;
-            response.truncated |= capped;
-            let scope = scopes
-                .iter()
-                .map(|s| format!("scope:{s}"))
-                .collect::<Vec<_>>()
-                .join(" OR ");
-            let mut hits = HashMap::new();
-            if !scope.is_empty() {
-                for (n, term) in expressions.iter().enumerate() {
-                    let stage: Vec<(i64, String, Option<String>, i64)> = find_hits
-                        .query_map(
-                            params![format!("({scope}) AND text:{term}"), TERM_WINDOW as i64 + 1],
-                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-                        )?
-                        .collect::<rusqlite::Result<_>>()?;
-                    response.truncated |= stage.len() > TERM_WINDOW;
-                    for (id, kind, at, bytes) in stage.into_iter().take(TERM_WINDOW) {
-                        hits.entry(id)
-                            .and_modify(|hit: &mut RankedHit| hit.terms |= 1 << n)
-                            .or_insert(RankedHit {
-                                terms: 1 << n,
-                                kind,
-                                at,
-                                bytes,
-                            });
-                    }
-                }
-            }
+            let title_match = title_match(db, &header.session_key, &expression)?;
+            let hits = collect_hits(db, &header.session_key, &expressions, control)?;
             let hit_count = hits.len();
             if !title_match && hit_count == 0 {
                 continue;
             }
-            let mut hits: Vec<_> = hits.into_iter().collect();
-            hits.sort_by(|(a, left), (b, right)| {
-                right
-                    .terms
-                    .count_ones()
-                    .cmp(&left.terms.count_ones())
-                    .then_with(|| right.at.cmp(&left.at))
-                    .then_with(|| b.cmp(a))
-            });
-            let mut excerpts = Vec::new();
-            for (id, hit) in hits {
-                ensure!(!control.stopped(), "conversation search interrupted");
-                if hit.bytes > EXCERPT_INPUT_BYTES {
-                    response.truncated = true;
-                    continue;
-                }
-                let (item_key, thread_id, session_key, text): (String, String, String, String) =
-                    hit_text
-                        .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
-                excerpts.push(Hit {
-                    item_key,
-                    kind: hit.kind,
-                    at: hit.at,
-                    agent_thread_id: (session_key != header.session_key).then_some(thread_id),
-                    excerpt: snippets.render(&text)?,
-                });
-                if excerpts.len() == 3 {
-                    break;
-                }
-            }
+            let hits = render_hit(db, &header.thread_id, hits, &snippets, control)?
+                .into_iter()
+                .collect();
             response.conversations.push(Conversation {
                 session_key: header.session_key,
                 host_id: header.host_id,
@@ -223,7 +161,7 @@ pub(crate) fn search(
                 last_at: header.last_at,
                 title_match,
                 hit_count,
-                hits: excerpts,
+                hits,
             });
             *completed
                 .lock()
@@ -242,9 +180,109 @@ pub(crate) fn search(
     }
 }
 
+fn candidates(db: &Connection, expression: &str) -> Result<Vec<super::query::SessionHeader>> {
+    let mut statement = db.prepare(
+        "SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,
+                s.started_at,s.last_at,s.parent_session_key,src.present
+         FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid
+         JOIN session s ON s.session_key=d.session_key JOIN source src USING(source_id)
+         WHERE conversation_fts MATCH ?1 AND src.present=1
+         ORDER BY bm25(conversation_fts,8,4,1,0),s.last_at DESC,s.session_key LIMIT 128",
+    )?;
+    Ok(statement
+        .query_map([expression], super::query::session_header)?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+fn title_match(db: &Connection, key: &str, expression: &str) -> Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM conversation_fts
+         JOIN search_document d ON d.id=conversation_fts.rowid
+         WHERE d.session_key=?1 AND conversation_fts MATCH ?2)",
+        params![key, format!("title:({expression})")],
+        |r| r.get(0),
+    )?)
+}
+
+fn collect_hits(
+    db: &Connection,
+    key: &str,
+    expressions: &[String],
+    control: &ReadControl,
+) -> Result<Vec<(i64, RankedHit)>> {
+    let (scopes, _) = super::index::member_scopes(db, key)?;
+    let scope = scopes
+        .iter()
+        .map(|s| format!("scope:{s}"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    let mut hits = HashMap::new();
+    if !scope.is_empty() {
+        let mut statement = db.prepare(
+            "SELECT i.rowid,i.at,i.text_bytes FROM item_word_fts
+             JOIN item i ON i.rowid=item_word_fts.rowid WHERE item_word_fts MATCH ?1
+             ORDER BY item_word_fts.rowid DESC LIMIT ?2",
+        )?;
+        for (n, term) in expressions.iter().enumerate() {
+            ensure!(!control.stopped(), "conversation search interrupted");
+            let mut rows = statement.query(params![
+                format!("({scope}) AND text:{term}"),
+                TERM_WINDOW as i64
+            ])?;
+            while let Some(row) = rows.next()? {
+                let id: i64 = row.get(0)?;
+                hits.entry(id)
+                    .and_modify(|hit: &mut RankedHit| hit.terms |= 1 << n)
+                    .or_insert(RankedHit {
+                        terms: 1 << n,
+                        at: row.get(1)?,
+                        bytes: row.get(2)?,
+                    });
+            }
+        }
+    }
+    let mut hits: Vec<_> = hits.into_iter().collect();
+    hits.sort_by(|(a, left), (b, right)| {
+        right
+            .terms
+            .count_ones()
+            .cmp(&left.terms.count_ones())
+            .then_with(|| right.at.cmp(&left.at))
+            .then_with(|| b.cmp(a))
+    });
+    Ok(hits)
+}
+
+fn render_hit(
+    db: &Connection,
+    root_thread: &str,
+    hits: Vec<(i64, RankedHit)>,
+    snippets: &Snippets,
+    control: &ReadControl,
+) -> Result<Option<Hit>> {
+    let mut statement = db.prepare(
+        "SELECT i.item_key,s.thread_id,s.provider,i.text
+         FROM item i JOIN session s USING(session_key) WHERE i.rowid=?1",
+    )?;
+    for (id, hit) in hits {
+        ensure!(!control.stopped(), "conversation search interrupted");
+        if hit.bytes > EXCERPT_INPUT_BYTES {
+            continue;
+        }
+        let (item_key, thread_id, provider, text): (String, String, String, String) =
+            statement.query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        let (destination, _) = super::locate::destination(&provider, &thread_id);
+        return Ok(Some(Hit {
+            item_key,
+            agent_thread_id: (destination != root_thread).then(|| destination.into_owned()),
+            excerpt: snippets.render(&text)?,
+        }));
+    }
+    Ok(None)
+}
+
 struct RankedHit {
     terms: u8,
-    kind: String,
     at: Option<String>,
     bytes: i64,
 }

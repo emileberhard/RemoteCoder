@@ -4,8 +4,8 @@ use std::collections::{BTreeSet, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const VERSION: &str = "4";
-pub(super) const ASSISTANT_BYTES: i64 = 2 << 20;
+const VERSION: &str = "5";
+pub(super) const DOCUMENT_COLUMN_BYTES: i64 = 2 << 20;
 const MEMBER_LIMIT: usize = 128;
 const IMMEDIATE_REFRESH_MS: i64 = 10;
 const COOLDOWN_MULTIPLIER: i64 = 9;
@@ -207,8 +207,10 @@ fn rebuild_document(db: &Connection, root: &str) -> Result<()> {
     let Some((title, cwd)) = header else {
         return Ok(());
     };
-    let typed = typed_text(db, root)?;
-    let (assistant, capped) = assistant_text(db, root)?;
+    let (members, capped_members) = member_scopes(db, root)?;
+    let (typed, capped_typed) = document_text(db, &members, DocumentColumn::Typed)?;
+    let (assistant, capped_assistant) = document_text(db, &members, DocumentColumn::Assistant)?;
+    let capped = capped_members || capped_typed || capped_assistant;
     db.execute("INSERT INTO search_document(session_key,refreshed_ms,cooldown_ms,capped) VALUES(?1,0,0,?2)", params![root,capped])?;
     let id = db.last_insert_rowid();
     db.execute(
@@ -228,23 +230,6 @@ fn rebuild_document(db: &Connection, root: &str) -> Result<()> {
     Ok(())
 }
 
-fn typed_text(db: &Connection, root: &str) -> Result<String> {
-    let mut text = String::new();
-    let mut statement = db.prepare(
-        "SELECT i.text FROM search_member m
-        JOIN session s USING(session_key) JOIN source src USING(source_id)
-        JOIN search_item w ON w.scope='s'||s.source_id AND w.document_column='typed'
-        JOIN item i ON i.rowid=w.id WHERE m.root_key=?1 AND src.present=1 ORDER BY w.id",
-    )?;
-    let mut rows = statement.query([root])?;
-    while let Some(row) = rows.next()? {
-        let value: String = row.get(0)?;
-        text.push_str(&crate::prompt_summary::prompt_summary(&value));
-        text.push('\n');
-    }
-    Ok(text)
-}
-
 pub(super) fn member_scopes(db: &Connection, root: &str) -> Result<(Vec<String>, bool)> {
     let mut members: Vec<String> = db
         .prepare(
@@ -260,34 +245,52 @@ pub(super) fn member_scopes(db: &Connection, root: &str) -> Result<(Vec<String>,
     Ok((members, capped))
 }
 
-fn assistant_text(db: &Connection, root: &str) -> Result<(String, bool)> {
-    let (members, mut capped) = member_scopes(db, root)?;
+#[derive(Clone, Copy)]
+enum DocumentColumn {
+    Typed,
+    Assistant,
+}
+
+fn document_text(
+    db: &Connection,
+    members: &[String],
+    column: DocumentColumn,
+) -> Result<(String, bool)> {
     if members.is_empty() {
-        return Ok((String::new(), capped));
+        return Ok((String::new(), false));
     }
+    let name = match column {
+        DocumentColumn::Typed => "typed",
+        DocumentColumn::Assistant => "assistant",
+    };
     let seeks = vec![
-        "SELECT id,text_bytes FROM search_item WHERE scope=? AND document_column='assistant'";
+        "SELECT id,text_bytes FROM search_item WHERE document_column=?1 AND scope=?";
         members.len()
     ];
     let sql = format!("{} ORDER BY id DESC", seeks.join(" UNION ALL "));
     let mut metadata = db.prepare(&sql)?;
-    let mut rows = metadata.query(rusqlite::params_from_iter(members))?;
+    let parameters = std::iter::once(name).chain(members.iter().map(String::as_str));
+    let mut rows = metadata.query(rusqlite::params_from_iter(parameters))?;
     let mut get_text = db.prepare("SELECT text FROM item WHERE rowid=?1")?;
     let mut text = String::new();
-    let mut remaining = ASSISTANT_BYTES;
+    let mut remaining = DOCUMENT_COLUMN_BYTES;
     while let Some(row) = rows.next()? {
         let size: i64 = row.get(1)?;
         if size >= remaining {
-            capped = true;
-            break;
+            return Ok((text, true));
         }
         let id: i64 = row.get(0)?;
         let value: String = get_text.query_row([id], |r| r.get(0))?;
-        text.push_str(&value);
+        match column {
+            DocumentColumn::Typed => {
+                text.push_str(&crate::prompt_summary::searchable_prompt(&value))
+            }
+            DocumentColumn::Assistant => text.push_str(&value),
+        }
         text.push('\n');
         remaining -= size + 1;
     }
-    Ok((text, capped))
+    Ok((text, false))
 }
 
 pub(super) fn capped_roots(db: &Connection) -> Result<Option<i64>> {

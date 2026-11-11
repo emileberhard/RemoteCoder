@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CacheOutcome {
@@ -41,7 +41,7 @@ struct CacheEntry {
 #[derive(Default)]
 struct CacheState {
     entries: HashMap<PathBuf, CacheEntry>,
-    gates: HashMap<PathBuf, Weak<Mutex<()>>>,
+    gates: HashMap<PathBuf, Weak<BuildGate>>,
     bytes: usize,
     clock: u64,
 }
@@ -49,6 +49,38 @@ struct CacheState {
 pub(crate) struct ProjectionCache {
     budget: usize,
     state: Mutex<CacheState>,
+}
+
+#[derive(Default)]
+struct BuildGate {
+    building: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl BuildGate {
+    fn enter(&self, check: &dyn Fn() -> Result<()>) -> Result<BuildGuard<'_>> {
+        let mut building = self.building.lock().expect("projection gate poisoned");
+        while *building {
+            check()?;
+            building = self
+                .changed
+                .wait_timeout(building, std::time::Duration::from_millis(25))
+                .expect("projection gate poisoned")
+                .0;
+        }
+        check()?;
+        *building = true;
+        Ok(BuildGuard(self))
+    }
+}
+
+struct BuildGuard<'a>(&'a BuildGate);
+
+impl Drop for BuildGuard<'_> {
+    fn drop(&mut self) {
+        *self.0.building.lock().expect("projection gate poisoned") = false;
+        self.0.changed.notify_all();
+    }
 }
 
 impl ProjectionCache {
@@ -65,35 +97,10 @@ impl ProjectionCache {
         thread_id: &str,
         path: &Path,
         active_turn: Option<&str>,
-        read: impl FnOnce(&Projection, &File) -> Result<T, HistoryError>,
-    ) -> Result<(T, CacheOutcome), HistoryError> {
-        self.read_with_check(home, thread_id, path, active_turn, None, read)
-    }
-
-    pub(crate) fn read_cancellable<T>(
-        &self,
-        home: &Path,
-        thread_id: &str,
-        path: &Path,
-        active_turn: Option<&str>,
         check: &dyn Fn() -> Result<()>,
         read: impl FnOnce(&Projection, &File) -> Result<T, HistoryError>,
     ) -> Result<(T, CacheOutcome), HistoryError> {
-        self.read_with_check(home, thread_id, path, active_turn, Some(check), read)
-    }
-
-    fn read_with_check<T>(
-        &self,
-        home: &Path,
-        thread_id: &str,
-        path: &Path,
-        active_turn: Option<&str>,
-        check: Option<&dyn Fn() -> Result<()>>,
-        read: impl FnOnce(&Projection, &File) -> Result<T, HistoryError>,
-    ) -> Result<(T, CacheOutcome), HistoryError> {
-        if let Some(check) = check {
-            check()?;
-        }
+        check()?;
         let file =
             File::open(path).with_context(|| format!("failed opening {}", path.display()))?;
         let session = FileRevision::from(
@@ -107,44 +114,25 @@ impl ProjectionCache {
         };
         let gate = self.gate(path);
         let (projection, outcome) = {
-            let _building = if let Some(check) = check {
-                loop {
-                    check()?;
-                    match gate.try_lock() {
-                        Ok(guard) => break guard,
-                        Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
-                        Err(std::sync::TryLockError::WouldBlock) => {
-                            std::thread::sleep(std::time::Duration::from_millis(2))
-                        }
-                    }
-                }
-            } else {
-                gate.lock().unwrap_or_else(PoisonError::into_inner)
-            };
+            let _building = gate.enter(check)?;
             match self.cached(path, &key) {
                 Some(projection) => (projection, CacheOutcome::Hit),
                 None => {
                     let index =
                         crate::providers::claude::conversation_index::read(home, thread_id)?;
-                    let projection = Arc::new(if let Some(check) = check {
-                        Projection::build_checked(
-                            &file,
-                            key.session.length,
-                            &index,
-                            active_turn,
-                            Some(check),
-                        )?
-                    } else {
-                        Projection::build(&file, key.session.length, &index, active_turn)?
-                    });
+                    let projection = Arc::new(Projection::build_checked(
+                        &file,
+                        key.session.length,
+                        &index,
+                        active_turn,
+                        Some(check),
+                    )?);
                     let outcome = self.insert(path, key, Arc::clone(&projection));
                     (projection, outcome)
                 }
             }
         };
-        if let Some(check) = check {
-            check()?;
-        }
+        check()?;
         Ok((read(&projection, &file)?, outcome))
     }
 
@@ -152,13 +140,13 @@ impl ProjectionCache {
         self.state.lock().expect("projection cache poisoned")
     }
 
-    fn gate(&self, path: &Path) -> Arc<Mutex<()>> {
+    fn gate(&self, path: &Path) -> Arc<BuildGate> {
         let mut state = self.state();
         if let Some(gate) = state.gates.get(path).and_then(Weak::upgrade) {
             return gate;
         }
         state.gates.retain(|_, gate| gate.strong_count() > 0);
-        let gate = Arc::new(Mutex::new(()));
+        let gate = Arc::new(BuildGate::default());
         state
             .gates
             .insert(path.to_path_buf(), Arc::downgrade(&gate));

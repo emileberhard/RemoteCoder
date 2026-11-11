@@ -539,7 +539,7 @@ blocks startup or provider journal retirement.
   reset as initial backfill. Requests never scan every header, read the job store or
   fetch full message text to rank. Native and persisted delegated children fold
   into roots with ranked excerpts. Its one-second deadline includes FIFO and admission;
-  completed stages survive timeout with `truncated`, and no completed stage uses
+  completed stages survive timeout and outbound waiting with `truncated`, and no completed stage uses
   typed `requestTimedOut`. A request-owned drop guard signals the SQLite progress
   handler on cancellation, disconnect or deadline. Two dedicated reader permits
   isolate it from inventory/mirror reads. `src/sessions/README.md` owns its wire
@@ -547,8 +547,8 @@ blocks startup or provider journal retirement.
 - `sessions/locate` shares the `conversationSearch` capability and a one-second
   Query lifetime. Claude uses the existing projection, including exact native
   child-to-Agent links in the parent. Codex uses read-only occurrences and exact
-  item verification, never resume/subscription. Two physical native reads retain
-  permits until their replies even if the waiter cancels; saturation returns the
+  item verification, never resume/subscription. Two native reads share the
+  request deadline and release their permits by it; saturation returns the
   known turn immediately. Catalog and Claude scans share search cancellation.
 - `sessions/conversations/searchByMeaning` runs the operator command selected by
   `RC_CODEX_GATEWAY_CONVERSATION_SEARCH_PROVIDER_FILE`; only configured gateways

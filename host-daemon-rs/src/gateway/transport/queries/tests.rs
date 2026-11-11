@@ -17,7 +17,10 @@ struct Connection {
 
 impl Connection {
     fn new() -> Self {
-        let gateway = TestGateway::new();
+        Self::with_gateway(TestGateway::new())
+    }
+
+    fn with_gateway(gateway: TestGateway) -> Self {
         let (tx, responses) = mpsc::channel(128);
         let out_tx = crate::gateway::tests::test_client(1, tx);
         let (lane_tx, upstream) = mpsc::channel(8);
@@ -639,4 +642,93 @@ async fn conversation_search_deadline_expires_behind_older_queued_reads() {
     drop(permits);
     connection.drain().await;
     assert_eq!(connection.response().await["id"], 1);
+}
+
+#[tokio::test]
+async fn conversation_search_publishes_partial_results_after_its_deadline() {
+    let root = tempfile::tempdir().unwrap();
+    let gateway = TestGateway::with_native_runtime(root.path());
+    let project = gateway.claude_settings.claude_home.join("projects/partial");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(root.path().join("codex/sessions")).unwrap();
+    let thread = "11111111-2222-4333-8444-555555555555";
+    let needle = "OutboundPressureNeedle";
+    let records = (0..66)
+        .map(|index| {
+            json!({
+                "type":"assistant", "sessionId":thread, "uuid":format!("answer-{index}"),
+                "message":{"id":format!("answer-{index}"),"role":"assistant",
+                    "content":[{"type":"text","text":needle}]},
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(project.join(format!("{thread}.jsonl")), records + "\n").unwrap();
+    let mut connection = Connection::with_gateway(gateway);
+    let params = json!({"query":needle,"limit":30});
+    let warm = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let reply = connection
+                .gateway
+                .sessions_rpc(
+                    &connection.requests.out_tx.grant,
+                    CatalogMethod::Search,
+                    params.clone(),
+                    Instant::now() + CatalogMethod::Search.deadline(),
+                )
+                .await
+                .unwrap();
+            if reply["conversations"][0]["hitCount"] == 64 && reply["truncated"] == false {
+                break reply;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("fixture search has a windowed result");
+    assert_eq!(warm["truncated"], false);
+    rusqlite::Connection::open(root.path().join("sessions/v1/catalog.sqlite3"))
+        .unwrap()
+        .execute("UPDATE meta SET value='0' WHERE key='catalog_ready'", [])
+        .unwrap();
+    let warm = connection
+        .gateway
+        .sessions_rpc(
+            &connection.requests.out_tx.grant,
+            CatalogMethod::Search,
+            params.clone(),
+            Instant::now() + CatalogMethod::Search.deadline(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(warm["truncated"], true);
+
+    tokio::time::pause();
+    let out = &connection.requests.out_tx;
+    let capacity = out.tx.max_capacity();
+    for _ in 0..capacity {
+        out.try_send(ClientCommand::Pong(Vec::new())).unwrap();
+    }
+    connection
+        .send(json!({"id":1,"method":"sessions/conversations/search","params":params}))
+        .await;
+    tokio::time::advance(std::time::Duration::from_millis(950)).await;
+    connection.drive_ready().await;
+    assert_eq!(connection.queries.running.len(), 1);
+    let started = std::time::Instant::now();
+    while connection.queries.local.available_permits() != QUERY_BYTES {
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(std::time::Duration::from_millis(51)).await;
+    assert_eq!(connection.queries.running.len(), 1);
+    for _ in 0..capacity {
+        assert!(matches!(
+            connection.responses.try_recv(),
+            Ok(ClientCommand::Pong(_))
+        ));
+    }
+    connection.drain().await;
+    assert_eq!(connection.response().await, json!({"id":1,"result":warm}));
 }

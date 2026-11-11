@@ -204,9 +204,13 @@ full message text.
 Schema-version-1 responses contain `truncated` and ranked `conversations`. Each
 conversation carries its root `sessionKey`, origin `hostId`, `provider`,
 `threadId`, nullable `title`, `cwd` and `lastAt`, `titleMatch`, `hitCount`, and up
-to three `hits`. A hit contains its exact `itemKey`, catalog `kind`, nullable
-`at`, an excerpt of at most 240 Unicode characters, and nullable `agentThreadId`
-for a folded child. Unknown dates and metadata stay null. Deleted sources are
+to one `hits` entry. A hit contains its exact `itemKey`, an excerpt of at most
+240 Unicode characters, and nullable `agentThreadId`.
+A hit opens in `agentThreadId` when present and the conversation's `threadId`
+otherwise. `sessions/locate` returns that same destination for the item key.
+A delegated child opens in its own thread. A native Claude child opens in the
+thread owning its spawning Agent call, which can be the root or a delegated
+thread. Unknown dates and metadata stay null. Deleted sources are
 excluded. Native ancestry and persisted delegated parents fold through at most
 16 links. A missing ancestor stops the walk at the nearest present ancestor.
 Ambiguous delegated ownership and cycles leave the session unfolded.
@@ -215,19 +219,21 @@ Explicit promotion overrides native ancestry.
 At most 128 ranked document candidates are fetched. The scoped item word index
 uses the same user and assistant kinds as the document. It covers
 at most 128 member sessions and finds 64 newest hits per term per
-candidate, with lookaheads setting `truncated`. Ranking reads metadata. The
-gateway applies SQLite's tokenizer to the selected text of at most three hits
-per result to build excerpts. Items larger than 1 MiB set `truncated` and still
-count toward `hitCount`. A conversation can match with zero excerpts.
+candidate. Ranking reads metadata. The gateway applies SQLite's tokenizer to
+the selected text of one hit per result to build its excerpt. Items larger than
+1 MiB still count toward `hitCount`. A conversation can match with zero excerpts.
 Hits prefer distinct-term coverage, then recency. `hitCount`
-counts unique items inside these bounded windows. Candidate or hit-window
-lookahead sets `truncated`. The app can present completed results while indicating
-that additional conversations or hits may exist. Limiting the final list alone
-leaves `truncated` false.
+counts unique items inside these bounded windows. The app clamps this displayed
+count. Candidate, member and hit windows are ordinary result bounds.
+`truncated` means catalog or derived backfill is unfinished, the mirror is
+rebuilding, or the deadline cut the work. Coverage staleness is reported by
+`sessions/sql`. The app can show finished results while indicating unfinished
+search work through this flag.
 Two dedicated reader permits isolate typing from the 16 inventory/mirror readers.
 The one-second deadline includes FIFO, admission and execution. Completed
-snapshots survive timeout with `truncated: true`; no completed stage yields
-instead typed `requestTimedOut`. A request-owned drop guard signals cancellation,
+snapshots survive timeout with `truncated: true`, including when publishing the
+prepared response waits for outbound capacity. Expiry before any stage completes
+yields typed `requestTimedOut`. A request-owned drop guard signals cancellation,
 disconnect and deadline to the same SQLite progress handler, checked every
 1,000 VM instructions, releasing the blocking reader's permit promptly.
 
@@ -235,11 +241,15 @@ disconnect and deadline to the same SQLite progress handler, checked every
 
 Schema 7 is the single transcript rebuild for typed-user classification and
 origin-owned facts. Codex typed prompts and steers come from native
-`event_msg/user_message` records; model-facing user-role response items are
-system context. Claude uses the history projection's injected-record and queued
+`event_msg/user_message` records. Older sources retain typed user-role response
+items through the provider's legacy contextual-message rules. A matching native
+event replaces the legacy copy within that turn, and subsequent model-facing
+response items remain system context. Claude uses the history projection's injected-record and queued
 prompt owners. Compaction summaries, task notifications and agent-message
-envelopes never become user items. `prompt_summary` prepares typed text for the
-document while catalog text remains literal for the existing search endpoint.
+envelopes never become user items. The prompt-envelope owner extracts captions
+and pasted payloads for the document, excluding the injected RemoteCoder note
+and attached-file path list. Catalog text remains literal for the existing
+search endpoint.
 
 The origin records Codex names from its native append-only session index and
 current delegated parents from `JobStore`'s authoritative parent tags. The ingest
@@ -264,16 +274,32 @@ Ordinary changes reuse the existing ancestry. A document refresh over 10 ms
 defers the next refresh of that root for nine times the observed refresh cost.
 The worker wakes at the next due refresh even if appends stop. The previous
 document can supply candidates while a refresh waits. That freshness lag does
-not set `truncated`. Initial catalog work, the derived rebuild backlog and
-incomplete coverage do set it.
+not set `truncated`. Initial catalog work, the derived rebuild backlog and mirror
+rebuilds do set it.
 
-Documents retain the entire title, folder and typed-user text. Assistant text
-uses the newest indexed items up to 2 MiB across 128 member sessions.
-Earlier assistant terms may be absent from
-candidate selection for a capped root. They remain available in the scoped
-word index for already matched conversations. `sessions/sql` reports the
+Documents retain the entire title and folder. The typed-user and assistant
+columns each use the newest whole items up to 2 MiB of catalog text across
+128 member sessions. An item that would exceed the remaining column budget
+ends that column's window. Earlier terms remain available in the scoped word
+index for already matched conversations. `sessions/sql` reports the
 number of capped roots in `coverage.conversationSearch.cappedRoots`. This count
 is null while the derived schema is being installed.
+
+On a MacBook Pro with an isolated copy of 7,330 sources, 3 of 4,911 roots
+reached the 2 MiB assistant cap in derived version 4. The word and conversation FTS indexes used 196.4 MB and
+143.3 MB of SQLite pages. Forty-three warm limit-30 requests at 0.555 load per
+core took 88 ms at p50 and 193 ms at p95, with a 228 ms maximum. The version 4
+derived rebuild took 262 seconds from process start, including an overlapping
+build. Health was ready in 2.1 seconds at 0.637 load per core, compared with
+39.6 seconds at 0.267 before the reset moved to the worker. With 7,330 sources
+pending, inventory and search took 1.38 and 1.28 ms at 0.401 load per core.
+
+One append to the p95 tree by catalog text bytes and one to the largest tree
+took 37 and 894 ms to refresh the document before commit at 0.595 load per core.
+Those refreshes scheduled 333 ms and 8.05 seconds of cooldown. Adding the
+observed refreshes including WAL commit gives approximately 0.42 and 9.86
+seconds of candidate lag if a new append waits the full cooldown. These examples
+predate the typed column cap in derived version 5. Storage commit time varies.
 
 ## Locate a matching item
 
@@ -297,9 +323,9 @@ pages and one exact `thread/items/read` verify a unique text/item identity. One
 of the turn. Tool output and reasoning can use that turn anchor while `itemId`
 remains null. Locate never resumes or subscribes a thread. Its one-second Query
 deadline and cancel-on-drop path interrupt catalog and Claude work. Native Codex
-reads cannot be cancelled: cancelling releases the waiter while the physical
-read finishes. Two native read permits remain held until the actual reply; a
-third locate returns its turn-level answer immediately rather than queueing.
+reads share the request's absolute deadline. Cancelling releases the waiter,
+and a stalled native read releases its permit at that deadline with its known
+turn-level fallback. A third locate returns its turn-level answer immediately.
 
 ## Search by meaning
 
@@ -313,14 +339,15 @@ array. No shell expansion is performed. Only configured hosts advertise
 `sessions meaning QUERY --limit 20` through the gateway.
 
 Each request writes `{query,limit}` JSON to stdin and reads
-`{conversations:[{sessionId,provider,excerpt,score}]}` from stdout. The provider
+`{conversations:[{sessionId,provider,excerpt}]}` from stdout. The provider
 ranks results; the gateway preserves that order, resolves provider/native id
 exactly to one present catalog session, folds its persisted ancestry, dedupes
 roots and drops unresolved or ambiguous identities. Dates and metadata remain
 nullable. The query is never logged. The eight-second deadline includes
 admission and two provider permits. Stdout is capped at 1 MiB; malformed output,
 provider failure and overflow are errors. Cancellation, disconnect and timeout
-kill the provider process group. Catalog resolution uses the same SQLite
+kill the unreaped provider process group. Reaping disarms that signal owner.
+Catalog resolution uses the same SQLite
 cancellation path as keyword search.
 
 `bun dev-tools/probes/conversation-search.mjs /absolute/candidate` verifies
