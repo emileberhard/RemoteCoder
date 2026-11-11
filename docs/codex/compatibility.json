@@ -45,24 +45,24 @@
     "status": "operator-acceptance-not-published",
     "liveAcceptanceStatus": "not-published"
   },
-  "protocolSourceCommit": "fb9ddbe0ee7c152e0e722cfbf5318e0d3a4e80a1",
+  "protocolSourceCommit": "96f067ea9e48d355e3b695217227e32f7217fdd4",
   "runtimeTargets": {
     "aarch64-apple-darwin": {
-      "sourceCommit": "fb9ddbe0ee7c152e0e722cfbf5318e0d3a4e80a1",
-      "runtimePackageSHA256": "46fe1736005cdedeba164638ad542662de01c64a3022db5eaccee5fb29ec6929",
+      "sourceCommit": "96f067ea9e48d355e3b695217227e32f7217fdd4",
+      "runtimePackageSHA256": "63a4c6343b87fe74bc662002d2a694a1b204dbe4dd8ad7eca0ebbe5b69dd46ef",
       "runtimeHashes": {
-        "bin/codex": "481f267e11791ed4e546fdffef71e63e0793ee4d0438762cfba7852f50ebb340",
+        "bin/codex": "5e21b093334198ecfba165ded60ebdbdd0b6a121ab83b2198ab24d30e1600e66",
         "bin/codex-code-mode-host": "b95982efdd31972fdcc7a3df372b88ac79b82fd8b8b468fafc7fe24577463ab6",
-        "bin/codex-exec-server": "09e03ca5aaf80123a49cc9ed5e50ac30ebf6f7284858403c8a8f2306bb86ebe2"
+        "bin/codex-exec-server": "b8f65f5d7f369aff23e9a2c44d05feea1b1c6e9493e44697b4f2a5ab29be5a5c"
       }
     },
     "x86_64-unknown-linux-musl": {
-      "sourceCommit": "fb9ddbe0ee7c152e0e722cfbf5318e0d3a4e80a1",
-      "runtimePackageSHA256": "a9cb59d7d11c5302190ddc75b27eafb28cd0952169f0f7e595c7fae7149e3a8e",
+      "sourceCommit": "96f067ea9e48d355e3b695217227e32f7217fdd4",
+      "runtimePackageSHA256": "42deec538dc7885974393c9b070174e523febe559515d3428fb716cf1010b042",
       "runtimeHashes": {
-        "bin/codex": "485fddba6808c267f8bdeec297e465f86995d414d1dbf29537bc7c889b545a8c",
+        "bin/codex": "5892ddc4cd860ebf273a5edb23351668fc52222fee833214b03d84a8c2290220",
         "bin/codex-code-mode-host": "b700040171e4df5a56120de884898e9c84181f01c95667fe854ddfefd13e0824",
-        "bin/codex-exec-server": "0b51a8825bbc5d5c8caaaebb143320169aebc7d2b994688a41c3061a0c901d84"
+        "bin/codex-exec-server": "06854e39ee5801cbab75be38ab7493a1ef81c148d562475ca7efd5208771e580"
       }
     }
   }

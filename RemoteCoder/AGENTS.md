@@ -752,13 +752,15 @@ entrypoint linked above.
 - **Fork from Here** comes from the projection's `ConversationSnapshot.forkBoundaries`.
   The final assistant bubble of a completed turn, with its history tail loaded,
   forks through that turn and offers, beside it, **Count Changes from Here**
-  (hidden on the current start point). In a Claude conversation whose host
-  advertises `host/info.claudeItemFork`, every other settled assistant bubble with
-  canonical turn and item identity, also in a running turn, forks through its
-  item; `ChatScreenModel.forkBoundaries` drops those for other hosts and Codex,
-  whose cutoff includes the whole turn, so their intermediate replies, active
-  turns and pages with newer items must not offer it. User bubbles and streaming
-  replies never offer it.
+  (hidden on the current start point). In a conversation whose host advertises
+  item forks for its provider (`host/info.claudeItemFork`, `host/info.codexItemFork`),
+  every other settled assistant bubble with canonical turn and item identity, also
+  in a running turn, forks through its item; `ChatScreenModel.forkBoundaries` drops
+  those for other hosts, whose cutoff includes the whole turn, so their
+  intermediate replies, active turns and pages with newer items must not offer it.
+  User bubbles, streaming replies and tool-delivered (`delivery: async`) messages,
+  which have no model-visible record of their own to cut after, never offer an
+  item fork.
 - An earlier user bubble offers **Edit as Fork** only when the projection proves
   its edit base (`ConversationSnapshot.editBases`, carried in `TranscriptRowInputs`):
   a sent, non-steer turn head that is fully restorable

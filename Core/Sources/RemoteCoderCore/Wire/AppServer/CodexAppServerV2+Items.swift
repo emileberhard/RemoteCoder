@@ -608,6 +608,10 @@ extension CodexAppServerV2.ThreadItem {
         return questions
     }
 
+    var isAsyncDelivery: Bool {
+        if case .agentMessage(_, _, _, .some(.async), _) = self { true } else { false }
+    }
+
     var publishedVisual: HTMLVisualPublication? {
         switch self {
         case .mcpToolCall(_, _, _, _, _, _, _, _, _, let visual),

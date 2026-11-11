@@ -1744,14 +1744,24 @@ async fn thread_reads_preserve_untagged_bytes_and_project_a_promoted_parent() {
 
 #[tokio::test]
 async fn client_fork_waits_for_its_note_but_injection_failure_still_returns_the_fork() {
-    for fail in [false, true] {
+    use super::super::fork_note::{ForkEnd, fork_note};
+    let source_thread = json!({"name":"Original title","preview":"Original preview","cwd":"/repo"});
+    for (fail, params, end) in [
+        (false, json!({"threadId":"source"}), ForkEnd::AfterTurn),
+        (true, json!({"threadId":"source"}), ForkEnd::AfterTurn),
+        (
+            false,
+            json!({"threadId":"source","lastTurnId":"turn","lastItemId":"msg"}),
+            ForkEnd::InsideTurn,
+        ),
+    ] {
         let gateway = TestGateway::new();
         let (control, mut requests) = mpsc::channel(8);
         gateway.attach_fake_control(control).await;
         let pending: PendingRequests = Arc::default();
         pending.lock().await.insert(
             "7".into(),
-            PendingRequest::new("thread/fork", Some(&json!({"threadId":"source"})), false),
+            PendingRequest::new("thread/fork", Some(&params), false),
         );
         let response = json!({"id":7,"result":{"thread":{"id":"fork"},"cwd":"/repo"}}).to_string();
         let stream = buffered_codex_texts(vec![response.clone()]).await;
@@ -1779,14 +1789,14 @@ async fn client_fork_waits_for_its_note_but_injection_failure_still_returns_the_
                 );
                 let result = if method == "thread/read" {
                     assert_eq!(request["params"]["threadId"], "source");
-                    json!({"thread":{"name":"Original title","preview":"Original preview","cwd":"/repo"}})
+                    json!({"thread": source_thread})
                 } else {
                     assert_eq!(request["params"]["threadId"], "fork");
                     let item = &request["params"]["items"][0];
                     assert_eq!(item["role"], "developer");
                     assert_eq!(
                         item["content"][0]["text"],
-                        "RemoteCoder note: this conversation is a fork of \"Original title\". Its earlier history was copied from that conversation, which continues separately and may still be working in /repo."
+                        fork_note(&source_thread, end).unwrap()
                     );
                     json!({})
                 };

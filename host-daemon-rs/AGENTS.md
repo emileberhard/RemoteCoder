@@ -36,7 +36,7 @@ surface:
 | Delegated jobs: Codex and Claude children spawned from a parent's tool process, results, parent callbacks, Stop, restart recovery and same-ID retry (isolated gateway, deterministic Codex model, host router for Claude) | `just gateway-e2e-delegated-jobs-isolated /absolute/gateway/binary /absolute/runtime/package` |
 | Fleet Live Activity: merged peer reports, exact rows, unavailable versus empty, End only when every declared host is current and empty, member and coordinator restarts, local-only legacy tokens (three isolated gateways, stub broker, deterministic Codex model) | `just gateway-e2e-fleet-live-activity-isolated /absolute/gateway/binary /absolute/runtime/package` |
 | First-party-first new conversation admission and last-resort effort clamping (isolated gateway, host router; logged-out Codex xhigh runs on Opus, then unavailable Claude forces Argon high, including a resumed Fast request) | `just gateway-e2e-provider-fallback-isolated /absolute/gateway/binary` |
-| `thread/fork(lastTurnId:)` boundaries, plus Claude `lastItemId` boundaries in a finished and a running turn (creates threads) | `just gateway-e2e-fork-live`, `just gateway-e2e-claude-fork-live` |
+| `thread/fork(lastTurnId:)` boundaries, plus `lastItemId` boundaries in a finished and a running turn (creates threads) | `just gateway-e2e-fork-live`, `just gateway-e2e-claude-fork-live` |
 | Claude steering folds into one completion (router-backed Sonnet; one completion plus an empty active-turn snapshot) | `just gateway-e2e-claude-steer-live` |
 | Claude agent-initiated turns | `just gateway-e2e-claude-wake-live` |
 | Thread naming on a live and an idle runtime (one `thread/name/updated` per rename, `-32602` before a Claude thread's first turn) | `just gateway-e2e-thread-name-live` |
@@ -152,7 +152,11 @@ blocks startup or provider journal retirement.
   notification-history sequence without touching `params`. Client fork responses
   are also held until the control connection's best-effort fork-note injection
   finishes, without changing the original response bytes (see *Steer and fork
-  context notes* in `docs/system-architecture.md`).
+  context notes* in `docs/system-architecture.md`). A Codex `thread/fork` with
+  `lastItemId` is forwarded unchanged to the pinned runtime, which forks through
+  that completed assistant message, also of a running turn, or refuses it as an
+  invalid request; `host/info.codexItemFork` advertises it, so it ships only with a
+  runtime pin that implements `lastItemId` (an older runtime ignores the field).
 - Every connection subscribed to a thread (clients, the control connection, a
   disconnect observer) receives the same notification, and the Claude
   translator is one more origin. History pairs a connection's copy with the
@@ -558,7 +562,7 @@ blocks startup or provider journal retirement.
   rank. The sessions README owns the provider and result shapes.
 - `host/info` returns the gateway process's `homeDirectory`, physical `hostname`,
   `automationsAuthority`, `speechAvailable`, `fleetLiveActivity`, `claudeQueue`,
-  `claudeItemFork`, `conversationSearch` and `conversationSearchByMeaning` capabilities. These are the
+  `claudeItemFork`, `codexItemFork`, `conversationSearch` and `conversationSearchByMeaning` capabilities. These are the
   authoritative inputs for client feature availability and physical-host routing.
   Missing capabilities stay unknown/unavailable, never guessed from a display
   name. It is the only way a client learns the home directory; `command/exec` serves

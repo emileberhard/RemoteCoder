@@ -637,9 +637,9 @@ Claude reads only this key; interaction-mode context remains Codex-only. Voice
 steers originate in gateway handoffs and carry no app screen note.
 
 The gateway owns fork context and builds the same wording for both providers,
-using the source's name, otherwise preview, and cwd. A Claude fork that ends inside
-a turn adds that the task continues in the source and is not to be continued
-unless the user asks, that files may have changed, and that background agents,
+using the source's name, otherwise preview, and cwd. A fork that ends inside a turn
+(a Claude item fork, or a Codex `thread/fork` with `lastItemId`) adds that the
+task continues in the source and is not to be continued unless the user asks, that files may have changed, and that background agents,
 shells and scheduled wakes belong to the source. The shared title is one line,
 bounded to 120 characters including an ellipsis when truncated. Only a
 client-originated
@@ -1932,8 +1932,9 @@ threads changes, only newly added threads get a question read; the rest follow
 remain enabled.
 
 Forking a bubble uses its canonical turn identity, or its canonical item
-identity inside that turn on a Claude host that advertises item forks, and never
-reads the full thread or falls back to a different fork boundary. Edit as Fork forks through
+identity inside that turn on a host that advertises item forks for the
+conversation's provider, and never reads the full thread or falls back to a
+different fork boundary. Edit as Fork forks through
 the canonical id of the turn before the edited message, taken from the loaded
 history window's order or, for a live turn after a window that reaches the tail,
 from the conversation's turn order, which notification-gap recovery keeps

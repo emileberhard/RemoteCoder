@@ -193,6 +193,8 @@ pub(crate) struct HostInfoResponse {
     #[serde(default)]
     pub claude_item_fork: bool,
     #[serde(default)]
+    pub codex_item_fork: bool,
+    #[serde(default)]
     pub conversation_search: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub conversation_search_by_meaning: bool,

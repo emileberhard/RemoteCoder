@@ -1744,6 +1744,7 @@ fn host_info(
         conversation_search_by_meaning,
         claude_queue,
         claude_item_fork: true,
+        codex_item_fork: true,
     }))
 }
 
