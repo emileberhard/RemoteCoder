@@ -280,11 +280,10 @@ async def cmd_e2e_fork_live(args: argparse.Namespace) -> int:
                         steering.cancel()
                         await asyncio.gather(steering, return_exceptions=True)
 
-        if args.provider == "claude":
-            await _claude_item_forks(
-                cfg, ws, args, next_id=next_id, report=report, fork=fork, source=first.thread_id,
-                source_turns=expected_turns, run_id=run_id,
-            )
+        await _item_forks(
+            cfg, ws, args, next_id=next_id, report=report, fork=fork, source=first.thread_id,
+            source_turns=expected_turns, run_id=run_id,
+        )
 
     print(f"OK live {args.provider} fork e2e passed source={first.thread_id} fork={fork_id} whole={whole_id}")
     return 0
@@ -309,16 +308,18 @@ async def _turn_items(ws, *, next_id, thread_id: str, turn_id: str, timeout_s: f
     return [entry["item"] for entry in _native_page_entries(page, limit=50)]
 
 
-async def _claude_item_forks(cfg, ws, args, *, next_id, report, fork, source: str, source_turns: list[str], run_id: str) -> None:
+async def _item_forks(cfg, ws, args, *, next_id, report, fork, source: str, source_turns: list[str], run_id: str) -> None:
     info, _elapsed, _byte_count = await _timed_rpc(ws, req_id=next_id(), method="host/info", params={}, timeout_s=args.timeout)
-    _assert_e2e(info.get("claudeItemFork") is True, "host/info does not advertise claudeItemFork")
+    capability = f"{args.provider}ItemFork"
+    _assert_e2e(info.get(capability) is True, f"host/info does not advertise {capability}")
+    shell = "with the Bash tool" if args.provider == "claude" else "in the shell"
 
     def marker(name: str) -> str:
         return f"RCFORK-{run_id}-{name}"
 
     def steps(word: str, before: str, command: str, after: str) -> str:
         return (f"Do these steps in order. First write a short message containing exactly {word} {marker(before)}. "
-                f"Then run the shell command `{command}` with the Bash tool. "
+                f"Then run the shell command `{command}` {shell}. "
                 f"Then write a short message containing exactly {word} {marker(after)}. "
                 "Do not mention either marker anywhere else.")
 
@@ -344,7 +345,7 @@ async def _claude_item_forks(cfg, ws, args, *, next_id, report, fork, source: st
         probe = await _run_probe_turn(
             ws, next_id=next_id,
             prompt="Without using tools, quote exactly the last message you wrote before this one, and nothing else.",
-            resume=thread_id, provider="claude", model=args.model, cwd=args.cwd,
+            resume=thread_id, provider=args.provider, model=args.model, cwd=args.cwd,
             approval_policy=args.approval_policy, sandbox=args.sandbox,
             network_access=not args.no_network_access, timeout_s=args.timeout, on_event=observe,
         )
@@ -355,7 +356,7 @@ async def _claude_item_forks(cfg, ws, args, *, next_id, report, fork, source: st
         report("item fork model context", f"thread={thread_id} assistant={probe.assistant!r}")
 
     finished = await _run_probe_turn(
-        ws, next_id=next_id, prompt=steps("STEP", "C", "true", "D"), resume=source, provider="claude",
+        ws, next_id=next_id, prompt=steps("STEP", "C", "true", "D"), resume=source, provider=args.provider,
         model=None, cwd=args.cwd, approval_policy=args.approval_policy, sandbox=args.sandbox,
         network_access=not args.no_network_access, timeout_s=args.timeout,
     )
@@ -408,7 +409,7 @@ async def _claude_item_forks(cfg, ws, args, *, next_id, report, fork, source: st
         forking = asyncio.create_task(fork_while_running())
         try:
             live = await _run_probe_turn(
-                ws, next_id=next_id, prompt=steps("LIVE", "E", "sleep 20", "F"), resume=source, provider="claude",
+                ws, next_id=next_id, prompt=steps("LIVE", "E", "sleep 20", "F"), resume=source, provider=args.provider,
                 model=None, cwd=args.cwd, approval_policy=args.approval_policy, sandbox=args.sandbox,
                 network_access=not args.no_network_access, timeout_s=args.timeout, on_event=observe_live,
             )
