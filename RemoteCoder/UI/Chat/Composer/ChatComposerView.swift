@@ -651,19 +651,7 @@ struct ChatComposerView: View {
                 .padding(.vertical, 6)
             }
             ComposerSlashCommandArea(screen: screen, focus: focus)
-            if let draft = screen.currentDraft, let document = draft.document, !document.dictationRestores.isEmpty {
-                HStack {
-                    Button("Restore Everyone", systemImage: "person.2.wave.2") { document.restoreEveryone() }
-                        .buttonStyle(.plain)
-                        .scaledFont(.caption)
-                        .accessibilityIdentifier("restore-everyone")
-                        .disabled(document.isComposing)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .composerControlHitRegion()
-            }
+            if let document = screen.currentDraft?.document { DictationRestoreControl(document: document) }
             inputLayout {
                 leadingActions
 
@@ -1063,7 +1051,7 @@ private struct ChatComposerPreview: View {
             gatewayPolicy: .isolated,
             storage: HostStorage(root: URL.temporaryDirectory.appending(path: "RemoteCoderComposerPreview")),
             htmlVisuals: HTMLVisualServices(directory: URL.temporaryDirectory.appending(path: "RemoteCoderComposerPreview/html-visuals"))
-        )
+        , dictationVoices: DictationVoiceProfiles(defaults: defaults, directory: URL.temporaryDirectory.appending(path: "RemoteCoderComposerPreview/voice-profile"), history: { nil }))
         let screen = ChatScreenModel(target: target, newChat: UUID())
         screen.selectModel(Self.model, for: nil)
         screen.selectReasoning(.effort(.high), for: nil)
@@ -1141,5 +1129,24 @@ private struct ComposerSends: Equatable {
     @MainActor init(_ screen: ChatScreenModel) {
         self.screen = ObjectIdentifier(screen)
         count = screen.composerSends
+    }
+}
+
+private struct DictationRestoreControl: View {
+    let document: ComposerDocument
+
+    var body: some View {
+        if !document.dictationRestores.isEmpty {
+            HStack {
+                Button("Restore Everyone", systemImage: "person.2.wave.2") { document.restoreEveryone() }
+                    .buttonStyle(.plain)
+                    .scaledFont(.caption)
+                    .accessibilityIdentifier("restore-everyone")
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .composerControlHitRegion()
+        }
     }
 }

@@ -26,7 +26,7 @@ struct OriginalDictationCaptureTests {
         try #require(await screen.prepareDraft())
         let transcriber = ArchiveFixtureTranscriber()
         screen.target.voice = VoiceInputController(access: .fixture, owner: screen.executionTarget,
-            transcriber: transcriber, recorder: NativeFixtureVoiceRecorder(), recordings: recordings.store, library: library)
+            transcriber: transcriber, recorder: NativeFixtureVoiceRecorder(), recordings: recordings.store, library: library, voices: recordings.voiceProfiles)
         screen.micTapStart()
         await screen.micTapStartAsync()
         library.isEnabled = false
@@ -65,7 +65,7 @@ struct OriginalDictationCaptureTests {
         defer { library.cancelPublication(); await library.finishArchiving() }
         let capture = try #require(try await library.prepare(configuration: .init(model: .openAIGPT4oMini, language: .english)))
         library.isEnabled = false
-        let session = DictationVoiceSession(check: fixture.check)
+        let session = DictationVoiceSession(state: .active(fixture.check))
         let requested = AsyncStream<Void>.makeStream()
         session.append(fixture.mix)
         await session.finish { _, _ in

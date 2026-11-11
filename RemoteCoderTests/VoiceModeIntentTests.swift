@@ -229,7 +229,7 @@ struct VoiceModeIntentTests {
         let defaults = fixture.defaults
         let storage = fixture.temporaryStorage.storage
         let workspace = ChatWorkspaceModel(settings: fixture.workspace.settings, defaults: defaults,
-            makeModel: { ChatTargetModel(host: $0, chatDefaults: defaults, modelPickerPreferences: $1, syncedPreferences: $2, voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: storage, htmlVisuals: HTMLVisualServices(directory: storage.root.appending(path: "html-visuals"))) },
+            makeModel: { ChatTargetModel(host: $0, chatDefaults: defaults, modelPickerPreferences: $1, syncedPreferences: $2, voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: storage, htmlVisuals: HTMLVisualServices(directory: storage.root.appending(path: "html-visuals")), dictationVoices: $3) },
             voiceCalls: TestVoiceCalls.center, makeBackgroundExecution: { StubBackgroundExecution() }, uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: storage)
 
         await workspace.finishHostChanges()

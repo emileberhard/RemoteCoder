@@ -57,7 +57,7 @@ struct DictationRecordingTests {
         let recorder = HeldStopRecorder(prefixByteCount: prefixByteCount)
         defer { recorder.release() }
         let controller = VoiceInputController(access: .fixture, owner: owner, transcriber: StubTranscriber(text: "unused"),
-            recorder: recorder, recordings: recordings.store)
+            recorder: recorder, recordings: recordings.store, voices: recordings.voiceProfiles)
         controller.markRecordingRequested()
         try await controller.startAsync()
         let stop = Task { try await controller.stopRecording() }
@@ -85,7 +85,7 @@ struct DictationRecordingTests {
         try #require(await screen.prepareDraft())
         let transcriber = HeldRecoveryTranscriber()
         screen.target.voice = VoiceInputController(access: .fixture, owner: screen.executionTarget,
-            transcriber: transcriber, recorder: StubVoiceRecorder(), recordings: recordings.store)
+            transcriber: transcriber, recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
         let recording = try await recordings.save(owner: screen.executionTarget)
         screen.dictation.refreshRecoverable()
         try #require(await waitUntil { screen.recoverableDictations.contains { $0.id == recording.id } })
@@ -105,7 +105,7 @@ struct DictationRecordingTests {
         let session = ScriptedRealtimeSession(answer: .finalized("spoken live"), finalizationTimeout: .seconds(5))
         let transcriber = ScriptedTranscriber(realtime: session, batchText: "from batch")
         let controller = VoiceInputController(access: .fixture, owner: owner, transcriber: transcriber,
-                                              recorder: StubVoiceRecorder(), recordings: recordings.store)
+                                              recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
 
         controller.markRecordingRequested()
         try await controller.startAsync()
@@ -130,7 +130,7 @@ struct DictationRecordingTests {
         let session = ScriptedRealtimeSession(answer: .committedOnly("half of it"), finalizationTimeout: .milliseconds(100))
         let transcriber = ScriptedTranscriber(realtime: session, batchText: "from batch")
         let controller = VoiceInputController(access: .fixture, owner: owner, transcriber: transcriber,
-                                              recorder: StubVoiceRecorder(), recordings: recordings.store)
+                                              recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
 
         controller.markRecordingRequested()
         try await controller.startAsync()
@@ -148,7 +148,7 @@ struct DictationRecordingTests {
         let session = ScriptedRealtimeSession(answer: .committedOnly("unfinished"), finalizationTimeout: .seconds(600))
         let transcriber = ScriptedTranscriber(realtime: session, batchText: "unused")
         let controller = VoiceInputController(access: .fixture, owner: owner, transcriber: transcriber,
-                                              recorder: StubVoiceRecorder(), recordings: recordings.store)
+                                              recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
 
         controller.markRecordingRequested()
         try await controller.startAsync()
@@ -167,7 +167,7 @@ struct DictationRecordingTests {
         defer { recordings.cleanUp() }
         let transcriber = ScriptedTranscriber(realtime: nil, batchText: nil)
         let controller = VoiceInputController(access: .fixture, owner: owner, transcriber: transcriber,
-                                              recorder: StubVoiceRecorder(), recordings: recordings.store)
+                                              recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
         let otherHost = try await recordings.save(owner: ExecutionTarget(hostID: UUID()))
 
         controller.markRecordingRequested()
@@ -191,11 +191,11 @@ struct DictationRecordingTests {
         #expect(await model.prepareDraft())
         model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget,
                                            transcriber: StubTranscriber(text: "recovered words"),
-                                           recorder: StubVoiceRecorder(), recordings: recordings.store)
+                                           recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
         let received = try await recordings.save(owner: model.executionTarget)
         let pending = try await recordings.save(owner: model.executionTarget)
         let otherHost = try await recordings.save(owner: ExecutionTarget(hostID: fixture.book.id))
-        try await model.drafts.appendDictation("already received", recordingID: received.id, to: try #require(model.currentDraft))
+        try await model.drafts.appendDictation(.unfiltered("already received"), recordingID: received.id, to: try #require(model.currentDraft))
         #expect(await model.drafts.flush())
 
         model.dictation.refreshRecoverable()
@@ -220,9 +220,9 @@ struct DictationRecordingTests {
         #expect(await model.prepareDraft())
         model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget,
                                            transcriber: StubTranscriber(text: "never saved"),
-                                           recorder: StubVoiceRecorder(), recordings: recordings.store)
+                                           recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
         let recording = try await recordings.save(owner: model.executionTarget)
-        try await model.drafts.appendDictation("never saved", recordingID: recording.id, to: try #require(model.currentDraft))
+        try await model.drafts.appendDictation(.unfiltered("never saved"), recordingID: recording.id, to: try #require(model.currentDraft))
 
         model.dictation.refreshRecoverable()
         #expect(await waitUntil { model.recoverableDictations.map(\.id) == [recording.id] })
@@ -243,7 +243,7 @@ struct DictationRecordingTests {
         #expect(await model.prepareDraft())
         let transcriber = ScriptedTranscriber(realtime: UnreachableRealtimeSession(), batchText: "spoken offline")
         model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget, transcriber: transcriber,
-                                           recorder: StubVoiceRecorder(), recordings: recordings.store)
+                                           recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
 
         model.micTapStart()
         await model.micTapStartAsync()
@@ -269,7 +269,7 @@ struct DictationRecordingTests {
         #expect(await model.prepareDraft())
         let transcriber = ScriptedTranscriber(realtime: UnreachableRealtimeSession(), batchText: nil)
         model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget, transcriber: transcriber,
-                                           recorder: StubVoiceRecorder(), recordings: recordings.store)
+                                           recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
 
         model.micTapStart()
         await model.micTapStartAsync()
@@ -299,7 +299,7 @@ struct DictationRecordingTests {
         #expect(await model.prepareDraft())
         let transcriber = ScriptedTranscriber(realtime: nil, batchText: "unreachable")
         model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget, transcriber: transcriber,
-                                           recorder: StubVoiceRecorder(), recordings: recordings.store)
+                                           recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
         let recording = try await recordings.save(owner: model.executionTarget)
         model.dictation.refreshRecoverable()
         #expect(await waitUntil { model.recoverableDictations.map(\.id) == [recording.id] })
@@ -319,7 +319,7 @@ struct DictationRecordingTests {
         let recorder = GatedVoiceRecorder(gate: .activation)
         let controller = VoiceInputController(access: .fixture, owner: owner,
                                               transcriber: ScriptedTranscriber(realtime: nil, batchText: "unused"),
-                                              recorder: recorder, recordings: recordings.store)
+                                              recorder: recorder, recordings: recordings.store, voices: recordings.voiceProfiles)
 
         controller.markRecordingRequested()
         let start = Task { try await controller.startAsync() }
@@ -341,7 +341,7 @@ struct DictationRecordingTests {
         let recorder = GatedVoiceRecorder(gate: .captureStart)
         let transcriber = ScriptedTranscriber(realtime: nil, batchText: "said while starting")
         let controller = VoiceInputController(access: .fixture, owner: owner, transcriber: transcriber,
-                                              recorder: recorder, recordings: recordings.store)
+                                              recorder: recorder, recordings: recordings.store, voices: recordings.voiceProfiles)
 
         controller.markRecordingRequested()
         let start = Task { try await controller.startAsync() }
@@ -366,7 +366,7 @@ struct DictationRecordingTests {
         let silent = VoiceInputController(access: .fixture, owner: owner,
                                           transcriber: ScriptedTranscriber(realtime: nil, batchText: "unused"),
                                           recorder: FailingCaptureRecorder(capturedByteCount: 0),
-                                          recordings: recordings.store)
+                                          recordings: recordings.store, voices: recordings.voiceProfiles)
         silent.markRecordingRequested()
         await #expect(throws: FailingCaptureRecorder.Failure.self) { try await silent.startAsync() }
         #expect(try FileManager.default.contentsOfDirectory(atPath: recordings.directory.path).isEmpty)
@@ -374,7 +374,7 @@ struct DictationRecordingTests {
         let heard = VoiceInputController(access: .fixture, owner: owner,
                                          transcriber: ScriptedTranscriber(realtime: nil, batchText: "unused"),
                                          recorder: FailingCaptureRecorder(capturedByteCount: 3_200),
-                                         recordings: recordings.store)
+                                         recordings: recordings.store, voices: recordings.voiceProfiles)
         heard.markRecordingRequested()
         await #expect(throws: FailingCaptureRecorder.Failure.self) { try await heard.startAsync() }
         let kept = try await heard.savedRecordings()

@@ -193,7 +193,7 @@ struct UnsentDraftTests {
         #expect(await waitUntil { !store.isDiscarding(id) })
 
         store.setAttachments([file()], in: discarded)
-        try await store.appendDictation("Late transcript", recordingID: UUID(), to: discarded)
+        try await store.appendDictation(.unfiltered("Late transcript"), recordingID: UUID(), to: discarded)
         store.setNewChatSetup(setup(folder: "/late"), in: discarded)
         let keptID = UUID()
         store.setText("Still saves", in: try #require(await store.draft(for: .newChat(keptID))))
@@ -208,7 +208,7 @@ struct UnsentDraftTests {
         let store = ComposerDraftStore(directory: directory)
         let draft = try #require(await store.draft(for: .newChat(UUID())))
         let recordingID = UUID()
-        try await store.appendDictation("Spoken then deleted", recordingID: recordingID, to: draft)
+        try await store.appendDictation(.unfiltered("Spoken then deleted"), recordingID: recordingID, to: draft)
         store.setText("", in: draft)
         #expect(await store.flush())
         #expect(store.errorMessage == nil)

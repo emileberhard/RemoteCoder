@@ -2658,7 +2658,9 @@ provider uses another rate. The same recognition chunks reach the shared check
 and its bounded ten-minute upload buffer. At stop the check may request Azure
 speaker phrases through the existing relay, overlapping ordinary transcription.
 Untrusted profiles, Everyone and a negative watcher preserve ordinary delivery.
-Failure or a missed delivery budget keeps the selected provider's text and
+A missed delivery budget records a failed outcome and preserves My Voice's
+profile status. Saved recovery recordings skip Only Mine because they have no
+live watcher evidence. Failure or a missed delivery budget keeps the selected provider's text and
 marks the check unavailable. User cancellation cancels both requests.
 
 `DictationTranscript` carries delivered and everyone's text, filter outcome and

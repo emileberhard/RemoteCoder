@@ -39,7 +39,7 @@ struct TranscriptionIntegrationTests {
             let writer = try await recordings.store.startRecording(owner: ExecutionTarget(hostID: access.host.id), sampleRate: 16_000)
             writer.append(pcm)
             let recording = try await writer.finish()
-            let check = DictationVoiceSession(check: fixture.check)
+            let check = DictationVoiceSession(state: .active(fixture.check))
             check.append(pcm)
             await check.finish { pcm, uploaded in
                 requested.continuation.yield(())
@@ -62,7 +62,7 @@ struct TranscriptionIntegrationTests {
             #expect(result.transcript.removedVoices)
             #expect(result.transcript.model == configuration.model.batchLibraryID)
             let upload = result.upload.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
-            let completion = (try? result.check.get())?.labelledReplyTime.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
+            let completion = (try? result.check?.get())?.labelledReplyTime.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
             print("Azure relay voice check path=\(result.transcript.outcome?.path.rawValue ?? "unknown") failure=\(failure.withLock { $0 }) audio_ms=\(pcm.count * 1000 / 32_000) upload_ms=\(upload) completion_ms=\(completion) added_wait_ms=\(Int(result.wait / .milliseconds(1)))")
             await check.cancel()
         }
@@ -165,7 +165,7 @@ struct TranscriptionIntegrationTests {
             let transcriber = AzureTimingTranscriber(access: access)
             screen.target.voice = VoiceInputController(access: access, owner: screen.executionTarget,
                 transcriber: transcriber, recorder: recorder, recordings: recordings.store, library: library,
-                configuration: { TranscriptionConfiguration(model: .azureMAITranscribe2, language: .englishAndSwedish) })
+                voices: recordings.voiceProfiles, configuration: { TranscriptionConfiguration(model: .azureMAITranscribe2, language: .englishAndSwedish) })
             screen.micTapStart()
             await screen.micTapStartAsync()
             try #require(screen.target.voice.isRecording)

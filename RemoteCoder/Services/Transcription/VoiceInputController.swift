@@ -35,8 +35,7 @@ final class VoiceInputController {
         let live: LiveTranscription?
         let configuration: TranscriptionConfiguration
         let archive: SharedDictationLibrary.Capture?
-        let recognition: DictationVoiceSession?
-        let recognitionFailed: Bool
+        let recognition: DictationVoiceSession
     }
 
     private enum SavedAudio {
@@ -59,8 +58,7 @@ final class VoiceInputController {
         let configuration: TranscriptionConfiguration
         let archive: SharedDictationLibrary.Capture?
         let stopRequested: ContinuousClock.Instant
-        let recognition: DictationVoiceSession?
-        let recognitionFailed: Bool
+        let recognition: DictationVoiceSession
     }
 
     private let access: GatewaySpeechAccess
@@ -71,7 +69,7 @@ final class VoiceInputController {
     private let recordings: DictationRecordingStore<ExecutionTarget>
     private let haptics: HapticService
     let library: SharedDictationLibrary?
-    private let voices: DictationVoiceProfiles?
+    private let voices: DictationVoiceProfiles
     private let captureOwner = UUID()
     private let logger = AppLogger(category: "VoiceInput")
 
@@ -96,7 +94,7 @@ final class VoiceInputController {
         recordings: DictationRecordingStore<ExecutionTarget> = .app,
         haptics: HapticService = .shared,
         library: SharedDictationLibrary? = nil,
-        voices: DictationVoiceProfiles? = nil,
+        voices: DictationVoiceProfiles,
         configuration: @escaping @MainActor () -> TranscriptionConfiguration = { .current() }
     ) {
         self.configuration = configuration
@@ -183,7 +181,8 @@ final class VoiceInputController {
             throw DictationError.noActiveRecording
         }
         self.active = nil
-        if let recognition = active.recognition {
+        if active.recognition.isActive {
+            let recognition = active.recognition
             let transcriber = transcriber
             let configuration = active.configuration
             await recognition.finish { pcm, uploaded in
@@ -211,7 +210,7 @@ final class VoiceInputController {
         recordingStartTime = nil
         stopped = StoppedDictation(recordingID: active.writer.id, audio: audio, live: active.live, configuration: active.configuration,
                                    archive: active.archive, stopRequested: stopRequested,
-                                   recognition: active.recognition, recognitionFailed: active.recognitionFailed)
+                                   recognition: active.recognition)
         VoiceModeDiagnostics.log("recording segment stopped")
     }
 
@@ -225,11 +224,11 @@ final class VoiceInputController {
         beginQuiescing()
         _ = await starting?.result
         await active?.live?.dictation.cancel()
-        await active?.recognition?.cancel()
+        await active?.recognition.cancel()
         if active != nil || stopping != nil { try await stopRecording() }
         if let stopped {
             await stopped.live?.dictation.cancel()
-            await stopped.recognition?.cancel()
+            await stopped.recognition.cancel()
             self.stopped = nil
             inFlightRecordingID = nil
             isTranscribing = false
@@ -257,7 +256,7 @@ final class VoiceInputController {
             return try await withAccount(stopped.archive?.account) { [self] in try await transcribe(stopped) }
         } catch {
             await stopped.live?.dictation.cancel()
-            await stopped.recognition?.cancel()
+            await stopped.recognition.cancel()
             if let archive = stopped.archive, archive.writer != nil {
                 library?.failure(recordingID: stopped.recordingID, plan: archive.plan, error: error)
             }
@@ -294,19 +293,16 @@ final class VoiceInputController {
     }
 
     private func resolveVoices(_ original: DictationTranscript, stopped: StoppedDictation) async throws -> DictationTranscript {
-        guard let recognition = stopped.recognition else {
-            guard stopped.recognitionFailed else { return original }
-            return DictationTranscript(text: original.text, everyone: original.everyone, model: original.model,
-                everyoneModel: original.everyoneModel, outcome: .failed)
-        }
+        let recognition = stopped.recognition
         do {
             let result = try await recognition.resolve(original)
             switch result.check {
-            case .success(let check): voices?.checked(check, hostID: owner.hostID)
-            case .failure(let error): voices?.failed(error, hostID: owner.hostID)
+            case .success(let check): voices.checked(check, hostID: owner.hostID)
+            case .failure(let error): voices.failed(error, stage: .filter, hostID: owner.hostID)
+            case nil: return result.transcript
             }
             let upload = result.upload.map { String(Self.milliseconds($0)) } ?? "unknown"
-            let completion = (try? result.check.get())?.labelledReplyTime.map { String(Self.milliseconds($0)) } ?? "unknown"
+            let completion = (try? result.check?.get())?.labelledReplyTime.map { String(Self.milliseconds($0)) } ?? "unknown"
             VoiceModeDiagnostics.log("dictation voice check outcome=\(result.transcript.outcome?.path.rawValue ?? "unknown") upload_ms=\(upload) labelled_reply_ms=\(completion) added_wait_ms=\(Self.milliseconds(result.wait))")
             await recognition.cancel()
             return result.transcript
@@ -371,12 +367,17 @@ final class VoiceInputController {
         recorder.levels()
     }
 
+    private func prepareRecognition() async -> DictationVoiceSession {
+        do { return DictationVoiceSession(state: .active(try await voices.makeCheck(for: owner.hostID))) }
+        catch { return DictationVoiceSession(state: .unavailable(error)) }
+    }
+
     private func startRecording() async throws {
         let local = configuration()
         let archive = try await library?.prepare(configuration: local)
         var recoveryWriter: DictationRecordingWriter<ExecutionTarget>?
         var liveDictation: RealtimeDictation?
-        var recognition: DictationVoiceSession?
+        var recognition = DictationVoiceSession(state: .off)
         do {
             captureAccountMonitor?.cancel()
             captureAccountMonitor = nil
@@ -388,13 +389,15 @@ final class VoiceInputController {
                 }
             }
             let configuration = try archive.map { try TranscriptionConfiguration(plan: $0.plan, local: local) } ?? local
-            var recognitionFailed = false
-            if configuration.voices == .onlyMine, let voices {
-                do { recognition = DictationVoiceSession(check: try await voices.makeCheck(for: owner.hostID)) }
-                catch is CancellationError { throw CancellationError() }
-                catch { recognitionFailed = true; voices.failed(error, hostID: owner.hostID) }
+            let realtime: RealtimeTranscription?
+            if configuration.voices == .onlyMine {
+                async let preparedRecognition = prepareRecognition()
+                do { realtime = try await transcriber.makeRealtimeTranscription(configuration: configuration) }
+                catch { await preparedRecognition.cancel(); throw error }
+                recognition = await preparedRecognition
+            } else {
+                realtime = try await transcriber.makeRealtimeTranscription(configuration: configuration)
             }
-            let realtime = try await transcriber.makeRealtimeTranscription(configuration: configuration)
             if let account = archive?.account { try await library?.validateAccount(account) }
             try Task.checkCancellation()
             let sampleRate = realtime?.session.sampleRate ?? TranscriptionCapture.batchSampleRate
@@ -417,19 +420,20 @@ final class VoiceInputController {
                 output.configureOriginal = { try original.configure(format: $0) }
                 output.receiveOriginal = { original.append($0) }
             }
-            if let recognition {
+            if recognition.isActive {
+                let recognition = recognition
                 output.receiveRecognition = { recognition.append($0) }
                 output.recognitionFailed = { recognition.invalidate($0) }
             }
             try await recorder.start(output: output)
             if let account = archive?.account { try await library?.validateAccount(account) }
             active = ActiveDictation(writer: writer, live: live, configuration: configuration, archive: archive,
-                                     recognition: recognition, recognitionFailed: recognitionFailed)
+                                     recognition: recognition)
             inFlightRecordingID = writer.id
         } catch {
             recorder.stop()
             await liveDictation?.cancel()
-            await recognition?.cancel()
+            await recognition.cancel()
             if let recoveryWriter { await recordings.closeAfterFailedStart(recoveryWriter) }
             if let archive { library?.finish(archive) }
             captureAccountMonitor?.cancel()
@@ -442,13 +446,13 @@ final class VoiceInputController {
         starting?.cancel()
         if active?.writer.id == id {
             await active?.live?.dictation.cancel()
-            await active?.recognition?.cancel()
+            await active?.recognition.cancel()
             do { try await stopRecording() }
             catch { logger.error("account-change capture stop failed: \(error.localizedDescription)") }
         }
         if stopped?.recordingID == id {
             await stopped?.live?.dictation.cancel()
-            await stopped?.recognition?.cancel()
+            await stopped?.recognition.cancel()
             stopped = nil
         }
         if inFlightRecordingID == id { inFlightRecordingID = nil }

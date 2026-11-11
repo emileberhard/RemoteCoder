@@ -244,7 +244,7 @@ struct ComposerEditingTests {
             let (started, continuation) = AsyncStream<Void>.makeStream()
             let dictation = Task { @MainActor in
                 continuation.yield(())
-                try await store.appendDictation("dictated", recordingID: recordingID, to: draft)
+                try await store.appendDictation(.unfiltered("dictated"), recordingID: recordingID, to: draft)
             }
             var iterator = started.makeAsyncIterator()
             _ = await iterator.next()

@@ -53,11 +53,11 @@ struct VoiceSettingsPage: View {
         #if os(iOS)
         SettingsPage(title: "Voice & Dictation") {
             RealtimeVoiceSettingsSection(workspace: workspace)
-            TranscriptionSettingsSection(settings: workspace.transcriptionSettings, library: workspace.dictationLibrary, voices: workspace.dictationVoices, hostID: workspace.selectedScreen?.hostID)
+            TranscriptionSettingsSection(workspace: workspace)
         }
         #else
         SettingsPage(title: "Dictation") {
-            TranscriptionSettingsSection(settings: workspace.transcriptionSettings, library: workspace.dictationLibrary, voices: workspace.dictationVoices, hostID: workspace.selectedScreen?.hostID)
+            TranscriptionSettingsSection(workspace: workspace)
         }
         #endif
     }

@@ -10,7 +10,7 @@ struct ComposerDraftStoreTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = ComposerDraftStore(directory: directory)
         let draft = try #require(await store.draft(for: .newChatFixture))
-        try await store.appendDictation("Mine.", recordingID: UUID(), everyone: "Mine. Background.", to: draft)
+        try await store.appendDictation(.filtered("Mine.", everyone: "Mine. Background."), recordingID: UUID(), to: draft)
         #expect(await store.flush())
         let reopened = ComposerDraftStore(directory: directory)
         let restored = try #require(await reopened.draft(for: .newChatFixture))
@@ -58,7 +58,7 @@ struct ComposerDraftStoreTests {
         #expect(draft.attachments.isEmpty)
         #expect(store.reserveSubmission(of: draft) == nil)
         let recording = UUID()
-        try await store.appendDictation("Admitted dictation", recordingID: recording, to: draft)
+        try await store.appendDictation(.unfiltered("Admitted dictation"), recordingID: recording, to: draft)
         store.releaseSubmission(reservation)
         await store.drainSubmissions()
         #expect(await store.flush())
@@ -116,7 +116,7 @@ struct ComposerDraftStoreTests {
             request.complete(.failure(CancellationError()))
         }, isComposing: { continuation.yield(()); return true }, onRetire: {}))
         let recordingID = UUID()
-        let dictation = Task { try await store.appendDictation("accepted", recordingID: recordingID, to: draft) }
+        let dictation = Task { try await store.appendDictation(.unfiltered("accepted"), recordingID: recordingID, to: draft) }
         var iterator = queued.makeAsyncIterator()
         _ = await iterator.next()
 
@@ -184,7 +184,7 @@ struct ComposerDraftStoreTests {
         let draft = try #require(await store.draft(for: .thread("collision")))
         store.setText("Pending text", in: draft)
         let recordingID = UUID()
-        try await store.appendDictation("and dictation", recordingID: recordingID, to: draft)
+        try await store.appendDictation(.unfiltered("and dictation"), recordingID: recordingID, to: draft)
         let external = try await ComposerDraftPersistence.open(directory: directory)
         let conflictingID = UUID()
         _ = try await external.save([.init(id: conflictingID, destination: draft.destination, revision: 0,
@@ -220,7 +220,7 @@ struct ComposerDraftStoreTests {
         #expect(await store.flush() == false)
         let recordingID = UUID()
         do {
-            try await store.appendDictation("Late dictation", recordingID: recordingID, to: draft)
+            try await store.appendDictation(.unfiltered("Late dictation"), recordingID: recordingID, to: draft)
             Issue.record("Retired storage must reject dictation with its typed retired error")
         } catch ComposerDraftPersistence.Failure.retired {} catch {
             Issue.record("Expected retired storage, received \(error)")
@@ -624,7 +624,7 @@ struct ComposerDraftStoreTests {
         for (index, draft) in live.enumerated() { store.setText("Latest \(index)", in: draft) }
         let recording = UUID()
         let last = try #require(live.last)
-        try await store.appendDictation("dictated", recordingID: recording, to: last)
+        try await store.appendDictation(.unfiltered("dictated"), recordingID: recording, to: last)
         #expect(await store.flush())
         let reopened = ComposerDraftStore(directory: directory)
         for index in 0..<65 {
@@ -657,8 +657,8 @@ struct ComposerDraftStoreTests {
         let store = ComposerDraftStore(directory: directory)
         let draft = try #require(await store.draft(for: .newChatFixture))
         let recordingID = UUID()
-        try await store.appendDictation("Dictated once", recordingID: recordingID, to: draft)
-        try await store.appendDictation("Dictated once", recordingID: recordingID, to: draft)
+        try await store.appendDictation(.unfiltered("Dictated once"), recordingID: recordingID, to: draft)
+        try await store.appendDictation(.unfiltered("Dictated once"), recordingID: recordingID, to: draft)
         #expect(try await !store.hasSavedReceipt(for: recordingID))
         #expect(await store.flush())
         #expect(draft.composerText == "Dictated once")
@@ -668,7 +668,7 @@ struct ComposerDraftStoreTests {
         let restored = try #require(await reopened.draft(for: .newChatFixture))
         #expect(restored.composerText == "Dictated once")
         #expect(try await reopened.hasSavedReceipt(for: recordingID))
-        try await reopened.appendDictation("Dictated once", recordingID: recordingID, to: restored)
+        try await reopened.appendDictation(.unfiltered("Dictated once"), recordingID: recordingID, to: restored)
         #expect(await reopened.flush())
         #expect(restored.composerText == "Dictated once")
     }
@@ -680,11 +680,11 @@ struct ComposerDraftStoreTests {
         let draft = try #require(await store.draft(for: .newChatFixture))
         let expired = UUID()
         let recent = UUID()
-        try await store.appendDictation("Earlier", recordingID: expired, to: draft)
+        try await store.appendDictation(.unfiltered("Earlier"), recordingID: expired, to: draft)
         try await Task.sleep(for: .milliseconds(20))
         let cutoff = Date.now
         try await Task.sleep(for: .milliseconds(20))
-        try await store.appendDictation("later", recordingID: recent, to: draft)
+        try await store.appendDictation(.unfiltered("later"), recordingID: recent, to: draft)
         #expect(await store.flush())
 
         try await store.removeReceipts(receivedBefore: cutoff)
@@ -705,7 +705,7 @@ struct ComposerDraftStoreTests {
         let draft = try #require(await store.draft(for: .newChat(legacy)))
         #expect(draft.composerText == "Written by the previous build")
         let recordingID = UUID()
-        try await store.appendDictation("and dictated after it", recordingID: recordingID, to: draft)
+        try await store.appendDictation(.unfiltered("and dictated after it"), recordingID: recordingID, to: draft)
         #expect(await store.flush())
         #expect(try await store.hasSavedReceipt(for: recordingID))
     }

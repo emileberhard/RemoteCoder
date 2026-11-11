@@ -18,6 +18,9 @@ final class DictationVoiceProfiles {
         case unavailable = "Unavailable"
     }
 
+    private var active = false
+    private(set) var hasProfile = false
+    @ObservationIgnored private let profileURL: URL
     private var isTrusted = false
     private var unavailableHosts: Set<UUID> = []
     func status(for hostID: UUID?) -> Status {
@@ -34,6 +37,7 @@ final class DictationVoiceProfiles {
 
     init(defaults: UserDefaults, directory: URL, history: @escaping @MainActor () async throws -> DictationVoiceHistory?) {
         self.history = history
+        profileURL = directory.appending(path: "VoiceProfile.json")
         self.defaults = defaults
         store = VoiceProfileStore(accountDirectory: directory)
     }
@@ -45,18 +49,21 @@ final class DictationVoiceProfiles {
     }
 
     func refresh(active: Bool) {
+        self.active = active
         refreshTask?.cancel()
-        guard active || forgottenAt > .distantPast else { return }
         refreshTask = Task { [weak self] in
             guard let self else { return }
             do {
                 try await applyForget()
+                let exists = await Self.profileExists(at: profileURL)
+                try Task.checkCancellation()
+                hasProfile = exists
                 guard active else { return }
                 let profile = try await store.profile()
                 try Task.checkCancellation()
                 isTrusted = profile.isTrusted
             } catch is CancellationError {
-            } catch { failed(error) }
+            } catch { failed(error, stage: .filter) }
         }
     }
 
@@ -70,24 +77,27 @@ final class DictationVoiceProfiles {
 
     func checked(_ result: VoiceCheckResult, hostID: UUID) {
         if result.outcome.path != .failed, result.labelledReplyTime != nil { unavailableHosts.remove(hostID) }
-        refresh(active: true)
+        refresh(active: active)
     }
 
     func forget() async {
+        refreshTask?.cancel()
         let date = max(Date.now, forgottenAt)
         defaults.set(date.timeIntervalSince1970, forKey: TranscriptionSettings.voiceForgottenAtKey)
         do {
             historyTask?.cancel()
             try await applyForget()
             isTrusted = false
-        } catch { failed(error) }
+            hasProfile = false
+        } catch { failed(error, stage: .filter) }
+        refresh(active: active)
     }
 
     func cancelHistoryLearning() { historyTask?.cancel() }
 
     func learnFromHistory() {
         guard historyTask == nil else { return }
-        historyTask = Task { [weak self] in
+        historyTask = Task(priority: .utility) { [weak self] in
             guard let self else { return }
             defer { historyTask = nil }
             do {
@@ -97,13 +107,13 @@ final class DictationVoiceProfiles {
                 try Task.checkCancellation()
                 try await originals.validate()
                 _ = try await store.learnHistory(history.candidates, in: window)
-                refresh(active: true)
+                refresh(active: active)
             } catch is CancellationError {
             } catch { failed(error, stage: .learning) }
         }
     }
 
-    func failed(_ error: any Error, stage: VoiceFilterStage = .filter, hostID: UUID? = nil) {
+    func failed(_ error: any Error, stage: VoiceFilterStage, hostID: UUID? = nil) {
         if stage == .filter, let hostID, Self.routeRefused(error) { unavailableHosts.insert(hostID) }
         logger.error("Optional voice check failed stage=\(stage.rawValue) error=\(Self.failureDescription(error))")
     }
@@ -137,6 +147,10 @@ final class DictationVoiceProfiles {
         guard date > appliedForget else { return }
         try await store.forget(learnedBefore: date)
         appliedForget = max(appliedForget, date)
+    }
+
+    @concurrent private static func profileExists(at url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
     }
 
     @concurrent static func decode(_ url: URL) async throws -> Data {

@@ -47,7 +47,7 @@ struct RemoteCoderTranscriptionService: TranscriptionService {
         guard pcm16.count <= GatewaySpeechAccess.maximumRelayedAudioByteCount else { throw ServiceError.audioTooLarge }
         let audio = try TranscriptionAudio(data: PCM16WAVFile.data(pcmData: pcm16, sampleRate: 16_000),
             fileName: "dictation.wav", mimeType: "audio/wav", fileExtension: "wav")
-        let provider = AzureSpeechTranscriptionProvider(configuration: try await AzureSpeechConfiguration.make(model: .maiTranscribe2, access: access))
+        let provider = AzureSpeechTranscriptionProvider(configuration: try await AzureSpeechConfiguration.make(model: DictationVoicePolicy.labelledModel.provider, access: access))
         return try await provider.transcribeSpeakers(.init(audio: audio, languageHints: configuration.languageHints,
             customVocabulary: configuration.customVocabulary), uploadFinished: uploadFinished)
     }

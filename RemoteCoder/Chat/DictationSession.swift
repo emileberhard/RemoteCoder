@@ -158,8 +158,9 @@ final class DictationSession {
     private func receive(_ transcript: DictationTranscript, recordingID: UUID, recording: DictationRecording<ExecutionTarget>?,
                          into draft: ComposerDraft) async throws {
         do {
-            try await drafts.appendDictation(transcript.text, recordingID: recordingID,
-                everyone: transcript.removedVoices ? transcript.everyone : nil, to: draft)
+            let delivery: ComposerDictationDelivery = transcript.removedVoices
+                ? .filtered(transcript.text, everyone: transcript.everyone) : .unfiltered(transcript.text)
+            try await drafts.appendDictation(delivery, recordingID: recordingID, to: draft)
         }
         catch { throw DictationError.notAddedToDraft(error) }
         recoverable.removeAll { $0.id == recordingID }

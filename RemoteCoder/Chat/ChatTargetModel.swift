@@ -408,13 +408,13 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     convenience init(chatDefaults: UserDefaults = AppStorageScope.current.defaults,
                      modelPickerPreferences: ModelPickerPreferences, syncedPreferences: SyncedPreferenceStore, voiceCalls: VoiceCallCenter,
                      backgroundExecution: any BackgroundExecution, uploadContinuation: any UploadContinuation,
-                     gatewayPolicy: SharedGatewayPolicy, storage: HostStorage = .live, htmlVisuals: HTMLVisualServices) {
+                     gatewayPolicy: SharedGatewayPolicy, storage: HostStorage = .live, htmlVisuals: HTMLVisualServices, dictationVoices: DictationVoiceProfiles) {
         self.init(host: GatewayHostConfiguration(id: UUID(), name: "Preview", hostname: "127.0.0.1",
             port: 1, authToken: "preview", transport: .trustedNetwork),
             chatDefaults: chatDefaults, modelPickerPreferences: modelPickerPreferences, syncedPreferences: syncedPreferences,
             voiceCalls: voiceCalls, backgroundExecution: backgroundExecution, uploadContinuation: uploadContinuation,
             gatewayPolicy: gatewayPolicy, storage: storage,
-            htmlVisuals: htmlVisuals)
+            htmlVisuals: htmlVisuals, dictationVoices: dictationVoices)
     }
 
     init(host: GatewayHostConfiguration, chatDefaults: UserDefaults = AppStorageScope.current.defaults,
@@ -422,7 +422,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
          voiceCalls: VoiceCallCenter, backgroundExecution: any BackgroundExecution, uploadContinuation: any UploadContinuation,
          gatewayPolicy: SharedGatewayPolicy,
          storage: HostStorage = .live, deviceTools: DeviceToolHost? = nil, htmlVisuals: HTMLVisualServices, dictationLibrary: SharedDictationLibrary? = nil,
-         dictationVoices: DictationVoiceProfiles? = nil) {
+         dictationVoices: DictationVoiceProfiles) {
         self.backgroundExecution = backgroundExecution
         self.gatewayPolicy = gatewayPolicy
         self.haptics = haptics

@@ -51,7 +51,7 @@
 	<key>NSMainStoryboardFile</key>
 	<string>Main</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>RemoteCoder uses the microphone for message dictation.</string>
+	<string>RemoteCoder uses the microphone for message dictation and to recognize your voice on this Mac.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>RemoteCoderAPNSEnvironment</key>

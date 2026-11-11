@@ -290,7 +290,7 @@ final class ComposerDocument {
         let insertion = content.expandedText as NSString
         let span = insertion.range(of: text)
         guard span.location != NSNotFound else { return }
-        dictationRestores.append(ComposerDictationRestore(location: range.location + span.location, length: span.length, everyone: everyone))
+        dictationRestores.append(ComposerDictationRestore(location: range.location + span.location, length: span.length, everyone: everyone.trimmingCharacters(in: .whitespacesAndNewlines)))
         changed()
     }
 

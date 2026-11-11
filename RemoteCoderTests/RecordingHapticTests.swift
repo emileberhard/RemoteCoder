@@ -13,7 +13,7 @@ struct RecordingHapticTests {
         defer { recordings.cleanUp() }
         let recorder = StubVoiceRecorder()
         let controller = VoiceInputController(access: .fixture, owner: owner, transcriber: StubTranscriber(text: "test"),
-                                              recorder: recorder, recordings: recordings.store, haptics: fixture.service)
+                                              recorder: recorder, recordings: recordings.store, haptics: fixture.service, voices: recordings.voiceProfiles)
         controller.markRecordingRequested()
         try await controller.startAsync()
         #expect(!fixture.service.canPlay)
@@ -37,7 +37,7 @@ struct RecordingHapticTests {
         defer { recordings.cleanUp() }
         let recorder = StubVoiceRecorder()
         let controller = VoiceInputController(access: .fixture, owner: owner, transcriber: StubTranscriber(text: ""),
-                                              recorder: recorder, recordings: recordings.store, haptics: fixture.service)
+                                              recorder: recorder, recordings: recordings.store, haptics: fixture.service, voices: recordings.voiceProfiles)
         controller.markRecordingRequested()
         var acknowledged = false
         await #expect(throws: DictationError.self) {
@@ -57,7 +57,7 @@ struct RecordingHapticTests {
         defer { recordings.cleanUp() }
         let recorder = ReleaseFailingRecorder()
         let controller = VoiceInputController(access: .fixture, owner: owner, transcriber: StubTranscriber(text: "retained"),
-                                              recorder: recorder, recordings: recordings.store, haptics: fixture.service)
+                                              recorder: recorder, recordings: recordings.store, haptics: fixture.service, voices: recordings.voiceProfiles)
         controller.markRecordingRequested()
         try await controller.startAsync()
         var acknowledged = false
@@ -74,7 +74,7 @@ struct RecordingHapticTests {
         defer { recordings.cleanUp() }
         let recorder = RefusingRecorder(haptics: fixture.service)
         let controller = VoiceInputController(access: .fixture, owner: owner, transcriber: StubTranscriber(text: ""),
-                                              recorder: recorder, recordings: recordings.store, haptics: fixture.service)
+                                              recorder: recorder, recordings: recordings.store, haptics: fixture.service, voices: recordings.voiceProfiles)
         controller.markRecordingRequested()
         await #expect(throws: RefusingRecorder.Failure.self) { try await controller.startAsync() }
         #expect(recorder.wasSuppressedAtActivation)

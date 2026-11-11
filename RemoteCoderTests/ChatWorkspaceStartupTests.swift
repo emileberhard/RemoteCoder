@@ -58,14 +58,14 @@ struct ChatWorkspaceStartupTests {
         weak var workspace: ChatWorkspaceModel?
         let defaults = fixture.defaults
         let created = ChatWorkspaceModel(settings: fixture.workspace.settings, defaults: defaults,
-            makeModel: { host, preferences, synced in
+            makeModel: { host, preferences, synced, dictationVoices in
                 if host.id == failed.id {
                     Task { workspace?.beginTermination() }
                 }
                 return ChatTargetModel(host: host, chatDefaults: defaults, modelPickerPreferences: preferences,
                     syncedPreferences: synced, voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(),
                     gatewayPolicy: .production, storage: storage,
-                    htmlVisuals: HTMLVisualServices(directory: storage.root.appending(path: "html-visuals")))
+                    htmlVisuals: HTMLVisualServices(directory: storage.root.appending(path: "html-visuals")), dictationVoices: dictationVoices)
             }, voiceCalls: TestVoiceCalls.center, makeBackgroundExecution: { StubBackgroundExecution() }, uploadContinuation: ForegroundUploadContinuation(),
             gatewayPolicy: .production, storage: storage)
         workspace = created

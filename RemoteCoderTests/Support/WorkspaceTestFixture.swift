@@ -60,7 +60,7 @@ final class WorkspaceFixture {
         workspace = ChatWorkspaceModel(
             settings: HostStore(hosts: [mini, book], activeHostID: mini.id, defaults: defaults, credentials: MemoryGatewayCredentials()),
             defaults: defaults,
-            makeModel: { ChatTargetModel(host: $0, chatDefaults: chatDefaults, modelPickerPreferences: $1, syncedPreferences: $2, voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: storage, htmlVisuals: HTMLVisualServices(directory: storage.root.appending(path: "html-visuals"))) },
+            makeModel: { ChatTargetModel(host: $0, chatDefaults: chatDefaults, modelPickerPreferences: $1, syncedPreferences: $2, voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: storage, htmlVisuals: HTMLVisualServices(directory: storage.root.appending(path: "html-visuals")), dictationVoices: $3) },
             loadConversationHeader: loadConversationHeader,
             notificationApplicationIsActive: notificationApplicationIsActive,
             voiceCalls: TestVoiceCalls.center, makeBackgroundExecution: { StubBackgroundExecution() }, uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production,
@@ -96,7 +96,7 @@ final class WorkspaceFixture {
         let defaults = self.defaults
         let storage = temporaryStorage.storage
         let restored = ChatWorkspaceModel(settings: workspace.settings, defaults: defaults,
-            makeModel: { ChatTargetModel(host: $0, chatDefaults: defaults, modelPickerPreferences: $1, syncedPreferences: $2, voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: storage, htmlVisuals: HTMLVisualServices(directory: storage.root.appending(path: "html-visuals"))) },
+            makeModel: { ChatTargetModel(host: $0, chatDefaults: defaults, modelPickerPreferences: $1, syncedPreferences: $2, voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: storage, htmlVisuals: HTMLVisualServices(directory: storage.root.appending(path: "html-visuals")), dictationVoices: $3) },
             voiceCalls: TestVoiceCalls.center, makeBackgroundExecution: { StubBackgroundExecution() }, uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: storage)
         await restored.finishHostChanges()
         relaunchedWorkspaces.append(restored)
@@ -204,8 +204,18 @@ struct TemporaryDictationRecordings {
         Set(try await store.recordings().map(\.id))
     }
 
+    @MainActor var voiceProfiles: DictationVoiceProfiles {
+        DictationVoiceProfiles(defaults: AppStorageScope.current.defaults, directory: directory.appending(path: "voice-profile"), history: { nil })
+    }
+
     func cleanUp() {
         try? FileManager.default.removeItem(at: directory)
+    }
+}
+
+extension TemporaryHostStorage {
+    var voiceProfiles: DictationVoiceProfiles {
+        DictationVoiceProfiles(defaults: defaults, directory: storage.root.appending(path: "voice-profile"), history: { nil })
     }
 }
 

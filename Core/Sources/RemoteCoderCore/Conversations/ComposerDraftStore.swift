@@ -370,7 +370,7 @@ final class ComposerDraftStore {
         document.edit(.dictation(text))
     }
 
-    func appendDictation(_ text: String, recordingID: UUID, everyone: String? = nil, to draft: ComposerDraft) async throws {
+    func appendDictation(_ delivery: ComposerDictationDelivery, recordingID: UUID, to draft: ComposerDraft) async throws {
         try requireActive()
         guard pendingReceipts[recordingID] == nil else { return }
         guard pendingReceipts.count + pendingDictations.count < Self.capacity else { throw DictationEditError.pendingCapacity }
@@ -383,11 +383,13 @@ final class ComposerDraftStore {
         try requireActive()
         guard try await !backing.hasSavedReceipt(recordingID) else { return }
         try requireActive()
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = delivery.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let document = document(for: draft)
-        if let everyone { try await document.apply(.filteredDictation(text, everyone: everyone)) }
-        else { try await document.apply(.dictation(text)) }
+        switch delivery {
+        case .unfiltered: try await document.apply(.dictation(text))
+        case .filtered(_, let everyone): try await document.apply(.filteredDictation(text, everyone: everyone))
+        }
         guard state == .active || state == .retiring else { throw ComposerDraftPersistence.Failure.retired }
         guard !draft.isDiscarded else { return }
         pendingReceipts[recordingID] = .init(draftID: draft.id, requiredRevision: draft.revision, receivedAt: .now)
@@ -640,7 +642,7 @@ final class ComposerDraftStore {
                         content: Self.joined(sending, ahead: document(for: draft).content),
                         attachments: sending.flatMap(\.attachments) + draft.attachments,
                         modifiedAt: draft.modifiedAt, newChat: draft.newChat,
-                        dictationRestores: sending.isEmpty ? document(for: draft).dictationRestores : nil)
+                        dictationRestores: sending.isEmpty ? document(for: draft).dictationRestores : [])
                 }
                 if snapshots.contains(where: { Destination.threadID(for: $0.destination) == nil }) { changesUnsentDrafts = true }
                 let included = Set(snapshots.map(\.id))

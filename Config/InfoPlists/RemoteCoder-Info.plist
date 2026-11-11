@@ -60,7 +60,7 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>RemoteCoder uses your location for agent-guided navigation and live tour commentary.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>RemoteCoder uses the microphone for realtime voice conversations and message dictation.</string>
+	<string>RemoteCoder uses the microphone for realtime voice conversations and message dictation, and learns to recognize your voice on this device.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>RemoteCoder uses motion data to improve navigation altitude and route accuracy.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

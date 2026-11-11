@@ -1,6 +1,15 @@
 import Foundation
 import SwiftData
 
+enum ComposerDictationDelivery: Sendable {
+    case unfiltered(String)
+    case filtered(String, everyone: String)
+
+    var text: String {
+        switch self { case .unfiltered(let text), .filtered(let text, _): text }
+    }
+}
+
 struct ComposerDictationRestore: Codable, Equatable, Sendable {
     var location: Int
     let length: Int

@@ -1849,6 +1849,8 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   profile under Everyone, except to apply an actual synced forget date: its
   creation time bounds the first history replay. Availability is scoped to the
   selected gateway; without a selected gateway the settings show profile state.
+  History replay runs at utility priority, pauses for energy conservation and
+  retries on foreground. The workspace owns effective Voices and replay admission.
 - Only Mine feeds the shared `VoiceCheck` and its bounded upload buffer with
   identical 16 kHz PCM16 from the capture sink, including for 24 kHz providers.
   Azure labels use the existing relay. Failure, an untrusted profile or no
@@ -1860,7 +1862,8 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   The composer document owns persisted restore ranges; edits outside move them,
   edits replacing their text remove them, and sending clears them. Pressing
   Send accepts the text, including failed sends; native undo/redo do not carry
-  restoration data. Saved recovery recordings keep everyone's text because
+  restoration data. Restore Everyone returns raw provider text, even when
+  cleanup ran on the filtered text. Saved recovery recordings keep everyone's text because
   they have no live watcher evidence. Voice Mode bypasses this path.
 
 - `GatewaySpeechAccess` is the app's only speech-credential path. Each chat

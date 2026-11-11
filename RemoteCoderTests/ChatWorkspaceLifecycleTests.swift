@@ -125,7 +125,7 @@ struct ChatWorkspaceLifecycleTests {
         let conflictingID = UUID()
         try await writeConflictingDraft(id: conflictingID, destination: draft.destination, directory: directory)
         screen.input = "Save this draft through the second quit"
-        try await screen.target.drafts.appendDictation("and dictation", recordingID: recordingID, to: draft)
+        try await screen.target.drafts.appendDictation(.unfiltered("and dictation"), recordingID: recordingID, to: draft)
         var changed = fixture.mini
         changed.port = 3
         #expect(workspace.settings.upsert(changed))
@@ -184,7 +184,7 @@ struct ChatWorkspaceLifecycleTests {
         let conflictingID = UUID()
         try await writeConflictingDraft(id: conflictingID, destination: draft.destination, directory: directory)
         screen.input = "Retain this draft on quit"
-        try await screen.target.drafts.appendDictation("and dictation", recordingID: recordingID, to: draft)
+        try await screen.target.drafts.appendDictation(.unfiltered("and dictation"), recordingID: recordingID, to: draft)
         var changed = fixture.mini
         changed.port = 3
         #expect(workspace.settings.upsert(changed))
@@ -359,7 +359,7 @@ struct ChatWorkspaceLifecycleTests {
         let recorder = StubVoiceRecorder()
         try #require(await screen.prepareDraft())
         screen.target.voice = VoiceInputController(access: .fixture, owner: screen.executionTarget,
-            transcriber: StubTranscriber(text: "Do not silently discard audio"), recorder: recorder, recordings: recordings.store)
+            transcriber: StubTranscriber(text: "Do not silently discard audio"), recorder: recorder, recordings: recordings.store, voices: recordings.voiceProfiles)
         screen.micTapStart()
         await screen.micTapStartAsync()
         fixture.workspace.beginTermination()
@@ -660,7 +660,7 @@ struct ChatWorkspaceLifecycleTests {
             transcriber: StubTranscriber(text: "hands free note"),
             recorder: recorder,
             recordings: recordings.store
-        )
+        , voices: recordings.voiceProfiles)
         #expect(await mini.prepareDraft())
         mini.micTapStart()
         await mini.micTapStartAsync()
@@ -954,7 +954,7 @@ struct ChatWorkspaceLifecycleTests {
             let workspace = ChatWorkspaceModel(
                 settings: fixture.workspace.settings,
                 defaults: chatDefaults,
-                makeModel: { ChatTargetModel(host: $0, chatDefaults: chatDefaults, modelPickerPreferences: $1, syncedPreferences: $2, voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: storage, htmlVisuals: HTMLVisualServices(directory: storage.root.appending(path: "html-visuals"))) },
+                makeModel: { ChatTargetModel(host: $0, chatDefaults: chatDefaults, modelPickerPreferences: $1, syncedPreferences: $2, voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: storage, htmlVisuals: HTMLVisualServices(directory: storage.root.appending(path: "html-visuals")), dictationVoices: $3) },
                 loadConversationHeader: loadConversationHeader,
                 voiceCalls: TestVoiceCalls.center, makeBackgroundExecution: { StubBackgroundExecution() }, uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production,
                 storage: storage

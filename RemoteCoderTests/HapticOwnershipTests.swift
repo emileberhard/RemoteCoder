@@ -131,7 +131,7 @@ private struct HapticModelFixture {
             chatDefaults: defaults, modelPickerPreferences: ModelPickerPreferences(defaults: defaults),
             syncedPreferences: SyncedPreferenceStore(defaults: defaults, keys: []),
             haptics: haptics.service,
-            voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: temporaryStorage.storage, htmlVisuals: HTMLVisualServices(directory: temporaryStorage.storage.root.appending(path: "html-visuals")))
+            voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: temporaryStorage.storage, htmlVisuals: HTMLVisualServices(directory: temporaryStorage.storage.root.appending(path: "html-visuals")), dictationVoices: temporaryStorage.voiceProfiles)
         model = target.makeScreen(newChat: UUID())
     }
 

@@ -74,7 +74,7 @@ struct ChatWorkspaceModelTests {
         let conflictingID = UUID()
         try await writeConflictingDraft(id: conflictingID, destination: draft.destination, directory: directory)
         screen.input = "Recover this draft"
-        try await screen.target.drafts.appendDictation("and dictation", recordingID: recordingID, to: draft)
+        try await screen.target.drafts.appendDictation(.unfiltered("and dictation"), recordingID: recordingID, to: draft)
         var changed = fixture.mini
         changed.port = 3
         #expect(workspace.settings.upsert(changed))
@@ -207,7 +207,7 @@ struct ChatWorkspaceModelTests {
         let model = try #require(fixture.workspace.selectedScreen)
         model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget,
                                            transcriber: StubTranscriber(text: "dictated for new chat"),
-                                           recorder: StubVoiceRecorder(), recordings: recordings.store)
+                                           recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
         #expect(await model.prepareDraft())
         let unsent = model.newChatDraftID
         model.micTapStart()
@@ -314,7 +314,7 @@ struct ChatWorkspaceModelTests {
         let model = try #require(fixture.workspace.selectedScreen)
         model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget,
                                            transcriber: StubTranscriber(text: "still talking"),
-                                           recorder: StubVoiceRecorder(), recordings: recordings.store)
+                                           recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
         #expect(await model.prepareDraft())
         model.input = "Dictating into this"
         let address = UnsentDraftAddress(target: model.executionTarget, draftID: model.newChatDraftID)

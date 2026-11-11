@@ -15,7 +15,7 @@ struct TargetModelFixture {
             syncedPreferences: SyncedPreferenceStore(defaults: temporary.defaults, keys: []),
             voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(),
             gatewayPolicy: .production, storage: temporary.storage,
-            htmlVisuals: HTMLVisualServices(directory: temporary.storage.root.appending(path: "html-visuals")))
+            htmlVisuals: HTMLVisualServices(directory: temporary.storage.root.appending(path: "html-visuals")), dictationVoices: temporary.voiceProfiles)
     }
 
     func cleanUp() async {

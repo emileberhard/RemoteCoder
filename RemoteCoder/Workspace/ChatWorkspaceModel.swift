@@ -61,7 +61,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     @ObservationIgnored private var hasBootstrapped = false
     private let condensedPaths = CondensedPathCache()
     private let sidebarDateLabels = ConversationSidebarDateCache()
-    @ObservationIgnored private let makeModel: @MainActor (GatewayHostConfiguration, ModelPickerPreferences, SyncedPreferenceStore) -> ChatTargetModel
+    @ObservationIgnored private let makeModel: @MainActor (GatewayHostConfiguration, ModelPickerPreferences, SyncedPreferenceStore, DictationVoiceProfiles) -> ChatTargetModel
     @ObservationIgnored let voiceCalls: VoiceCallCenter
     @ObservationIgnored let gatewayPolicy: SharedGatewayPolicy
     @ObservationIgnored private let logger = AppLogger(category: "ChatWorkspace")
@@ -102,7 +102,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     init(
         settings: HostStore,
         defaults: UserDefaults,
-        makeModel: (@MainActor (GatewayHostConfiguration, ModelPickerPreferences, SyncedPreferenceStore) -> ChatTargetModel)? = nil,
+        makeModel: (@MainActor (GatewayHostConfiguration, ModelPickerPreferences, SyncedPreferenceStore, DictationVoiceProfiles) -> ChatTargetModel)? = nil,
         loadConversationHeader: @escaping @MainActor (ChatTargetModel, String) async throws -> ConversationHeader = {
             try await $0.conversationHeader(threadID: $1)
         },
@@ -149,7 +149,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             ChatTargetModel(host: $0, chatDefaults: defaults, modelPickerPreferences: $1, syncedPreferences: $2, voiceCalls: voiceCalls,
                             backgroundExecution: makeBackgroundExecution(), uploadContinuation: uploadContinuation,
                             gatewayPolicy: gatewayPolicy, storage: storage,
-                            deviceTools: deviceTools, htmlVisuals: htmlVisuals, dictationLibrary: dictationLibrary, dictationVoices: dictationVoices)
+                            deviceTools: deviceTools, htmlVisuals: htmlVisuals, dictationLibrary: dictationLibrary, dictationVoices: $3)
         }
         self.loadConversationHeader = loadConversationHeader
         self.notificationApplicationIsActive = notificationApplicationIsActive
@@ -662,7 +662,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             // Flush the predecessor before loading the same host-scoped files.
             if targets.hasRunningRetirement(hostID: host.id) || targets.isRetiring(ExecutionTarget(hostID: host.id)) { continue }
             admittedHosts.insert(host.id)
-            let model = makeModel(host.configuration, modelPickerPreferences, syncedPreferences)
+            let model = makeModel(host.configuration, modelPickerPreferences, syncedPreferences, dictationVoices)
             install(model)
             reconciled.append(model)
             installedHostIDs.insert(host.id)
@@ -817,6 +817,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     func handleEnergyPolicyChanged(_ policy: AppEnergyPolicy) {
+        if policy.conservesEnergy { dictationVoices.cancelHistoryLearning() }
         for model in models { model.handleEnergyPolicyChanged(policy) }
     }
 
@@ -1363,11 +1364,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         refreshDictationVoices()
     }
 
-    private func refreshDictationVoices() {
-        let model = dictationLibrary?.model(fallback: transcriptionSettings.model) ?? transcriptionSettings.model
-        let active = transcriptionSettings.voices(for: model) == .onlyMine
+    var dictationVoiceSelection: DictationVoiceSelection {
+        transcriptionSettings.voices(for: dictationLibrary?.model(fallback: transcriptionSettings.model) ?? transcriptionSettings.model)
+    }
+
+    func refreshDictationVoices() {
+        let active = dictationVoiceSelection == .onlyMine
         dictationVoices.refresh(active: active)
-        if active { dictationVoices.learnFromHistory() }
+        if active, !AppEnergyPolicy.current.conservesEnergy { dictationVoices.learnFromHistory() }
         else { dictationVoices.cancelHistoryLearning() }
     }
 

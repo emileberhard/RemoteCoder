@@ -159,13 +159,13 @@ struct HostScopedStateTests {
         let workspace = ChatWorkspaceModel(
             settings: HostStore(hosts: [host], activeHostID: host.id, defaults: defaults, credentials: MemoryGatewayCredentials()),
             defaults: defaults,
-            makeModel: { configuration, preferences, syncedPreferences in
+            makeModel: { configuration, preferences, syncedPreferences, dictationVoices in
                 migratedBeforeModel.value = defaults.string(
                     forKey: HostPreferences.workingDirectoryKey(hostID: configuration.id)
                 ) == "/Users/developer/legacy-repo"
                 return ChatTargetModel(host: configuration, chatDefaults: defaults, modelPickerPreferences: preferences,
                     syncedPreferences: syncedPreferences,
-                    voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: temporary.storage, htmlVisuals: HTMLVisualServices(directory: temporary.storage.root.appending(path: "html-visuals")))
+                    voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: temporary.storage, htmlVisuals: HTMLVisualServices(directory: temporary.storage.root.appending(path: "html-visuals")), dictationVoices: dictationVoices)
             },
             voiceCalls: TestVoiceCalls.center, makeBackgroundExecution: { StubBackgroundExecution() }, uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production,
             storage: temporary.storage
@@ -179,7 +179,7 @@ struct HostScopedStateTests {
         // And a model constructed after the migration reads exactly that key, so
         // the adopted directory is the one the chat dispatches with.
         HostPreferences.setWorkingDirectory("/Users/developer/legacy-repo", hostID: host.id, defaults: defaults)
-        let target = ChatTargetModel(host: host, chatDefaults: defaults, modelPickerPreferences: ModelPickerPreferences(defaults: defaults), syncedPreferences: SyncedPreferenceStore(defaults: defaults, keys: []), voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: temporary.storage, htmlVisuals: HTMLVisualServices(directory: temporary.storage.root.appending(path: "html-visuals")))
+        let target = ChatTargetModel(host: host, chatDefaults: defaults, modelPickerPreferences: ModelPickerPreferences(defaults: defaults), syncedPreferences: SyncedPreferenceStore(defaults: defaults, keys: []), voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: temporary.storage, htmlVisuals: HTMLVisualServices(directory: temporary.storage.root.appending(path: "html-visuals")), dictationVoices: temporary.voiceProfiles)
         #expect(target.makeScreen(newChat: UUID()).workingDirectory == "/Users/developer/legacy-repo")
     }
 
@@ -197,7 +197,7 @@ struct HostScopedStateTests {
         #expect(HostPreferences.workingDirectory(hostID: host.id, defaults: defaults) == nil)
         HostPreferences.setRemoteHomePath("/Users/developer", hostID: host.id, defaults: defaults)
 
-        let target = ChatTargetModel(host: host, chatDefaults: defaults, modelPickerPreferences: ModelPickerPreferences(defaults: defaults), syncedPreferences: SyncedPreferenceStore(defaults: defaults, keys: []), voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: temporary.storage, htmlVisuals: HTMLVisualServices(directory: temporary.storage.root.appending(path: "html-visuals")))
+        let target = ChatTargetModel(host: host, chatDefaults: defaults, modelPickerPreferences: ModelPickerPreferences(defaults: defaults), syncedPreferences: SyncedPreferenceStore(defaults: defaults, keys: []), voiceCalls: TestVoiceCalls.center, backgroundExecution: StubBackgroundExecution(), uploadContinuation: ForegroundUploadContinuation(), gatewayPolicy: .production, storage: temporary.storage, htmlVisuals: HTMLVisualServices(directory: temporary.storage.root.appending(path: "html-visuals")), dictationVoices: temporary.voiceProfiles)
         let model = target.makeScreen(newChat: UUID())
         #expect(model.workingDirectory == nil)
 

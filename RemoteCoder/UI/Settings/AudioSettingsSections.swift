@@ -2,16 +2,19 @@ import DictationLibrary
 import SwiftUI
 
 struct TranscriptionSettingsSection: View {
-    @Bindable var settings: TranscriptionSettingsStore
-    let library: SharedDictationLibrary?
-    let voices: DictationVoiceProfiles
-    let hostID: UUID?
+    let workspace: ChatWorkspaceModel
+    private var settings: TranscriptionSettingsStore { workspace.transcriptionSettings }
+    private var library: SharedDictationLibrary? { workspace.dictationLibrary }
+    private var voices: DictationVoiceProfiles { workspace.dictationVoices }
+    private var hostID: UUID? { workspace.selectedScreen?.hostID }
+    @State private var confirmsVoiceForget = false
     @State private var confirmsAccountAssignment = false
     @State private var confirmsLocalRelease = false
     @State private var localReleaseAccount: DictationAccountSession?
     @State private var assignmentAccount: DictationAccountSession?
 
     var body: some View {
+        @Bindable var settings = workspace.transcriptionSettings
         Section {
             Picker("Provider", selection: providerSelection.nativeSelectionFeedback()) {
                 ForEach(TranscriptionProvider.allCases) { provider in
@@ -59,20 +62,27 @@ struct TranscriptionSettingsSection: View {
                 .drillDownPickerStyle()
             }
             Picker("Voices", selection: Binding(
-                get: { settings.voices(for: selectedModel) },
+                get: { workspace.dictationVoiceSelection },
                 set: { settings.setVoices($0) }
             ).nativeSelectionFeedback()) {
                 ForEach(DictationVoiceSelection.allCases) { selection in Text(selection.title).tag(selection) }
             }
             .drillDownPickerStyle()
-            if settings.voices(for: selectedModel) == .onlyMine {
+            if workspace.dictationVoiceSelection == .onlyMine {
                 LabeledContent("My Voice", value: voices.status(for: hostID).rawValue)
-                if selectedModel != .azureMAITranscribe2 {
-                    Text("When another voice is heard, audio is also sent to Azure through your gateway. Filtered text comes from Azure.")
+                if selectedModel != DictationVoicePolicy.labelledModel.selection {
+                    Text("When another voice is heard, audio is also sent to \(DictationVoicePolicy.labelledModel.selection.provider.name) through your gateway. Filtered text comes from \(DictationVoicePolicy.labelledModel.selection.provider.name).")
                         .scaledFont(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Button("Forget My Voice", role: .destructive) { Task { await voices.forget() } }
+            }
+            if workspace.dictationVoiceSelection == .onlyMine || voices.hasProfile {
+                Button("Forget My Voice", role: .destructive) { confirmsVoiceForget = true }
+                    .confirmationDialog("Forget My Voice?", isPresented: $confirmsVoiceForget) {
+                        Button("Forget My Voice", role: .destructive) { Task { await voices.forget() } }
+                    } message: {
+                        Text("This resets your voice template on synced devices. Provider and library copies stay.")
+                    }
             }
 
             if let library {
@@ -121,12 +131,11 @@ struct TranscriptionSettingsSection: View {
                 Text("Shared settings and archived recordings use your private iCloud library.")
             }
         }
-        .task(id: settings.voices(for: selectedModel)) {
-            voices.refresh(active: settings.voices(for: selectedModel) == .onlyMine)
+        .task(id: workspace.dictationVoiceSelection) {
+            workspace.refreshDictationVoices()
         }
-        .task(id: library?.isEnabled == true && settings.voices(for: selectedModel) == .onlyMine) {
-            if settings.voices(for: selectedModel) == .onlyMine, library?.isEnabled == true { voices.learnFromHistory() }
-            else { voices.cancelHistoryLearning() }
+        .task(id: library?.isEnabled == true && workspace.dictationVoiceSelection == .onlyMine) {
+            workspace.refreshDictationVoices()
         }
     }
 

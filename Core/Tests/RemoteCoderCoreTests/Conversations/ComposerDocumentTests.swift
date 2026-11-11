@@ -24,6 +24,32 @@ struct ComposerDocumentTests {
         #expect(document.content.expandedText == "Replacement")
     }
 
+    @Test func mountedEditorRecordsRestoresAndTypingInsideInvalidatesThem() throws {
+        let document = ComposerDocument(content: .init(runs: [.text("Prefix ")]), onChange: {})
+        let storage = NSMutableAttributedString(attributedString: document.buffer)
+        let editor = try #require(document.mount(storage, editor: { request in
+            guard let (range, content) = document.replacement(for: request.edit) else { request.complete(.success(())); return }
+            let inserted = ComposerDocument.attributed(content)
+            let removed = storage.attributedSubstring(from: range).string
+            storage.replaceCharacters(in: range, with: inserted)
+            document.changedCharacters(in: range, removed: removed, inserted: inserted.string)
+            document.didApply(request.edit, range: range, content: content)
+            request.complete(.success(()))
+        }, isComposing: { false }, onRetire: {}))
+        defer { document.unmount(editor) }
+        document.activate(editor, selection: NSRange(location: storage.length, length: 0))
+        document.edit(.filteredDictation("Mine.", everyone: " \nMine. Background. \n"))
+        document.restoreEveryone()
+        #expect(storage.string == "Prefix Mine. Background.")
+        document.activate(editor, selection: NSRange(location: storage.length, length: 0))
+        document.edit(.filteredDictation("More.", everyone: "More. Other."))
+        let range = try #require(document.dictationRestores.first)
+        let typed = NSRange(location: range.location + 1, length: 0)
+        storage.replaceCharacters(in: typed, with: "x")
+        document.changedCharacters(in: typed, removed: "", inserted: "x")
+        #expect(document.dictationRestores.isEmpty)
+    }
+
     @Test(arguments: ["", " \n\t "])
     func blankPastesRemainPlainTextAcrossPersistenceAndCannotEnableSending(_ whitespace: String) throws {
         let standalone = ComposerDocumentContent(runs: [.paste(.init(id: UUID(), text: whitespace))])

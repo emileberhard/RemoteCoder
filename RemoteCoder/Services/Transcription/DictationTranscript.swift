@@ -1,5 +1,6 @@
 import Foundation
 import SpeakerRecognition
+import SpeechKit
 
 struct DictationTranscript: Sendable {
     let text: String
@@ -25,4 +26,8 @@ struct DictationTranscript: Sendable {
     }
 
     var removedVoices: Bool { (outcome?.droppedCount ?? 0) > 0 }
+}
+
+enum DictationVoicePolicy {
+    static let labelledModel = (selection: TranscriptionModel.azureMAITranscribe2, provider: AzureSpeechModel.maiTranscribe2)
 }

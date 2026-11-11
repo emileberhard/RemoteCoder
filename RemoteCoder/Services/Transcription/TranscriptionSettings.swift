@@ -199,7 +199,7 @@ enum TranscriptionSettings {
     static let syncedKeys: Set<String> = [modelKey, languageKey, voicesKey, voiceForgottenAtKey]
 
     static func defaultVoices(for model: TranscriptionModel) -> DictationVoiceSelection {
-        model == .azureMAITranscribe2 ? .onlyMine : .everyone
+        model == DictationVoicePolicy.labelledModel.selection ? .onlyMine : .everyone
     }
 
     static func voiceChoice(defaults: UserDefaults) -> DictationVoiceSelection? {

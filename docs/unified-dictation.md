@@ -131,3 +131,34 @@ composer test passed four matched requests: 1.069 s and 0.181 s without archival
 sealing, 0.222 s and 0.190 s with it. The first request was cold; these timings
 show request variability, while the blocked-encoder test proves text delivery
 does not wait for original sealing.
+
+## Only Mine relay budget
+
+The labelled pass uploads uncompressed 16 kHz mono PCM16: 1.92 MB per minute
+(about 19.2 MB at the ten-minute recognition limit), in addition to the selected
+provider's audio. This applies on cellular too. The device-local voice template
+is never uploaded.
+
+Three synthetic dominant-owner dictations through the real gateway, measured
+on an iOS simulator on a Wi-Fi Mac, produced these times in milliseconds:
+
+| Audio seconds | Device-to-relay upload | Labelled completion | Added wait after ordinary text |
+| --- | --- | --- | --- |
+| 78.440 | 115 | 1024 | 617 |
+| 165.640 | 307 | 4134 | 2905 |
+| 340.040 | 460 | 2189 | 694 |
+
+All three filtered successfully. An earlier 78.440-second request took 117 ms
+to upload, 3664 ms to complete and 224 ms of added wait. These are four requests,
+not a phone or cellular benchmark. The largest upload ratio was 1.85 ms per
+second of audio, rounded up to 2 ms. Added to the provider allowance of
+4 s + 5 ms per audio second, RemoteCoder uses min(6 s, 4 s + 7 ms per audio
+second), counted after the ordinary transcript arrives. Past that budget it
+delivers the selected provider's text and records a failed check; profile status
+is unchanged. Production diagnostics record upload, completion and added wait
+separately without recording audio or transcript contents.
+
+History decoding keeps its streaming AVAudioConverter loop: the capture
+processor has no file-reading/end-of-stream contract and buffers capture-sized
+chunks without draining resampler tail at EOF. Reusing it would require a new
+contract for file conversion, so the decoder remains the explicit file boundary.
