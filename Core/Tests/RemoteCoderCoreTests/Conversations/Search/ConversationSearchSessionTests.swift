@@ -336,6 +336,48 @@ struct ConversationSearchSessionTests {
         #expect(row.findTerm == "flicker")
     }
 
+    @Test(arguments: [AgentProvider.codex, .claude])
+    func foldedChildHitsKeepTheRootCardAndOpenTheExactWireDestination(_ provider: AgentProvider) async throws {
+        let root = provider == .codex ? "codex-root" : "claude_root"
+        let child = provider == .codex ? "codex-child" : nil
+        let destination = child ?? root
+        let item = provider == .codex ? "u0" : "c0"
+        let json = Data("""
+        {"schemaVersion":1,"truncated":false,"conversations":[
+          {"sessionKey":"root-session","hostId":"\(mini.uuidString)","provider":"\(provider.rawValue)",
+           "threadId":"\(root)","title":"Root conversation","cwd":null,"lastAt":null,"titleMatch":false,"hitCount":1,
+           "hits":[{"itemKey":"child-session@item:0","excerpt":"drawer result","agentThreadId":\(child.map { "\"\($0)\"" } ?? "null")}]}
+        ]}
+        """.utf8)
+        let response = try JSONDecoder().decode(ConversationSearchResponse.self, from: json)
+        let query = try #require(ConversationSearchQuery("drawer"))
+        let candidates = ConversationSearchMerge.candidates(from: response, hosts: [host(mini, "Mini")],
+            query: query, generation: 1, now: now)
+        let row = try #require(candidates.first?.row)
+        #expect(row.address == ConversationAddress(hostID: mini, threadID: root))
+        #expect(row.openingAddress == ConversationAddress(hostID: mini, threadID: destination))
+        #expect(row.id == row.address.id)
+        guard case .title("Root conversation") = row.headline else {
+            Issue.record("The root title was lost")
+            return
+        }
+        let painted = ConversationSearchMerge.firstPaint(of: .init(), titleMatches: [], answer: candidates)
+        #expect(ConversationSearchMerge.appending(candidates, to: painted).messages.rows.count == 1)
+
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gateway = HistoryGatewayFixture(threadID: row.openingAddress.threadID)
+        await gateway.setLocateReply(.init(threadId: destination, turnId: "t0", turnsCursor: "0", itemsCursor: "0", itemId: item))
+        let history = GatewayHistoryService(gateway: gateway, cache: HistoryPageCache(directory: directory))
+        let opened = try await history.openSearchHit(header: gateway.header, itemKey: try #require(row.itemKey),
+            fallback: .openTail(base: nil, bypassCache: false))
+        let snapshot = try #require(opened.snapshot)
+        #expect(snapshot.header.id == destination)
+        #expect(opened.location?.itemId == item)
+        #expect(snapshot.window.turns.first?.entries.first?.item.id == "u0")
+        #expect(await gateway.tailReads == 0)
+    }
+
     private func meaningHit(_ id: String) -> ConversationMeaningResponse.Conversation {
         .init(sessionKey: "\(mini.uuidString):codex:home:\(id)", hostId: mini, provider: .codex,
               threadId: id, title: "Remembered work", cwd: nil, lastAt: nil, excerpt: "Remembered sidebar motion")
@@ -375,7 +417,7 @@ struct ConversationSearchSessionTests {
             sessionKey: sessionKey ?? "\(host.uuidString):codex:home:\(thread)", hostId: host, provider: .codex,
             threadId: thread, title: title, cwd: "/Users/developer/RemoteCoder",
             lastAt: lastAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }, titleMatch: titleMatch,
-            hitCount: hitCount, hits: excerpt.map { [.init(itemKey: "fixture@item:1", excerpt: $0)] } ?? [])
+            hitCount: hitCount, hits: excerpt.map { [.init(itemKey: "fixture@item:1", excerpt: $0, agentThreadId: nil)] } ?? [])
     }
 
     private func ids(_ section: ConversationSearchSection) -> [String] {

@@ -798,7 +798,7 @@ private struct ChatScreen: View {
             notice: $drawerNotice,
             onSelect: { selectConversation($0) },
             onSelectSearch: { row in
-                selectConversation(row.address, opening: row.itemKey.map { ConversationSearchOpening(itemKey: $0, findTerm: row.findTerm) })
+                selectConversation(row.openingAddress, opening: row.itemKey.map { ConversationSearchOpening(itemKey: $0, findTerm: row.findTerm) })
             },
             onAskSearch: {
                 let query = window.search.query

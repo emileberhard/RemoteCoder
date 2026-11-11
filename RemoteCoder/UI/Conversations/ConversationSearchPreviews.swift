@@ -20,7 +20,7 @@ private enum SearchFixture {
 
     private static func row(_ thread: String, _ section: ConversationSearchSection.Kind, _ title: String,
                             provider: AgentProvider, date: String? = nil, excerpt: String? = nil) -> ConversationSearchRow {
-        ConversationSearchRow(address: ConversationAddress(hostID: mini, threadID: thread), section: section,
+        ConversationSearchRow(address: ConversationAddress(hostID: mini, threadID: thread), agentThreadID: nil, section: section,
                               itemKey: section == .messages ? "fixture@item:1" : nil,
                               findTerm: section == .messages ? "drawer" : nil,
                               sessionKey: nil, generation: 1, headline: .title(title),

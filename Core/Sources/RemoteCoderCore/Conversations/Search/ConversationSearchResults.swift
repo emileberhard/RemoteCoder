@@ -8,6 +8,7 @@ struct ConversationSearchRow: Identifiable, Sendable {
     }
 
     let address: ConversationAddress
+    let agentThreadID: String?
     let section: ConversationSearchSection.Kind
     let itemKey: String?
     let findTerm: String?
@@ -22,6 +23,9 @@ struct ConversationSearchRow: Identifiable, Sendable {
     let additionalHitCount: Int
 
     var id: String { address.id }
+    var openingAddress: ConversationAddress {
+        ConversationAddress(hostID: address.hostID, threadID: agentThreadID ?? address.threadID)
+    }
 }
 
 extension ConversationSearchRow: Equatable {
@@ -118,7 +122,7 @@ enum ConversationSearchMerge {
                 let recency = Date(timeIntervalSince1970: TimeInterval(header.latestActivityAt))
                 matches.append(ConversationSearchCandidate(
                     row: ConversationSearchRow(
-                        address: ConversationAddress(hostID: host.id, threadID: header.id),
+                        address: ConversationAddress(hostID: host.id, threadID: header.id), agentThreadID: nil,
                         section: .titles, itemKey: nil, findTerm: nil, sessionKey: nil,
                         generation: generation, headline: .title(title), excerpt: nil,
                         dateLabel: dateLabel(recency, now: now), provider: AgentProvider.provider(forThreadID: header.id),
@@ -151,6 +155,7 @@ enum ConversationSearchMerge {
             return ConversationSearchCandidate(
                 row: ConversationSearchRow(
                     address: ConversationAddress(hostID: host.id, threadID: conversation.threadId),
+                    agentThreadID: conversation.titleMatch ? nil : conversation.hits.first?.agentThreadId,
                     section: conversation.titleMatch ? .titles : .messages,
                     itemKey: conversation.titleMatch ? nil : conversation.hits.first?.itemKey,
                     findTerm: conversation.hits.first.flatMap { query.bestTerm(in: $0.excerpt) },
@@ -170,7 +175,7 @@ enum ConversationSearchMerge {
             guard let host = host(conversation.hostId, among: hosts),
                   host.marks.purpose(of: conversation.threadId) != .probe else { return nil }
             return ConversationSearchCandidate(row: ConversationSearchRow(
-                address: ConversationAddress(hostID: host.id, threadID: conversation.threadId), section: .meaning,
+                address: ConversationAddress(hostID: host.id, threadID: conversation.threadId), agentThreadID: nil, section: .meaning,
                 itemKey: nil, findTerm: nil, sessionKey: conversation.sessionKey, generation: generation,
                 headline: conversation.title.map(ConversationSearchRow.Headline.title) ?? .untitled,
                 excerpt: AttributedString(conversation.excerpt),

@@ -3094,7 +3094,13 @@ as “Search incomplete on …” beside unanswered and unsupported hosts while
 returned rows stay visible. The empty-results view requires complete coverage
 from every host. Opening a card logs only its section and rank.
 
-A message hit sends its exact item key to `sessions/locate` on its own host.
+A result card keeps the root conversation address for its title, grouping and
+deduplication. A message hit opens the exact `agentThreadId` destination supplied
+by the gateway, or the card's thread when that field is absent, and sends its
+item key to `sessions/locate` on the same host. Locate must return that exact
+destination thread. Native Claude child hits point at the thread owning the
+parent Agent call. Opening delegated threads uses the ordinary header and
+parent navigation.
 `GatewayHistoryService` reads the inclusive item cursor ascending through the
 ordinary scheduler and cache, with metadata from the supplied turn cursor.
 It resets one `HistoryWindow` at the located page and leaves the provider's

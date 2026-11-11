@@ -24,6 +24,7 @@ struct ConversationSearchResponse: Decodable, Sendable {
     struct Hit: Decodable, Sendable {
         let itemKey: String
         let excerpt: String
+        let agentThreadId: String?
     }
 
     let schemaVersion: Int
