@@ -50,7 +50,7 @@ final class DictationVoiceProfiles {
         try await applyForget()
         let profile = try await store.profile()
         return try VoiceCheck(profile: profile, store: store, startedAt: .now) { [weak self] stage, failure in
-            Task { @MainActor in self?.failed(failure.underlying, stage: stage) }
+            Task { @MainActor in self?.failed(failure, stage: stage) }
         }
     }
 

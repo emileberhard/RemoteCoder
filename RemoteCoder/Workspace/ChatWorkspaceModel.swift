@@ -832,11 +832,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         accountDirectory.startForeground()
         for model in connectedHostModels { model.directories.syncFavorites() }
         syncPreferences()
-        dictationVoices.refresh()
-        let dictationModel = dictationLibrary?.model(fallback: transcriptionSettings.model) ?? transcriptionSettings.model
-        if transcriptionSettings.voices(for: dictationModel) == .onlyMine {
-            dictationVoices.learnFromHistory(in: dictationLibrary)
-        } else { dictationVoices.cancelHistoryLearning() }
+        refreshDictationVoices()
         retryGatewayIdentities()
         foregroundFanOutTask?.cancel()
         let task = Task { @MainActor [weak self] in
@@ -1363,7 +1359,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         drawerPreferences.reloadMode()
         accountDirectory.names.reload()
         transcriptionSettings.reload()
+        refreshDictationVoices()
+    }
+
+    private func refreshDictationVoices() {
         dictationVoices.refresh()
+        let model = dictationLibrary?.model(fallback: transcriptionSettings.model) ?? transcriptionSettings.model
+        if transcriptionSettings.voices(for: model) == .onlyMine { dictationVoices.learnFromHistory(in: dictationLibrary) }
+        else { dictationVoices.cancelHistoryLearning() }
     }
 
     func selectFavorite(_ favorite: FavoriteFolder, from screen: ChatScreenModel, ifStillShowing contextID: UUID) {

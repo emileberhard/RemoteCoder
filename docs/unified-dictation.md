@@ -47,7 +47,7 @@ of recent local originals when the library is enabled. Filtering happens before
 cleanup. Composer drafts retain everyone’s text for Restore Everyone until the
 filtered text is sent or replaced.
 
- Failure versions contain the error type, never a credential or
+Failure versions contain the error type, never a credential or
 provider response body. Publication retries on capture completion and foreground
 activation; settings also exposes retry. Saved locally, pending uploads, held
 captures, cloud acknowledgment and independent backup are distinct states.
