@@ -191,19 +191,6 @@ impl Record<'_> {
                             None,
                         )?;
                     }
-                    "agent_message" => {
-                        self.item(
-                            state,
-                            at,
-                            0,
-                            "assistant",
-                            text(&p["content"]),
-                            "/payload/content",
-                            &p["content"],
-                            None,
-                            None,
-                        )?;
-                    }
                     "reasoning" => {
                         self.item(
                             state,
@@ -474,7 +461,6 @@ impl Record<'_> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn codex_user_event(
         &self,
         state: &mut State,
@@ -506,6 +492,7 @@ impl Record<'_> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn item(
         &self,
         state: &State,
