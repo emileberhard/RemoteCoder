@@ -53,7 +53,7 @@ struct TranscriptionIntegrationTests {
             #expect(result.transcript.removedVoices)
             #expect(result.transcript.model == configuration.model.batchLibraryID)
             let upload = result.upload.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
-            let completion = result.result?.labelledReplyTime.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
+            let completion = (try? result.check.get())?.labelledReplyTime.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
             print("Azure relay voice check path=\(result.transcript.outcome?.path.rawValue ?? "unknown") failure=\(failure.withLock { $0 }) audio_ms=\(pcm.count * 1000 / 32_000) upload_ms=\(upload) completion_ms=\(completion) added_wait_ms=\(Int(result.wait / .milliseconds(1)))")
             await check.cancel()
         }

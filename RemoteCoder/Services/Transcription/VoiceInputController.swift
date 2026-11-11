@@ -301,10 +301,12 @@ final class VoiceInputController {
         }
         do {
             let result = try await recognition.resolve(original)
-            if let check = result.result { voices?.checked(check) }
-            else { voices?.failed(DictationVoiceSession.Failure.recognitionFormatUnavailable) }
+            switch result.check {
+            case .success(let check): voices?.checked(check)
+            case .failure(let error): voices?.failed(error)
+            }
             let upload = result.upload.map { String(Self.milliseconds($0)) } ?? "unknown"
-            let completion = result.result?.labelledReplyTime.map { String(Self.milliseconds($0)) } ?? "unknown"
+            let completion = (try? result.check.get())?.labelledReplyTime.map { String(Self.milliseconds($0)) } ?? "unknown"
             VoiceModeDiagnostics.log("dictation voice check outcome=\(result.transcript.outcome?.path.rawValue ?? "unknown") upload_ms=\(upload) labelled_reply_ms=\(completion) added_wait_ms=\(Self.milliseconds(result.wait))")
             await recognition.cancel()
             return result.transcript
@@ -417,7 +419,7 @@ final class VoiceInputController {
             }
             if let recognition {
                 output.receiveRecognition = { recognition.append($0) }
-                output.recognitionFailed = { recognition.invalidate() }
+                output.recognitionFailed = { recognition.invalidate($0) }
             }
             try await recorder.start(output: output)
             if let account = archive?.account { try await library?.validateAccount(account) }

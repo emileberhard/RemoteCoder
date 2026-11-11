@@ -65,9 +65,15 @@ final class AudioLevelMeter: @unchecked Sendable {
 
 private enum PCM16CaptureSinkError: LocalizedError {
     case formatUnavailable
+    case bufferUnavailable
+    case conversionFailed
 
     var errorDescription: String? {
-        "Could not configure microphone audio."
+        switch self {
+        case .formatUnavailable: "Could not configure microphone audio."
+        case .bufferUnavailable: "Could not allocate converted microphone audio."
+        case .conversionFailed: "Could not convert microphone audio."
+        }
     }
 }
 
@@ -79,7 +85,7 @@ struct PCM16CaptureOutput: Sendable {
     var configureOriginal: (@Sendable (AVAudioFormat) throws -> Void)? = nil
     var receiveOriginal: (@Sendable (AVAudioPCMBuffer) -> Void)? = nil
     var receiveRecognition: (@Sendable (Data) -> Void)? = nil
-    var recognitionFailed: (@Sendable () -> Void)? = nil
+    var recognitionFailed: (@Sendable (any Error) -> Void)? = nil
 }
 
 final class PCM16CaptureSink: @unchecked Sendable {
@@ -101,7 +107,7 @@ final class PCM16CaptureSink: @unchecked Sendable {
                 output: { chunk in
                     output.receive(chunk)
                     if output.sampleRate == 16_000 { output.receiveRecognition?(chunk) }
-                }
+                }, failed: output.recognitionFailed
             ) else {
                 throw PCM16CaptureSinkError.formatUnavailable
             }
@@ -111,10 +117,10 @@ final class PCM16CaptureSink: @unchecked Sendable {
             if let receive = output.receiveRecognition {
                 if output.sampleRate != 16_000 {
                     if let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true),
-                       let recognition = PCM16AudioProcessor(inputFormat: inputFormat, targetFormat: format, output: receive) {
+                       let recognition = PCM16AudioProcessor(inputFormat: inputFormat, targetFormat: format, output: receive, failed: output.recognitionFailed) {
                         recognitionProcessor = recognition
                     } else {
-                        output.recognitionFailed?()
+                        output.recognitionFailed?(PCM16CaptureSinkError.formatUnavailable)
                     }
                 }
             }
@@ -148,11 +154,13 @@ private final class PCM16AudioProcessor {
     private let chunkByteCount: Int
     private let output: @Sendable (Data) -> Void
     private var pendingData = Data()
+    private let failed: (@Sendable (any Error) -> Void)?
 
     init?(
         inputFormat: AVAudioFormat,
         targetFormat: AVAudioFormat,
-        output: @escaping @Sendable (Data) -> Void
+        output: @escaping @Sendable (Data) -> Void,
+        failed: (@Sendable (any Error) -> Void)?
     ) {
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             return nil
@@ -161,6 +169,7 @@ private final class PCM16AudioProcessor {
         self.targetFormat = targetFormat
         self.chunkByteCount = Int(targetFormat.sampleRate * Self.chunkDuration) * MemoryLayout<Int16>.size
         self.output = output
+        self.failed = failed
     }
 
     func ingest(_ buffer: AVAudioPCMBuffer) {
@@ -171,6 +180,7 @@ private final class PCM16AudioProcessor {
             pcmFormat: targetFormat,
             frameCapacity: capacity
         ) else {
+            failed?(PCM16CaptureSinkError.bufferUnavailable)
             return
         }
 
@@ -186,10 +196,14 @@ private final class PCM16AudioProcessor {
             unsafe outputStatus.pointee = .haveData
             return unsafe inputBuffer
         }
-        guard status != .error,
-              converted.frameLength > 0,
-              let channelData = converted.int16ChannelData
-        else {
+        guard status != .error else {
+            if let conversionError { failed?(conversionError) }
+            else { failed?(PCM16CaptureSinkError.conversionFailed) }
+            return
+        }
+        guard converted.frameLength > 0 else { return }
+        guard let channelData = converted.int16ChannelData else {
+            failed?(PCM16CaptureSinkError.conversionFailed)
             return
         }
 

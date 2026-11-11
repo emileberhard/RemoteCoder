@@ -7,7 +7,7 @@ nonisolated final class DictationVoiceSession: Sendable {
     private let check: VoiceCheck
     private let audio = RecognitionAudio()
     private let uploadTime = Mutex<Duration?>(nil)
-    private let captureFailed = Mutex(false)
+    private let captureFailure = Mutex<(any Error)?>(nil)
 
     private let budget: @Sendable (Int) -> Duration
 
@@ -18,17 +18,16 @@ nonisolated final class DictationVoiceSession: Sendable {
         self.budget = budget
     }
 
-    enum Failure: Error { case recognitionFormatUnavailable }
-
-    func invalidate() { captureFailed.withLock { $0 = true }; audio.release() }
+    func invalidate(_ error: any Error) { captureFailure.withLock { $0 = $0 ?? error }; audio.release() }
 
     func append(_ pcm16: Data) {
+        guard captureFailure.withLock({ $0 == nil }) else { return }
         audio.append(pcm16)
         check.append(pcm16)
     }
 
     func finish(fetch: @escaping @Sendable (Data, @escaping @Sendable (Duration) -> Void) async throws -> [SpeakerPhrase]) async {
-        if captureFailed.withLock({ $0 }) { await check.cancel(); return }
+        if captureFailure.withLock({ $0 != nil }) { await check.cancel(); return }
         await check.finish { [self] in
             let pcm = try audio.take()
             return try await fetch(pcm) { [self] duration in uploadTime.withLock { $0 = duration } }
@@ -36,19 +35,19 @@ nonisolated final class DictationVoiceSession: Sendable {
     }
 
     func resolve(_ original: DictationTranscript) async throws
-        -> (transcript: DictationTranscript, result: VoiceCheckResult?, upload: Duration?, wait: Duration) {
+        -> (transcript: DictationTranscript, check: Result<VoiceCheckResult, any Error>, upload: Duration?, wait: Duration) {
         defer { audio.release() }
         try Task.checkCancellation()
-        if captureFailed.withLock({ $0 }) {
+        if let failure = captureFailure.withLock({ $0 }) {
             return (DictationTranscript(text: original.text, everyone: original.everyone, model: original.model,
-                everyoneModel: original.everyoneModel, outcome: .failed), nil, nil, .zero)
+                everyoneModel: original.everyoneModel, outcome: .failed), .failure(failure), nil, .zero)
         }
         let started = ContinuousClock.now
         let result = try await check.resolve(everyone: original.text, waitingUpTo: budget(audio.sampleCount))
         let transcript = DictationTranscript(text: result.text, everyone: original.text,
             model: result.outcome.droppedCount > 0 ? TranscriptionModel.azureMAITranscribe2.batchLibraryID : original.model,
             everyoneModel: original.model, outcome: result.outcome)
-        return (transcript, result, uploadTime.withLock { $0 }, started.duration(to: .now))
+        return (transcript, .success(result), uploadTime.withLock { $0 }, started.duration(to: .now))
     }
 
     func cancel() async {

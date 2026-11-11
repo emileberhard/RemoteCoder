@@ -153,6 +153,26 @@ struct DictationVoiceTests {
         await session.cancel()
     }
 
+    @Test func conversionFailureKeepsTheOrdinaryTranscriptAndItsCause() async throws {
+        let fixture = try await VoiceFixture(trusted: true)
+        defer { fixture.cleanUp() }
+        let session = DictationVoiceSession(check: fixture.check)
+        session.append(fixture.mix)
+        session.invalidate(NSError(domain: "synthetic-audio", code: 17))
+        await session.finish { _, _ in Issue.record("An incomplete recognition stream must not be uploaded"); return [] }
+        let original = DictationTranscript(text: "Selected complete words.", model: "selected/model")
+        let result = try await session.resolve(original)
+        #expect(result.transcript.text == original.text)
+        #expect(result.transcript.outcome?.path == .failed)
+        switch result.check {
+        case .failure(let error):
+            #expect((error as NSError).domain == "synthetic-audio")
+            #expect((error as NSError).code == 17)
+        case .success: Issue.record("The capture failure must retain its cause")
+        }
+        await session.cancel()
+    }
+
     @Test func cancelledDictationDoesNotDeliverText() async throws {
         let fixture = try await VoiceFixture(trusted: true)
         defer { fixture.cleanUp() }
