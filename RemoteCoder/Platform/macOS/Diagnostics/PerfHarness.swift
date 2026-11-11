@@ -30,7 +30,8 @@ final class PerfHarness {
             let plan = try JSONDecoder().decode(BenchPlan.self, from: Data(arguments[flag + 1].utf8))
             try plan.validate()
             let configuration = try LocalConfiguration.load(bundle: .main)
-            let host = try GatewayHostConfiguration.macBookSeed(matching: plan.host, from: configuration)
+            var host = try GatewayHostConfiguration.macBookSeed(matching: plan.host, from: configuration)
+            host.gatewayID = host.id
             let store = HostStore(hosts: [host], activeHostID: host.id, defaults: defaults, credentials: credentials)
             if let error = store.errorMessage { throw BenchFailure(error) }
             return store
@@ -1046,9 +1047,19 @@ fileprivate final class ScrollBench {
         }
         workspace.selectConversation(at: address)
         while !loaded(address) {
-            guard ContinuousClock.now < deadline else { throw BenchFailure("the transcript did not load") }
+            guard ContinuousClock.now < deadline else { throw BenchFailure("the transcript did not load: \(loadState(address))") }
             try await Task.sleep(for: .milliseconds(16))
         }
+    }
+
+    private func loadState(_ address: ConversationAddress) -> String {
+        guard let screen = workspace.selectedScreen else {
+            let window = workspace.keyWindow
+            return "no selected screen; hosts \(workspace.settings.hosts.map(\.id)); "
+                + "key window target \(window.selectedTarget?.id ?? "none")"
+        }
+        return "screen target \(screen.executionTarget), wanted \(address.target); open thread \(screen.openThreadID ?? "none"); "
+            + "loading \(screen.loadingTranscriptID ?? "none"); alert \(screen.alert?.message ?? "none"); messages \(screen.messages.count)"
     }
 
     private func loaded(_ address: ConversationAddress) -> Bool {

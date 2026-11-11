@@ -494,8 +494,13 @@ fence, or one growing table. All use 60 characters per 30 ms; a ten-second code
 run exceeds 1,000 lines. The plan and summary retain the kind. `--stream-scroll`
 requires `--stream`, selects standard gestures instead of `--pattern`, and starts
 scrolling and streaming together; the run waits for both. `--delivery app`
-(default) routes events through NSApplication; `--disable responsiveScrolling` compares AppKit's
-responsive scrolling path. Each run requires `--expected-display WIDTHxHEIGHT@HZ/SCALE`
+(default) routes events through NSApplication. AppKit's responsive scrolling
+ignores the harness's synthesized wheel events on every delivery, so gesture
+patterns need `--disable responsiveScrolling`; a run whose gestures move the
+transcript less than 1% of the posted distance fails instead of reporting an
+idle transcript as a scroll. The bench host keeps its seeded id for the whole
+run: the harness marks it as already verified, so the app does not adopt the
+gateway's own identity mid-measurement. Each run requires `--expected-display WIDTHxHEIGHT@HZ/SCALE`
 (default `2560x1440@120/1`), checks it before launch and after measurement,
 and records the app's screen dimensions/scale/refresh. Read the GUI test host's current
 mode and supply it explicitly. Compare only runs from the same host and mode.

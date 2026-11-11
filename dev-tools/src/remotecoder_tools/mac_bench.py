@@ -478,7 +478,18 @@ def measure_run(args: argparse.Namespace, bench: dict, output: Path) -> dict:
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if (summary.get("validation") or {}).get("error"):
         raise SystemExit(f"switch validation failed: {summary['validation']['error']}; see {output}")
+    if not args.check_interaction and (error := unanswered_gestures(summary, args.disable)):
+        raise SystemExit(f"{error}; see {output}")
     return summary
+
+
+def unanswered_gestures(summary: dict, disabled: str | None) -> str | None:
+    posted, moved = summary["input"]["postedPixels"], summary["input"]["movedPixels"]
+    if not posted or moved >= posted / 100:
+        return None
+    hint = ("" if "responsiveScrolling" in (disabled or "").split(",")
+            else "; AppKit's responsive scrolling ignores synthesized wheel events, so rerun with `--disable responsiveScrolling`")
+    return f"posted {posted} px of scroll gestures but the transcript moved {moved} px{hint}"
 
 
 def percentile(values: list[float], fraction: float) -> float | None:
