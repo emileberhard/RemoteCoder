@@ -85,7 +85,8 @@ pub(crate) fn item(db: &Reader, request: &Request, control: &ReadControl) -> Res
     let provider_item_id = if needs_occurrence {
         let record: serde_json::Value = serde_json::from_slice(&raw)?;
         record
-            .pointer("/payload/id")
+            .pointer("/payload/item/id")
+            .or_else(|| record.pointer("/payload/id"))
             .and_then(serde_json::Value::as_str)
             .filter(|s| !s.is_empty())
             .map(str::to_owned)

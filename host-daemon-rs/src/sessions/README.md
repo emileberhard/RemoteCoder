@@ -242,11 +242,17 @@ disconnect and deadline to the same SQLite progress handler, checked every
 Schema 6 used model-facing user roles; schema 7 uses typed-user evidence. SQL
 and literal-search consumers filtering `kind='user'` therefore exclude injected
 context after the rebuild. Schema 7 is the single transcript rebuild for typed-user classification and
-origin-owned facts. Codex typed prompts and steers come from native
-`event_msg/user_message` records. Older sources retain typed user-role response
-items through the provider's legacy contextual-message rules. A matching native
-event replaces the legacy copy within that turn, and subsequent model-facing
-response items remain system context. Claude uses the history projection's injected-record and queued
+origin-owned facts. Codex typed prompts and steers primarily use paginated
+`event_msg/item_completed` records whose item is `UserMessage`, using the fork's
+prepared user input. Legacy-history `event_msg/user_message` records are the
+other authoritative shape. Sources without either shape classify user-role
+response records with the provider's contextual-message rules. The first
+authoritative event demotes every preceding response-user row in that source;
+all later response rows remain system context. This source-level choice does
+not compare text, so image labels and attached-file wrappers cannot duplicate
+a prompt. Both authoritative shapes can coexist during a history-mode change.
+Agent-message and injected-notification envelopes remain system items.
+Claude uses the history projection's injected-record and queued
 prompt owners. Compaction summaries, task notifications and agent-message
 envelopes never become user items. The prompt-envelope owner extracts captions
 and pasted payloads for the document, excluding the injected RemoteCoder note
