@@ -243,14 +243,11 @@ def group_has_live_members(group: int, exclude_pid: int = 0) -> bool:
             for line in rows.splitlines()
             if len(parts := line.split()) == 3
         )
-    settled = set()
-    while True:
-        members = set(_group_pids(group)) - {exclude_pid}
-        if any(_is_live_member(pid, group) for pid in members):
-            return True
-        if members <= settled:
-            return False
-        settled = members
+    listed = set(_group_pids(group)) - {exclude_pid}
+    if any(_is_live_member(pid, group) for pid in listed):
+        return True
+    confirmed = set(_group_pids(group)) - {exclude_pid}
+    return not confirmed <= listed or any(_is_live_member(pid, group) for pid in confirmed)
 
 
 def terminate_group(identity: dict, grace_seconds: float):

@@ -75,11 +75,11 @@ class ProcessIdentityTests(unittest.TestCase):
 
 
 class GroupMembershipTests(unittest.TestCase):
-    def test_member_forked_after_the_listing_keeps_the_group_live(self):
-        listings = iter(([101], [101, 102]))
+    def test_member_appearing_between_the_listings_keeps_the_group_live(self):
+        listings = iter(([101], [102]))
         with (
             patch.object(groups, "_group_pids", side_effect=lambda _: next(listings)),
-            patch.object(groups, "_is_live_member", side_effect=lambda pid, _: pid == 102),
+            patch.object(groups, "_is_live_member", return_value=False),
         ):
             self.assertTrue(groups.group_has_live_members(100))
 
@@ -91,7 +91,7 @@ class GroupMembershipTests(unittest.TestCase):
         ):
             self.assertTrue(groups.group_has_live_members(100))
 
-    def test_settled_listing_without_other_live_members_is_drained(self):
+    def test_confirmed_listing_without_other_live_members_is_drained(self):
         listings = iter(([100, 101, 102], [100, 101]))
         with (
             patch.object(groups, "_group_pids", side_effect=lambda _: next(listings)),
