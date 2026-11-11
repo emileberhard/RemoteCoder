@@ -3094,7 +3094,8 @@ as “Search incomplete on …” beside unanswered and unsupported hosts while
 returned rows stay visible. A failed meaning request has its own “By meaning
 failed on …” status, independent of keyword replies. The empty-results view
 requires complete coverage from every host and tier. Further-hit labels show
-lower bounds capped at “5+ more”. Opening a card logs only its section and rank.
+exact small counts and lower bounds capped at “9+ more”. The status reserves
+two lines and grows for combined host states. Opening a card logs only its section and rank.
 
 A result card keeps the root conversation address for its title, grouping and
 deduplication. A message hit opens the exact `agentThreadId` destination supplied

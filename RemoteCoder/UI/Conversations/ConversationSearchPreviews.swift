@@ -105,4 +105,14 @@ private struct ConversationSearchFixture: View {
 #Preview("Meaning unavailable") {
     ConversationSearchFixture(SearchFixture.results(status: .init(failedMeaningHosts: ["Mini"]), byMeaning: false))
 }
+
+#Preview("Four host states") {
+    ConversationSearchFixture(SearchFixture.results(
+        status: .init(unansweredHosts: ["Linux"], unsupportedHosts: ["MacBook"],
+                      partialHosts: ["Mini"], failedMeaningHosts: ["Mini"]), byMeaning: false))
+}
+
+#Preview("Empty complete") {
+    ConversationSearchFixture(.init(status: .init(), isPainted: true))
+}
 #endif

@@ -177,7 +177,7 @@ struct ConversationSearchSessionTests {
             hit("untitled", on: mini, title: nil, hitCount: 1, excerpt: "the flicker"),
             hit("probe", on: mini, excerpt: "flicker"),
             hit("unknown", on: UUID(), excerpt: "flicker"),
-            hit("migrated", on: linux, title: "Mirror", hitCount: 0, excerpt: nil),
+            hit("migrated", on: linux, title: "Mirror", hitCount: 4, excerpt: nil),
         ])
         let rows = ConversationSearchMerge.candidates(from: response, hosts: hosts, query: query, generation: 1, now: now).map(\.row)
 
@@ -187,7 +187,7 @@ struct ConversationSearchSessionTests {
         guard case .title("Known title") = rows[0].headline else { Issue.record("expected the local title"); return }
         #expect(rows[0].excerpt.map { String($0.characters) } == "a flicker")
         #expect(rows[0].additionalHitCount == 399)
-        #expect(rows[0].additionalHitLabel == "5+ more")
+        #expect(rows[0].additionalHitLabel == "9+ more")
         guard case let .excerpt(excerpt) = rows[1].headline else { Issue.record("expected the excerpt headline"); return }
         #expect(String(excerpt.characters) == "the flicker")
         #expect(rows[1].excerpt == nil)
@@ -195,6 +195,7 @@ struct ConversationSearchSessionTests {
         #expect(rows[1].additionalHitLabel == nil)
         #expect(rows.map(\.hostName) == ["Mini", "Mini", "MacBook"])
         #expect(rows[2].excerpt == nil)
+        #expect(rows[2].additionalHitLabel == "+4 more")
     }
 
     @Test func excerptsFocusOnTheFirstMatchAndEmphasizeEveryEligibleTerm() throws {

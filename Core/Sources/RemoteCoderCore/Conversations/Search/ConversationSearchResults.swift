@@ -24,7 +24,8 @@ struct ConversationSearchRow: Identifiable, Sendable {
 
     var id: String { address.id }
     var additionalHitLabel: String? {
-        additionalHitCount > 0 ? "\(min(5, additionalHitCount))+ more" : nil
+        guard additionalHitCount > 0 else { return nil }
+        return additionalHitCount > 9 ? "9+ more" : "+\(additionalHitCount) more"
     }
     var openingAddress: ConversationAddress {
         ConversationAddress(hostID: address.hostID, threadID: agentThreadID ?? address.threadID)

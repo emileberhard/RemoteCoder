@@ -126,11 +126,11 @@ private struct ConversationSearchStatusRow: View {
                 ProgressView()
                     .controlSize(.mini)
             }
-            if let summary = status.summary { Text(summary) }
+            Text(status.summary ?? " ").accessibilityHidden(status.summary == nil)
         }
         .scaledFont(.footnote)
         .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+        .lineLimit(2...)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
