@@ -787,7 +787,7 @@ fn sessions_conversations_select_codex_user_evidence_by_source_shape() -> Result
                 Instant::now() + crate::sessions::conversations::DEADLINE,
             );
             let located = crate::sessions::locate::item(
-                &*f.store.reader()?,
+                &f.store.reader()?,
                 &crate::sessions::locate::Request { item_key: item },
                 &control,
             )?;
