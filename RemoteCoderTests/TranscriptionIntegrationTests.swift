@@ -14,7 +14,7 @@ struct TranscriptionIntegrationTests {
         let service = RemoteCoderTranscriptionService(access: access)
         let configuration = TranscriptionConfiguration(model: .azureMAITranscribe2, language: .english,
             customVocabulary: ["OpenAI", "AssemblyAI", "ElevenLabs"])
-        for repetitions in [1, 2, 4] {
+        for repetitions in [1, 3, 7] {
             let requested = AsyncStream<Void>.makeStream()
             let failure = Mutex("none")
             let fixture = try await VoiceFixture(trusted: true) { _, error in
@@ -34,7 +34,8 @@ struct TranscriptionIntegrationTests {
             let recordings = try TemporaryDictationRecordings()
             defer { recordings.cleanUp() }
             var pcm = Data()
-            for _ in 0..<repetitions { pcm.append(fixture.mix) }
+            for _ in 0..<repetitions { pcm.append(fixture.owner) }
+            pcm.append(fixture.mix.dropFirst(fixture.owner.count))
             let writer = try await recordings.store.startRecording(owner: ExecutionTarget(hostID: access.host.id), sampleRate: 16_000)
             writer.append(pcm)
             let recording = try await writer.finish()
@@ -45,7 +46,15 @@ struct TranscriptionIntegrationTests {
                 requested.continuation.finish()
                 return try await service.speakerPhrases(pcm, configuration: configuration, uploadFinished: uploaded)
             }
-            for await _ in requested.stream { break }
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    for await _ in requested.stream { break }
+                    try Task.checkCancellation()
+                }
+                group.addTask { try await Task.sleep(for: .seconds(30)); throw URLError(.timedOut) }
+                defer { group.cancelAll() }
+                _ = try await group.next()
+            }
             let original = try await service.transcribe(recording, configuration: configuration)
             let result = try await check.resolve(original)
             #expect(!result.transcript.text.isEmpty)
