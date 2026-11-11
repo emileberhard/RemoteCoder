@@ -101,9 +101,7 @@ final class AppKitTranscriptContainer: NSScrollView, TranscriptReadingPositionCa
     private(set) var presentedAddressForBench: ConversationAddress?
 
     func bindAddressForBench(_ address: ConversationAddress?) {
-        guard let address else { return }
-        precondition(presentedAddressForBench == nil || presentedAddressForBench == address)
-        presentedAddressForBench = address
+        presentedAddressForBench = presentedAddressForBench ?? address
     }
     #endif
     var isFollowingLatest: () -> Bool = { true }

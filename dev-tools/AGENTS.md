@@ -500,7 +500,9 @@ patterns need `--disable responsiveScrolling`; a run whose gestures move the
 transcript less than 1% of the posted distance fails instead of reporting an
 idle transcript as a scroll. The bench host keeps its seeded id for the whole
 run: the harness marks it as already verified, so the app does not adopt the
-gateway's own identity mid-measurement. Each run requires `--expected-display WIDTHxHEIGHT@HZ/SCALE`
+gateway's own identity mid-measurement. A transcript container keeps the first
+conversation address it presents; SwiftUI updates the outgoing container once
+with the next conversation's environment before detaching it. Each run requires `--expected-display WIDTHxHEIGHT@HZ/SCALE`
 (default `2560x1440@120/1`), checks it before launch and after measurement,
 and records the app's screen dimensions/scale/refresh. Read the GUI test host's current
 mode and supply it explicitly. Compare only runs from the same host and mode.
