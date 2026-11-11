@@ -93,6 +93,7 @@ pub(crate) struct PendingRequest {
     pub(crate) bounded_preview: bool,
     pub(crate) thread_id: Option<String>,
     pub(crate) turn_id: Option<String>,
+    pub(crate) last_item_id: Option<String>,
     pub(crate) issued_at: Instant,
 }
 
@@ -109,6 +110,7 @@ impl PendingRequest {
             bounded_preview,
             thread_id: text("threadId"),
             turn_id: text("expectedTurnId"),
+            last_item_id: text("lastItemId"),
             issued_at: Instant::now(),
         }
     }

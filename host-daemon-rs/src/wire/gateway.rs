@@ -192,6 +192,8 @@ pub(crate) struct HostInfoResponse {
     pub claude_queue: bool,
     #[serde(default)]
     pub claude_item_fork: bool,
+    #[serde(default)]
+    pub codex_item_fork: bool,
 }
 
 #[derive(Debug, Deserialize)]

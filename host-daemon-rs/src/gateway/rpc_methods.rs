@@ -1734,6 +1734,7 @@ fn host_info(speech_available: bool, claude_queue: bool) -> RpcResult {
         fleet_live_activity: true,
         claude_queue,
         claude_item_fork: true,
+        codex_item_fork: true,
     }))
 }
 

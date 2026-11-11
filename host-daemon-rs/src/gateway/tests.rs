@@ -272,6 +272,7 @@ async fn host_info_reports_the_gateway_home_directory() {
         "no queue loop runs before the gateway starts Claude"
     );
     assert_eq!(reply["result"]["claudeItemFork"], true);
+    assert_eq!(reply["result"]["codexItemFork"], true);
     assert_eq!(
         reply["result"]["automationsAuthority"],
         json!(crate::config::host_profile::AutomationAuthority::authority().unwrap())
@@ -1873,6 +1874,7 @@ fn abandoned_history_requests_expire_without_removing_live_correlation() {
                 bounded_preview: false,
                 thread_id: None,
                 turn_id: None,
+                last_item_id: None,
                 issued_at: now - PENDING_REQUEST_TTL,
             },
         ),
@@ -1883,6 +1885,7 @@ fn abandoned_history_requests_expire_without_removing_live_correlation() {
                 bounded_preview: false,
                 thread_id: None,
                 turn_id: None,
+                last_item_id: None,
                 issued_at: now,
             },
         ),

@@ -1243,7 +1243,11 @@ impl Gateway {
                         && request.method == "thread/fork"
                         && let Some(source) = &request.thread_id
                     {
-                        self.note_client_fork(source, result).await;
+                        let end = match request.last_item_id {
+                            Some(_) => super::fork_note::ForkEnd::InsideTurn,
+                            None => super::fork_note::ForkEnd::AfterTurn,
+                        };
+                        self.note_client_fork(source, result, end).await;
                     }
                     let history_method = request.as_ref().map(|request| request.method);
                     let tagged = parsed

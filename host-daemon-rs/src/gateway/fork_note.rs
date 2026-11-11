@@ -39,12 +39,12 @@ pub(super) fn fork_note(source: &Value, end: ForkEnd) -> Result<String> {
 }
 
 impl Gateway {
-    pub(super) async fn note_client_fork(&self, source_id: &str, result: &Value) {
+    pub(super) async fn note_client_fork(&self, source_id: &str, result: &Value, end: ForkEnd) {
         let target = result.pointer("/thread/id").and_then(Value::as_str);
         let injected = tokio::time::timeout(std::time::Duration::from_secs(3), async {
             let thread = target.context("fork response has no thread id")?;
             let source = self.call_control("thread/read", json!({"threadId": source_id, "includeTurns": false})).await?;
-            let note = fork_note(&source["thread"], ForkEnd::AfterTurn)?;
+            let note = fork_note(&source["thread"], end)?;
             self.call_control("thread/inject_items", json!({"threadId": thread, "items": [{
                 "type": "message", "role": "developer", "content": [{"type": "input_text", "text": note}]
             }]})).await?;
