@@ -147,6 +147,8 @@ final class DictationVoiceProfiles {
         guard date > appliedForget else { return }
         try await store.forget(learnedBefore: date)
         appliedForget = max(appliedForget, date)
+        isTrusted = false
+        hasProfile = false
     }
 
     @concurrent private static func profileExists(at url: URL) async -> Bool {
