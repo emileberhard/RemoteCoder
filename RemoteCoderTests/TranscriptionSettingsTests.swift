@@ -41,7 +41,7 @@ struct TranscriptionSettingsTests {
     }
 
     @Test @MainActor func choosingAProviderMovesTheModelIntoIt() {
-        let store = TranscriptionSettingsStore()
+        let store = TranscriptionSettingsStore(defaults: AppStorageScope.current.defaults)
         let original = store.model
         defer { store.model = original }
 

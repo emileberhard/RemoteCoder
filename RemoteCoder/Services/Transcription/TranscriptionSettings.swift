@@ -234,6 +234,7 @@ enum TranscriptionSettings {
 @MainActor
 @Observable
 final class TranscriptionSettingsStore {
+    @ObservationIgnored private let defaults: UserDefaults
     private var appliedModel: TranscriptionModel
     private var appliedLanguage: TranscriptionLanguage
     private var appliedVoices: DictationVoiceSelection?
@@ -244,14 +245,14 @@ final class TranscriptionSettingsStore {
 
     func setVoices(_ selection: DictationVoiceSelection) {
         appliedVoices = selection
-        TranscriptionSettings.setVoices(selection, defaults: AppStorageScope.current.defaults)
+        TranscriptionSettings.setVoices(selection, defaults: defaults)
     }
 
     var model: TranscriptionModel {
         get { appliedModel }
         set {
             appliedModel = newValue
-            TranscriptionSettings.setModel(newValue)
+            TranscriptionSettings.setModel(newValue, defaults: defaults)
         }
     }
 
@@ -269,22 +270,23 @@ final class TranscriptionSettingsStore {
         get { appliedLanguage }
         set {
             appliedLanguage = newValue
-            TranscriptionSettings.setLanguage(newValue)
+            TranscriptionSettings.setLanguage(newValue, defaults: defaults)
         }
     }
 
-    init() {
-        appliedModel = TranscriptionSettings.model()
-        appliedLanguage = TranscriptionSettings.language()
-        appliedVoices = TranscriptionSettings.voiceChoice(defaults: AppStorageScope.current.defaults)
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+        appliedModel = TranscriptionSettings.model(defaults: defaults)
+        appliedLanguage = TranscriptionSettings.language(defaults: defaults)
+        appliedVoices = TranscriptionSettings.voiceChoice(defaults: defaults)
     }
 
     func reload() {
-        let model = TranscriptionSettings.model()
+        let model = TranscriptionSettings.model(defaults: defaults)
         if model != appliedModel { appliedModel = model }
-        let language = TranscriptionSettings.language()
+        let language = TranscriptionSettings.language(defaults: defaults)
         if language != appliedLanguage { appliedLanguage = language }
-        let voices = TranscriptionSettings.voiceChoice(defaults: AppStorageScope.current.defaults)
+        let voices = TranscriptionSettings.voiceChoice(defaults: defaults)
         if voices != appliedVoices { appliedVoices = voices }
     }
 }

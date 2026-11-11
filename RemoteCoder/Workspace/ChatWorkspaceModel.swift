@@ -120,6 +120,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         cluster = ClusterModel(defaults: defaults)
         self.storage = storage
         self.dictationLibrary = dictationLibrary
+        transcriptionSettings = TranscriptionSettingsStore(defaults: defaults)
         let dictationVoices = DictationVoiceProfiles(defaults: defaults,
             directory: storage.directory(for: .device).appending(path: "voice-profile"),
             history: { try await dictationLibrary?.localVoiceHistory() })
@@ -332,7 +333,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     let automationDrafts = AutomationDraftStore()
-    let transcriptionSettings = TranscriptionSettingsStore()
+    let transcriptionSettings: TranscriptionSettingsStore
     let dictationLibrary: SharedDictationLibrary?
     let dictationVoices: DictationVoiceProfiles
     let accountDirectory: AccountDirectory

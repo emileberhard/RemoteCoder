@@ -1,3 +1,6 @@
+SpeechKit 0.6.0
+Source: https://github.com/emileberhard/SpeechKit/tree/0.6.0
+
 MIT License
 
 Copyright (c) 2026 Emil Eberhard

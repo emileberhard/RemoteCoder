@@ -15,7 +15,7 @@
       "kind": "remote",
       "repository": "https://github.com/emileberhard/SpeechKit.git",
       "version": {
-        "revision": "3590785752845895dc3d3d4058844afe8bb7ebed"
+        "exact": "0.6.0"
       }
     },
     {

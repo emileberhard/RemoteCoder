@@ -12,7 +12,7 @@ struct OnlyMinePresentationTests {
         defer { await fixture.cleanUp() }
         let settings = fixture.workspace.transcriptionSettings
         let previousModel = settings.model
-        let defaults = AppStorageScope.current.defaults
+        let defaults = fixture.defaults
         let previousChoice = defaults.object(forKey: "transcription.voices")
         defer {
             settings.model = previousModel

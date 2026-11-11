@@ -447,7 +447,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             : DictationRecordingStore<ExecutionTarget>.located(in: storage)
         self.voice = VoiceInputController(access: speechAccess, owner: ExecutionTarget(hostID: host.id),
             transcriber: RemoteCoderTranscriptionService(access: speechAccess), recordings: recordings, haptics: haptics, library: dictationLibrary,
-            voices: dictationVoices)
+            voices: dictationVoices, configuration: { .current(defaults: chatDefaults) })
         let call = voiceCalls.call
         let callOwner = ExecutionTarget(hostID: host.id)
         let gateway = Self.makeGatewayClient(for: host, routes: routes, deviceTools: deviceTools,
