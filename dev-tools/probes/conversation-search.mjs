@@ -33,7 +33,7 @@ try {
   ];
   await writeFile(join(codexSessions,`rollout-2026-11-01T10-00-00-${codexThread}.jsonl`),rollout.map(row=>JSON.stringify(row)+'\n').join(''),{mode:0o600});
   const provider = lab.path('meaning.sh');
-  await writeFile(provider,`cat >/dev/null\nprintf '%s' '${JSON.stringify({conversations:[{sessionId:'unknown',provider:'claude',summary:'omit',score:2},{sessionId:root,provider:'claude',summary:'Drawer reveal stutter',score:1}]})}'\n`);
+  await writeFile(provider,`cat >/dev/null\nprintf '%s' '${JSON.stringify({conversations:[{sessionId:'unknown',provider:'claude',excerpt:'omit',score:2},{sessionId:root,provider:'claude',excerpt:'Drawer reveal stutter',score:1}]})}'\n`);
   const config=lab.path('meaning.json');
   await writeFile(config,JSON.stringify({command:'/bin/sh',args:[provider]}));
   await lab.writeGatewayEnv(['RC_CLAUDE_ENABLED=false',`RC_CLAUDE_HOME=${home}`,`RC_CODEX_GATEWAY_CONVERSATION_SEARCH_PROVIDER_FILE=${config}`]);
@@ -76,7 +76,7 @@ try {
   const meaning=await rpc('sessions/conversations/searchByMeaning',{query:'the sidebar has a stutter when it is being revealed',limit:20});
   assert.equal(meaning.result.conversations.length,1);
   assert.equal(meaning.result.conversations[0].threadId,`claude_${root}`);
-  assert.equal(meaning.result.conversations[0].summary,'Drawer reveal stutter');
+  assert.equal(meaning.result.conversations[0].excerpt,'Drawer reveal stutter');
   for(const params of [{query:'',limit:30},{query:'drawer',limit:0},{query:'drawer',limit:30,extra:true}]) {
     assert.equal((await rpc('sessions/conversations/search',params)).error.code,-32602);
   }

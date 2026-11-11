@@ -36,7 +36,7 @@ pub(crate) struct Provider {
 pub(crate) struct Hit {
     session_id: String,
     provider: String,
-    summary: String,
+    excerpt: String,
     score: f64,
 }
 
@@ -63,7 +63,7 @@ struct Conversation {
     title: Option<String>,
     cwd: Option<String>,
     last_at: Option<String>,
-    summary: String,
+    excerpt: String,
 }
 
 impl Provider {
@@ -215,7 +215,7 @@ pub(crate) fn resolve(db: &Reader, hits: Vec<Hit>, limit: usize) -> Result<Respo
             title: header.title,
             cwd: header.cwd,
             last_at: header.last_at,
-            summary: hit.summary,
+            excerpt: hit.excerpt,
         });
         if conversations.len() == limit {
             break;

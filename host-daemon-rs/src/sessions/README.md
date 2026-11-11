@@ -305,7 +305,7 @@ third locate returns its turn-level answer immediately rather than queueing.
 
 `sessions/conversations/searchByMeaning {query,limit}` accepts 1–512 trimmed
 UTF-8 query bytes and 1–50 results, rejecting unknown fields. It returns
-`{schemaVersion:1,conversations:[{sessionKey,hostId,provider,threadId,title,cwd,lastAt,summary}]}`.
+`{schemaVersion:1,conversations:[{sessionKey,hostId,provider,threadId,title,cwd,lastAt,excerpt}]}`.
 The operator sets `RC_CODEX_GATEWAY_CONVERSATION_SEARCH_PROVIDER_FILE` to a
 regular JSON file of at most 64 KiB containing an absolute `command` and `args`
 array. No shell expansion is performed. Only configured hosts advertise
@@ -313,7 +313,7 @@ array. No shell expansion is performed. Only configured hosts advertise
 `sessions meaning QUERY --limit 20` through the gateway.
 
 Each request writes `{query,limit}` JSON to stdin and reads
-`{conversations:[{sessionId,provider,summary,score}]}` from stdout. The provider
+`{conversations:[{sessionId,provider,excerpt,score}]}` from stdout. The provider
 ranks results; the gateway preserves that order, resolves provider/native id
 exactly to one present catalog session, folds its persisted ancestry, dedupes
 roots and drops unresolved or ambiguous identities. Dates and metadata remain
