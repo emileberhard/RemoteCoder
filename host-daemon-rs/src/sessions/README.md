@@ -192,11 +192,11 @@ Word prefixes start at token boundaries. For example, `searchsession` does
 not match `ConversationSearchSession`.
 
 Conversation documents contain separately weighted title, typed-user,
-assistant/reasoning and folder columns. Title and typed text receive weights
-8 and 4; assistant/reasoning receives 1 and the folder contributes coverage only.
+assistant and folder columns. Title and typed text receive weights
+8 and 4; assistant receives 1 and the folder contributes coverage only.
 BM25 document score ranks first, followed by recency and canonical key. Grouped
 search uses only document matches as candidates. It cannot find terms that occur
-only in tool calls, tool output or injected context. The existing trigram RPC
+only in tool calls, tool output, reasoning or injected context. The existing trigram RPC
 `sessions/search` retains literal substring access to that evidence. A grouped
 result requires an all-terms title match or a message hit. Ranking never fetches
 full message text.
@@ -213,14 +213,13 @@ Ambiguous delegated ownership and cycles leave the session unfolded.
 Explicit promotion overrides native ancestry.
 
 At most 128 ranked document candidates are fetched. The scoped item word index
-uses the same user, assistant and reasoning kinds as the document. It covers
+uses the same user and assistant kinds as the document. It covers
 at most 128 member sessions and finds 64 newest hits per term per
 candidate, with lookaheads setting `truncated`. Ranking reads metadata. The
 gateway applies SQLite's tokenizer to the selected text of at most three hits
 per result to build excerpts. Items larger than 1 MiB set `truncated` and still
 count toward `hitCount`. A conversation can match with zero excerpts.
-Hits prefer distinct-term coverage, user/assistant text,
-then recency. `hitCount`
+Hits prefer distinct-term coverage, then recency. `hitCount`
 counts unique items inside these bounded windows. Candidate or hit-window
 lookahead sets `truncated`. The app can present completed results while indicating
 that additional conversations or hits may exist. Limiting the final list alone
@@ -268,9 +267,9 @@ document can supply candidates while a refresh waits. That freshness lag does
 not set `truncated`. Initial catalog work, the derived rebuild backlog and
 incomplete coverage do set it.
 
-Documents retain the entire title, folder and typed-user text. Assistant and
-reasoning text use the newest indexed items up to 512 KiB, 4,096 items and 128
-member sessions. Earlier assistant or reasoning terms may be absent from
+Documents retain the entire title, folder and typed-user text. Assistant text
+uses the newest indexed items up to 2 MiB across 128 member sessions.
+Earlier assistant terms may be absent from
 candidate selection for a capped root. They remain available in the scoped
 word index for already matched conversations. `sessions/sql` reports the
 number of capped roots in `coverage.conversationSearch.cappedRoots`. This count

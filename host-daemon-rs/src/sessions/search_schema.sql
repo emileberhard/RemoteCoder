@@ -12,12 +12,12 @@ CREATE TABLE search_item (
 CREATE INDEX search_item_scope ON search_item(scope,document_column,id DESC,text_bytes);
 CREATE VIEW searchable_item AS
  SELECT i.rowid, i.session_key, i.text, i.text_bytes, 's'||s.source_id AS scope,
-        CASE i.kind WHEN 'user' THEN 'typed' ELSE 'other' END AS document_column
+        CASE i.kind WHEN 'user' THEN 'typed' ELSE 'assistant' END AS document_column
  FROM item i JOIN session s USING(session_key)
- WHERE i.kind IN ('user','assistant','reasoning') AND i.text_bytes>0;
+ WHERE i.kind IN ('user','assistant') AND i.text_bytes>0;
 CREATE VIEW search_item_content AS
  SELECT i.rowid,i.text,m.scope FROM item i JOIN search_item m ON m.id=i.rowid;
-CREATE VIRTUAL TABLE conversation_fts USING fts5(title,typed,other,cwd,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 2',prefix='2 3 4');
+CREATE VIRTUAL TABLE conversation_fts USING fts5(title,typed,assistant,cwd,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 2',prefix='2 3 4');
 CREATE VIRTUAL TABLE item_word_fts USING fts5(text,scope,content='search_item_content',content_rowid='rowid',tokenize='unicode61 remove_diacritics 2',prefix='2 3 4');
 CREATE TRIGGER search_item_insert AFTER INSERT ON item
 WHEN EXISTS(SELECT 1 FROM searchable_item WHERE rowid=new.rowid) BEGIN

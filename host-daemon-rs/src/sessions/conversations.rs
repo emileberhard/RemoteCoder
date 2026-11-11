@@ -189,7 +189,6 @@ pub(crate) fn search(
                     .terms
                     .count_ones()
                     .cmp(&left.terms.count_ones())
-                    .then_with(|| right.preferred().cmp(&left.preferred()))
                     .then_with(|| right.at.cmp(&left.at))
                     .then_with(|| b.cmp(a))
             });
@@ -248,12 +247,6 @@ struct RankedHit {
     kind: String,
     at: Option<String>,
     bytes: i64,
-}
-
-impl RankedHit {
-    fn preferred(&self) -> bool {
-        matches!(self.kind.as_str(), "user" | "assistant")
-    }
 }
 
 struct Snippets {

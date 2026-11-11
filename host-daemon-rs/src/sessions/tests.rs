@@ -2812,8 +2812,7 @@ fn sessions_conversations_share_document_and_hit_kinds() -> Result<()> {
         );
     }
     let result = conversation_search(&f.store, "reasoningfixture", 30, Default::default());
-    assert_eq!(result.conversations[0].hit_count, 1);
-    assert_eq!(result.conversations[0].hits[0].kind, "reasoning");
+    assert!(result.conversations.is_empty());
     assert!(
         conversation_search(&f.store, "toolonlyfixture", 30, Default::default())
             .conversations
@@ -2989,26 +2988,28 @@ fn sessions_conversations_defer_expensive_refreshes_without_marking_partial() ->
 }
 
 #[test]
-fn sessions_conversations_cap_only_other_document_text() -> Result<()> {
+fn sessions_conversations_cap_only_assistant_document_text() -> Result<()> {
     let f = fixture();
     scan(&f);
     let root = super::session_key(&f.origins[0], "codex-root");
     {
         let db = f.store.writer()?;
-        conversation_item(&db, &root, 1000, "OldAssistantAnchor", "assistant", None);
+        let cap = super::index::ASSISTANT_BYTES as usize;
         conversation_item(
             &db,
             &root,
-            1001,
-            &format!("{} TypedTailAnchor", "ab ".repeat(180_000)),
-            "user",
+            1000,
+            &format!("OldAssistantAnchor {}", "old ".repeat(40)),
+            "assistant",
             None,
         );
+        conversation_item(&db, &root, 1001, "TypedTailAnchor", "user", None);
+        let newest = "NewestAssistantAnchor ";
         conversation_item(
             &db,
             &root,
             1002,
-            &format!("NewestAssistantAnchor {}", "cd ".repeat(174_752)),
+            &format!("{newest}{}", "cd ".repeat((cap - newest.len() - 16) / 3)),
             "assistant",
             None,
         );

@@ -4,9 +4,8 @@ use std::collections::{BTreeSet, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const VERSION: &str = "3";
-const OTHER_BYTES: i64 = 512 << 10;
-const OTHER_ROWS: usize = 4096;
+const VERSION: &str = "4";
+pub(super) const ASSISTANT_BYTES: i64 = 2 << 20;
 const MEMBER_LIMIT: usize = 128;
 const IMMEDIATE_REFRESH_MS: i64 = 10;
 const COOLDOWN_MULTIPLIER: i64 = 9;
@@ -209,12 +208,12 @@ fn rebuild_document(db: &Connection, root: &str) -> Result<()> {
         return Ok(());
     };
     let typed = typed_text(db, root)?;
-    let (other, capped) = other_text(db, root)?;
+    let (assistant, capped) = assistant_text(db, root)?;
     db.execute("INSERT INTO search_document(session_key,refreshed_ms,cooldown_ms,capped) VALUES(?1,0,0,?2)", params![root,capped])?;
     let id = db.last_insert_rowid();
     db.execute(
-        "INSERT INTO conversation_fts(rowid,title,typed,other,cwd) VALUES(?1,?2,?3,?4,?5)",
-        params![id, title, typed, other, cwd],
+        "INSERT INTO conversation_fts(rowid,title,typed,assistant,cwd) VALUES(?1,?2,?3,?4,?5)",
+        params![id, title, typed, assistant, cwd],
     )?;
     let duration_ms = started.elapsed().as_millis() as i64;
     let cooldown_ms = if duration_ms > IMMEDIATE_REFRESH_MS {
@@ -261,38 +260,23 @@ pub(super) fn member_scopes(db: &Connection, root: &str) -> Result<(Vec<String>,
     Ok((members, capped))
 }
 
-fn other_text(db: &Connection, root: &str) -> Result<(String, bool)> {
+fn assistant_text(db: &Connection, root: &str) -> Result<(String, bool)> {
     let (members, mut capped) = member_scopes(db, root)?;
     if members.is_empty() {
         return Ok((String::new(), capped));
     }
     let seeks = vec![
-        "SELECT id,text_bytes FROM search_item WHERE scope=? AND document_column='other'";
+        "SELECT id,text_bytes FROM search_item WHERE scope=? AND document_column='assistant'";
         members.len()
     ];
-    let sql = format!(
-        "{} ORDER BY id DESC LIMIT {}",
-        seeks.join(" UNION ALL "),
-        OTHER_ROWS + 1
-    );
+    let sql = format!("{} ORDER BY id DESC", seeks.join(" UNION ALL "));
     let mut metadata = db.prepare(&sql)?;
     let mut rows = metadata.query(rusqlite::params_from_iter(members))?;
     let mut get_text = db.prepare("SELECT text FROM item WHERE rowid=?1")?;
     let mut text = String::new();
-    let mut remaining = OTHER_BYTES;
-    for count in 0..=OTHER_ROWS {
-        let Some(row) = rows.next()? else {
-            break;
-        };
+    let mut remaining = ASSISTANT_BYTES;
+    while let Some(row) = rows.next()? {
         let size: i64 = row.get(1)?;
-        if count == OTHER_ROWS {
-            capped = true;
-            break;
-        }
-        if size >= OTHER_BYTES {
-            capped = true;
-            continue;
-        }
         if size >= remaining {
             capped = true;
             break;
