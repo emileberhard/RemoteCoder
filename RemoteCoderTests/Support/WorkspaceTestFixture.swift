@@ -214,7 +214,7 @@ struct TemporaryDictationRecordings {
 }
 
 extension TemporaryHostStorage {
-    var voiceProfiles: DictationVoiceProfiles {
+    @MainActor var voiceProfiles: DictationVoiceProfiles {
         DictationVoiceProfiles(defaults: defaults, directory: storage.root.appending(path: "voice-profile"), history: { nil })
     }
 }
