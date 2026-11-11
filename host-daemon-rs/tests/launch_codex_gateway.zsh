@@ -44,7 +44,7 @@ readonly lsregister="/System/Library/Frameworks/CoreServices.framework/Framework
 readonly fixture_identifier="com.remote-coder.launcher-fixture.$(uuidgen)"
 readonly first_bundle="${scratch}/first version/RemoteCoderGateway.app"
 readonly second_bundle="${scratch}/second version/RemoteCoderGateway.app"
-trap '"${lsregister}" -u "${first_bundle}" "${second_bundle}"; rm -rf "${scratch}"' EXIT
+trap 'for fixture_bundle in "${first_bundle}" "${second_bundle}"; do "${lsregister}" -u "${fixture_bundle}" >/dev/null 2>&1 || :; done; rm -rf "${scratch}"' EXIT
 for fixture_bundle in "${first_bundle}" "${second_bundle}"; do
   mkdir -p "${fixture_bundle:h}"
   cp -R "${repo_root}/host-daemon-rs/RemoteCoderGateway.template" "${fixture_bundle}"
