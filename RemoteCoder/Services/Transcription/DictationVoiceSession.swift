@@ -23,7 +23,7 @@ nonisolated final class DictationVoiceSession: Sendable {
     private let budget: @Sendable (Int) -> Duration
 
     init(state: State, budget: @escaping @Sendable (Int) -> Duration = {
-        min(.seconds(6), .seconds(4) + .milliseconds($0 * 7 / 16_000))
+        min(.seconds(6), .seconds(4) + .milliseconds($0 * 9 / 16_000))
     }) {
         self.state = Mutex(state)
         self.budget = budget

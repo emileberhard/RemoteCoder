@@ -139,21 +139,27 @@ The labelled pass uploads uncompressed 16 kHz mono PCM16: 1.92 MB per minute
 provider's audio. This applies on cellular too. The device-local voice template
 is never uploaded.
 
-Three synthetic dominant-owner dictations through the real gateway, measured
-on an iOS simulator on a Wi-Fi Mac, produced these times in milliseconds:
+Synthetic dominant-owner dictations through the real gateway, measured on an
+iOS simulator on a Wi-Fi Mac, produced these times in milliseconds. The final
+three rows use SpeechKit 0.6.0; the earlier rows measured the same Azure adapter
+before recognition integration:
 
 | Audio seconds | Device-to-relay upload | Labelled completion | Added wait after ordinary text |
 | --- | --- | --- | --- |
 | 78.440 | 115 | 1024 | 617 |
 | 165.640 | 307 | 4134 | 2905 |
 | 340.040 | 460 | 2189 | 694 |
+| 78.440 | 249 | 1822 | 746 |
+| 165.640 | 499 | 1484 | 558 |
+| 340.040 | 746 | 6003 | 4755 |
 
-All three filtered successfully. An earlier 78.440-second request took 117 ms
-to upload, 3664 ms to complete and 224 ms of added wait. These are four requests,
-not a phone or cellular benchmark. The largest upload ratio was 1.85 ms per
-second of audio, rounded up to 2 ms. Added to the provider allowance of
-4 s + 5 ms per audio second, RemoteCoder uses min(6 s, 4 s + 7 ms per audio
-second), counted after the ordinary transcript arrives. Past that budget it
+All six filtered successfully. An earlier 78.440-second request took 117 ms
+to upload, 3664 ms to complete and 224 ms of added wait. These are seven requests,
+not a phone or cellular benchmark. The largest upload ratio was 3.18 ms per
+second of audio, rounded up to 4 ms. Added to the provider allowance of
+4 s + 5 ms per audio second, RemoteCoder uses min(6 s, 4 s + 9 ms per audio
+second), counted after the ordinary transcript arrives. The 6.003-second reply
+added 4.755 seconds after ordinary text and does not require a larger cap. Past that budget it
 delivers the selected provider's text and records a failed check; profile status
 is unchanged. Production diagnostics record upload, completion and added wait
 separately without recording audio or transcript contents.
