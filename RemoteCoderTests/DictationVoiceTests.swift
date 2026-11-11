@@ -66,7 +66,7 @@ struct DictationVoiceTests {
         if refused {
             #expect(result.text == "Selected provider text.")
             #expect(result.transcript.outcome?.path == .failed)
-            #expect(try await waitUntil { voices.status == .unavailable })
+            #expect(await waitUntil { voices.status == .unavailable })
         } else {
             #expect(result.text == "Only my words.")
             #expect(result.transcript.model == TranscriptionModel.azureMAITranscribe2.batchLibraryID)
