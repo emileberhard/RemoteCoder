@@ -3079,8 +3079,12 @@ with up to 512 UTF-8 bytes of the original phrasing and a limit of 20.
 `ConversationSearchProgress` applies answers and the first-paint deadline as
 value transitions off the main actor, alongside query and card preparation.
 A superseded generation cancels its delays and requests and cannot publish a late answer.
-The window retains the query and results when the drawer closes and cancels
-its search when it detaches.
+Closing an overlay drawer suspends the session and cancels its requests
+without publishing another snapshot. The mounted list reads the retained
+`isActive`, query and painted result snapshot, which stay frozen during
+suspension. Reopening reruns the current query only when the last run was
+interrupted. Completed results are reused. Persistent sidebars keep searching,
+and detaching the window cancels its session.
 
 Titles and Messages use the first paint hold of up to 150 ms. An early meaning
 answer joins that paint. Later answers append in provider order inside By

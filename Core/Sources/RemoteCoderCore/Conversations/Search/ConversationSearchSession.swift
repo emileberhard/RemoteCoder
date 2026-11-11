@@ -40,6 +40,9 @@ final class ConversationSearchSession {
     @ObservationIgnored private let hosts: @MainActor () -> [ConversationSearchHost]
     @ObservationIgnored private let clock: any Clock<Duration>
     @ObservationIgnored private var generation: UInt64 = 0
+    private enum Activity { case active, suspended, interrupted }
+
+    @ObservationIgnored private var activity = Activity.active
     @ObservationIgnored private var search: Task<Void, Never>?
     @ObservationIgnored private let logger = AppLogger(category: "ConversationSearch")
 
@@ -78,15 +81,32 @@ final class ConversationSearchSession {
     }
 
     func cancel() {
-        generation &+= 1
-        search?.cancel()
-        search = nil
+        cancelRun()
         if results.status.isSearching { results.status.isSearching = false }
     }
 
-    private func queryChanged() {
+    func suspend() {
+        guard activity == .active else { return }
+        activity = results.status.isSearching ? .interrupted : .suspended
+        cancelRun()
+    }
+
+    func resume() {
+        guard activity != .active else { return }
+        let restart = activity == .interrupted
+        activity = .active
+        if restart { queryChanged() }
+    }
+
+    private func cancelRun() {
         generation &+= 1
         search?.cancel()
+        search = nil
+    }
+
+    private func queryChanged() {
+        cancelRun()
+        guard activity == .active else { activity = .interrupted; return }
         let typed = query
         guard typed.prefix(4 * ConversationSearchQuery.maximumBytes).contains(where: { !$0.isWhitespace }) else {
             search = nil
@@ -112,7 +132,7 @@ final class ConversationSearchSession {
     }
 
     private func isCurrent(_ generation: UInt64) -> Bool {
-        generation == self.generation && !Task.isCancelled
+        activity == .active && generation == self.generation && !Task.isCancelled
     }
 
     private func publish(_ update: ConversationSearchProgress.Publication) {

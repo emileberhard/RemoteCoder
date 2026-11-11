@@ -1471,7 +1471,9 @@ entrypoint linked above.
   rows have no lifted row menu.
 - Conversation search has one owner per window, `ChatWindowModel.search`.
   Preparation, result mapping and merging run off the main actor. Generations
-  fence both keyword and meaning replies. The drawer reads `isActive`, and only
+  fence both keyword and meaning replies. Closing an overlay drawer suspends
+  search without publishing into its retained list; reopening restarts only an
+  interrupted run. Persistent sidebars keep searching. The drawer reads `isActive`, and only
   its search results view reads the result snapshot. ⇧⌘F focuses the Mac sidebar
   field through `ChatCommand`. Message hits and item links use the screen's
   resume task, history window and transcript scroll request. A highlight changes

@@ -335,6 +335,42 @@ struct ConversationSearchSessionTests {
         #expect(meaning.cancelled.isEmpty)
     }
 
+    @Test func suspensionRejectsLateAnswersAndRestartsOnlyAnInterruptedRun() async throws {
+        let meaning = MeaningRequests()
+        let session = session(hosts: [host(mini, "Mini", meaning: meaning.search)])
+        try await ask(session, "drawer", hosts: 1, meaning: true)
+        requests.answer(mini, with: [hit("painted", on: mini)])
+        try #require(await waitUntil { session.results.isPainted })
+        clock.advance(by: .milliseconds(400))
+        try #require(await waitUntil { meaning.queries == ["drawer"] })
+        let retained = session.results
+
+        session.suspend()
+        try #require(await waitUntil { meaning.cancelled == ["drawer"] })
+        meaning.answer("drawer", with: [meaningHit("late")])
+        #expect(!(await waitUntil(timeout: .milliseconds(200)) { session.results != retained }))
+        #expect(session.query == "drawer")
+
+        session.resume()
+        try #require(await waitUntil { clock.sleeperCount == 1 })
+        clock.advance(by: ConversationSearchSession.debounce)
+        try #require(await waitUntil { requests.pendingQueries == ["drawer"] && clock.sleeperCount == 2 })
+        requests.answer(mini, with: [hit("current", on: mini)])
+        clock.advance(by: .milliseconds(400))
+        try #require(await waitUntil { meaning.queries == ["drawer"] })
+        meaning.answer("drawer", with: [])
+        try #require(await waitUntil { !session.results.status.isSearching })
+        #expect(ids(session.results.messages) == ["current"])
+        #expect(requests.sentQueries == ["drawer", "drawer"])
+
+        let complete = session.results
+        session.suspend()
+        session.resume()
+        #expect(!(await waitUntil(timeout: .milliseconds(200)) { requests.sentQueries.count != 2 }))
+        #expect(session.results == complete)
+        #expect(clock.sleeperCount == 0)
+    }
+
     @Test func messageHitsCarryTheExactItemKeyAndTheLongestMatchingFindTerm() throws {
         let response = ConversationSearchResponse(schemaVersion: 1, truncated: false, conversations: [hit("one", on: mini, excerpt: "the drawer flickered")])
         let query = try #require(ConversationSearchQuery("drawer flicker absent"))

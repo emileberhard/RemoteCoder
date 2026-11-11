@@ -773,6 +773,8 @@ private struct ChatScreen: View {
     }
 
     private func drawerOpenChanged(_ open: Bool) {
+        if open || usesPersistentSidebar { window.search.resume() }
+        else { window.search.suspend() }
         logger.notice("drawer state open=\(open) view=\(viewID) window=\(window.logID)")
         #if os(iOS)
         layoutRecorder?.drawerChanged(open)
@@ -985,6 +987,7 @@ private struct ChatScreen: View {
 
     private func closeHistoryDrawer() {
         guard !usesPersistentSidebar else { return }
+        window.search.suspend()
         drawerPresentation.isOpen = false
     }
 
@@ -1007,7 +1010,7 @@ private struct DrawerOpenChange: ViewModifier {
     let action: (Bool) -> Void
 
     func body(content: Content) -> some View {
-        content.onChange(of: presentation.isOpen) { _, open in action(open) }
+        content.onChange(of: presentation.isOpen, initial: true) { _, open in action(open) }
     }
 }
 
