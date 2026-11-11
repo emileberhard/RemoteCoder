@@ -20,23 +20,6 @@ struct TranscriptionSettingsSection: View {
             .drillDownPickerStyle()
             .disabled(library?.isSavingSettings == true)
 
-            Picker("Voices", selection: Binding(
-                get: { settings.voices(for: selectedModel) },
-                set: { settings.setVoices($0) }
-            ).nativeSelectionFeedback()) {
-                ForEach(DictationVoiceSelection.allCases) { selection in Text(selection.title).tag(selection) }
-            }
-            .drillDownPickerStyle()
-            if settings.voices(for: selectedModel) == .onlyMine {
-                LabeledContent("My Voice", value: voices.status.rawValue)
-                if selectedModel != .azureMAITranscribe2 {
-                    Text("When another voice is heard, audio is also sent to Azure through your gateway. Filtered text comes from Azure.")
-                        .scaledFont(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                Button("Forget My Voice", role: .destructive) { Task { await voices.forget() } }
-            }
-
             Picker("Model", selection: modelSelection.nativeSelectionFeedback()) {
                 ForEach(selectedModel.provider.models) { model in
                     VStack(alignment: .leading, spacing: 2) {
@@ -74,6 +57,23 @@ struct TranscriptionSettingsSection: View {
                 }
                 .drillDownPickerStyle()
             }
+            Picker("Voices", selection: Binding(
+                get: { settings.voices(for: selectedModel) },
+                set: { settings.setVoices($0) }
+            ).nativeSelectionFeedback()) {
+                ForEach(DictationVoiceSelection.allCases) { selection in Text(selection.title).tag(selection) }
+            }
+            .drillDownPickerStyle()
+            if settings.voices(for: selectedModel) == .onlyMine {
+                LabeledContent("My Voice", value: voices.status.rawValue)
+                if selectedModel != .azureMAITranscribe2 {
+                    Text("When another voice is heard, audio is also sent to Azure through your gateway. Filtered text comes from Azure.")
+                        .scaledFont(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Button("Forget My Voice", role: .destructive) { Task { await voices.forget() } }
+            }
+
             if let library {
                 @Bindable var library = library
                 Toggle("Use WisprClone Library", isOn: $library.isEnabled)

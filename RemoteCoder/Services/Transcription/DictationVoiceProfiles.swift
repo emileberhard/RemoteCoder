@@ -13,7 +13,9 @@ final class DictationVoiceProfiles {
         case unavailable = "Unavailable"
     }
 
-    private(set) var status = Status.learning
+    private var isTrusted = false
+    private var routeUnavailable = false
+    var status: Status { routeUnavailable ? .unavailable : isTrusted ? .learned : .learning }
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let store: VoiceProfileStore
     @ObservationIgnored private var appliedForget = Date.distantPast
@@ -40,7 +42,7 @@ final class DictationVoiceProfiles {
                 try await applyForget()
                 let profile = try await store.profile()
                 try Task.checkCancellation()
-                if status != .unavailable { status = profile.isTrusted ? .learned : .learning }
+                isTrusted = profile.isTrusted
             } catch is CancellationError {
             } catch { failed(error) }
         }
@@ -55,11 +57,8 @@ final class DictationVoiceProfiles {
     }
 
     func checked(_ result: VoiceCheckResult) {
-        if result.outcome.path == .failed { status = .unavailable }
-        else {
-            if result.labelledReplyTime != nil { status = .learning }
-            refresh()
-        }
+        if result.labelledReplyTime != nil { routeUnavailable = false }
+        refresh()
     }
 
     func forget() async {
@@ -68,7 +67,7 @@ final class DictationVoiceProfiles {
         do {
             historyTask?.cancel()
             try await applyForget()
-            status = .learning
+            isTrusted = false
         } catch { failed(error) }
     }
 
@@ -94,8 +93,18 @@ final class DictationVoiceProfiles {
     }
 
     func failed(_ error: any Error, stage: VoiceFilterStage = .filter) {
-        status = .unavailable
+        if stage == .filter, Self.routeRefused(error) { routeUnavailable = true }
         logger.error("Optional voice check failed stage=\(stage.rawValue) error=\(String(reflecting: type(of: error)))")
+    }
+
+    private static func routeRefused(_ error: any Error) -> Bool {
+        switch error {
+        case SpeechKitError.relayRejected(let kind):
+            ["unavailable", "unauthorized", "authenticationUnavailable", "notPermitted", "operationNotAllowed", "credentialsUnavailable", "upstreamRejected"].contains(kind)
+        case SpeechKitError.httpFailure(let status, _): [401, 403, 404].contains(status)
+        case is GatewaySpeechFailure: true
+        default: false
+        }
     }
 
     private var forgottenAt: Date {

@@ -225,6 +225,11 @@ extension GatewaySpeechAccess {
 }
 
 struct StubTranscriber: TranscriptionService {
+    @concurrent func speakerPhrases(_ pcm16: Data, configuration: TranscriptionConfiguration,
+        uploadFinished: @escaping @Sendable (Duration) -> Void) async throws -> [SpeakerPhrase] {
+        throw SpeechKitError.invalidRequest("No speaker request expected")
+    }
+
     let text: String
 
     func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription? { nil }

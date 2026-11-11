@@ -184,9 +184,9 @@ final class VoiceInputController {
         }
         self.active = nil
         if let recognition = active.recognition {
-            let service = RemoteCoderTranscriptionService(access: access)
+            let transcriber = transcriber
             await recognition.finish { pcm, uploaded in
-                try await service.speakerPhrases(pcm, configuration: active.configuration, uploadFinished: uploaded)
+                try await transcriber.speakerPhrases(pcm, configuration: active.configuration, uploadFinished: uploaded)
             }
         }
         if let archive = active.archive { library?.finish(archive) }
@@ -299,9 +299,9 @@ final class VoiceInputController {
                 everyoneModel: original.everyoneModel, outcome: .failed)
         }
         do {
-            let result = try await recognition.resolve(original, waitingUpTo: recognition.waitBudget)
+            let result = try await recognition.resolve(original)
             if let check = result.result { voices?.checked(check) }
-            else { voices?.failed(CocoaError(.coderInvalidValue)) }
+            else { voices?.failed(DictationVoiceSession.Failure.recognitionFormatUnavailable) }
             let upload = result.upload.map { String(Self.milliseconds($0)) } ?? "unknown"
             let completion = result.result?.labelledReplyTime.map { String(Self.milliseconds($0)) } ?? "unknown"
             VoiceModeDiagnostics.log("dictation voice check outcome=\(result.transcript.outcome?.path.rawValue ?? "unknown") upload_ms=\(upload) labelled_reply_ms=\(completion) added_wait_ms=\(Self.milliseconds(result.wait))")

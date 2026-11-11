@@ -30,7 +30,7 @@ struct TranscriptionIntegrationTests {
                 try await service.speakerPhrases(pcm, configuration: configuration, uploadFinished: uploaded)
             }
             let original = try await service.transcribe(recording, configuration: configuration)
-            let result = try await check.resolve(original, waitingUpTo: check.waitBudget)
+            let result = try await check.resolve(original)
             #expect(!result.transcript.text.isEmpty)
             #expect(result.transcript.everyone == original.text)
             #expect(result.transcript.removedVoices)
@@ -227,6 +227,11 @@ private final class ProgressiveFixtureRecorder: VoiceInputRecording {
 }
 
 private final class AzureTimingTranscriber: TranscriptionService {
+    @concurrent func speakerPhrases(_ pcm16: Data, configuration: TranscriptionConfiguration,
+        uploadFinished: @escaping @Sendable (Duration) -> Void) async throws -> [SpeakerPhrase] {
+        try await service.speakerPhrases(pcm16, configuration: configuration, uploadFinished: uploadFinished)
+    }
+
     private let service: RemoteCoderTranscriptionService
     private let observed = Mutex<[TranscriptionModel]>([])
     var models: [TranscriptionModel] { observed.withLock { $0 } }

@@ -408,6 +408,11 @@ private final class HeldStopRecorder: VoiceInputRecording {
 }
 
 private final class HeldRecoveryTranscriber: TranscriptionService {
+    @concurrent func speakerPhrases(_ pcm16: Data, configuration: TranscriptionConfiguration,
+        uploadFinished: @escaping @Sendable (Duration) -> Void) async throws -> [SpeakerPhrase] {
+        throw SpeechKitError.invalidRequest("No speaker request expected")
+    }
+
     private let gate = HeldRecoveryGate()
     var isHeld: Bool { get async { await gate.isHeld } }
     func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription? { nil }
@@ -495,6 +500,11 @@ private struct UnreachableRealtimeSession: RealtimeTranscriptionSession {
 }
 
 private final class ScriptedTranscriber: TranscriptionService {
+    @concurrent func speakerPhrases(_ pcm16: Data, configuration: TranscriptionConfiguration,
+        uploadFinished: @escaping @Sendable (Duration) -> Void) async throws -> [SpeakerPhrase] {
+        throw SpeechKitError.invalidRequest("No speaker request expected")
+    }
+
     struct Failure: Error {}
 
     private let session: (any RealtimeTranscriptionSession)?

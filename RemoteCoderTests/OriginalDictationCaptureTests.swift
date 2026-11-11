@@ -68,7 +68,7 @@ struct OriginalDictationCaptureTests {
         session.append(fixture.mix)
         await session.finish { _, _ in fixture.phrases }
         let original = DictationTranscript(text: "Every selected-provider word.", model: "openai/selected")
-        let filtered = try await session.resolve(original, waitingUpTo: .seconds(5))
+        let filtered = try await session.resolve(original)
         #expect(filtered.transcript.removedVoices)
         let delivered = try await library.result(filtered.transcript, recordingID: capture.id, plan: capture.plan, access: .fixture)
         #expect(delivered.text == "Only my words.")
@@ -160,6 +160,11 @@ private final class NativeFixtureVoiceRecorder: VoiceInputRecording {
 }
 
 private final class ArchiveFixtureTranscriber: TranscriptionService {
+    @concurrent func speakerPhrases(_ pcm16: Data, configuration: TranscriptionConfiguration,
+        uploadFinished: @escaping @Sendable (Duration) -> Void) async throws -> [SpeakerPhrase] {
+        throw SpeechKitError.invalidRequest("No speaker request expected")
+    }
+
     private let recorded = Mutex<[UUID]>([])
     var recordingIDs: [UUID] { recorded.withLock { $0 } }
 

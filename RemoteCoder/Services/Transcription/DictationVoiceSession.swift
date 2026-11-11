@@ -9,11 +9,16 @@ nonisolated final class DictationVoiceSession: Sendable {
     private let uploadTime = Mutex<Duration?>(nil)
     private let captureFailed = Mutex(false)
 
-    init(check: VoiceCheck) { self.check = check }
+    private let budget: @Sendable (Int) -> Duration
 
-    var waitBudget: Duration {
-        min(.seconds(6), .seconds(4) + .milliseconds(audio.sampleCount * 8 / 16_000))
+    init(check: VoiceCheck, budget: @escaping @Sendable (Int) -> Duration = {
+        min(.seconds(6), .seconds(4) + .milliseconds($0 * 8 / 16_000))
+    }) {
+        self.check = check
+        self.budget = budget
     }
+
+    enum Failure: Error { case recognitionFormatUnavailable }
 
     func invalidate() { captureFailed.withLock { $0 = true }; audio.release() }
 
@@ -30,7 +35,7 @@ nonisolated final class DictationVoiceSession: Sendable {
         }
     }
 
-    func resolve(_ original: DictationTranscript, waitingUpTo budget: Duration) async throws
+    func resolve(_ original: DictationTranscript) async throws
         -> (transcript: DictationTranscript, result: VoiceCheckResult?, upload: Duration?, wait: Duration) {
         defer { audio.release() }
         try Task.checkCancellation()
@@ -39,7 +44,7 @@ nonisolated final class DictationVoiceSession: Sendable {
                 everyoneModel: original.everyoneModel, outcome: .failed), nil, nil, .zero)
         }
         let started = ContinuousClock.now
-        let result = try await check.resolve(everyone: original.text, waitingUpTo: budget)
+        let result = try await check.resolve(everyone: original.text, waitingUpTo: budget(audio.sampleCount))
         let transcript = DictationTranscript(text: result.text, everyone: original.text,
             model: result.outcome.droppedCount > 0 ? TranscriptionModel.azureMAITranscribe2.batchLibraryID : original.model,
             everyoneModel: original.model, outcome: result.outcome)
