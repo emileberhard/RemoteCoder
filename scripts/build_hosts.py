@@ -4,6 +4,7 @@ from pathlib import Path
 from maintainer_config import load
 
 MAC_GUI_HOST = load().get("macGUIHost", "local")
+MAC_BENCH_HOST = load().get("macBenchHost", "local")
 TEST_DEVICE_HOST = load().get("testDeviceHost", "local")
 
 

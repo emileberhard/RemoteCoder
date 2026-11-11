@@ -124,18 +124,19 @@ class RemoteBuildTests(unittest.TestCase):
             ):
                 module.ios_device_variant(options)
 
-    def test_builds_default_to_the_build_host_and_mac_app_installs_to_the_macbook(self):
+    def test_builds_default_to_the_build_host_and_mac_apps_to_their_own_hosts(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "scripts").mkdir()
             (root / "scripts/build-host").write_text("fixture-builder\n")
             with (patch.object(module, "ROOT", root),
                   patch.object(module.build_hosts, "load", return_value={}),
-                  patch.object(module.build_hosts, "MAC_GUI_HOST", "laptop")):
+                  patch.object(module.build_hosts, "MAC_GUI_HOST", "laptop"),
+                  patch.object(module.build_hosts, "MAC_BENCH_HOST", "bench")):
                 for kind in ("ios-install", "ios-build", "verify", "verify-all", "gateway", "core-test"):
                     self.assertEqual(module.selected_build_host(kind, {}), "fixture-builder")
-                for kind in ("mac-install", "mac-bench"):
-                    self.assertEqual(module.selected_build_host(kind, {}), module.build_hosts.MAC_GUI_HOST)
+                self.assertEqual(module.selected_build_host("mac-install", {}), "laptop")
+                self.assertEqual(module.selected_build_host("mac-bench", {}), "bench")
                 explicit = {"RC_IOS_BUILD_HOST": "fixture-phone-builder", "RC_GATEWAY_BUILD_HOST": "fixture-other"}
                 self.assertEqual(module.selected_build_host("ios-install", explicit), "fixture-phone-builder")
                 self.assertEqual(module.selected_build_host("verify-all", explicit), "fixture-phone-builder")

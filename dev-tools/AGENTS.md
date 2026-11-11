@@ -443,40 +443,46 @@ fixture’s external-network and HTML omissions.
 
 `mac-bench` measures Mac transcript scrolling and streaming with `RC_PERF_HARNESS`
 in a Release-configuration build.
-`build` builds only on the GUI test host and returns the signed app; `install` replaces
-`/Applications/RemoteCoder.app`. App runs and tests use the GUI test host; the services
-primary host is off-limits for GUI work. Hold the GUI test host app lease, require HID idle of
-at least 120 seconds immediately before each launch. `run` queues behind a
+`build` builds only on the bench host and returns the signed app; `install` replaces
+`/Applications/RemoteCoder.app` there. The bench host is its own role, maintainer
+`macBenchHost` or `--bench-host`: `macGUIHost` remains the Mac where `install-mac`
+puts a build for the user to try. A run starts only on an unused bench host: no
+process named in maintainer `macBenchBusyProcesses` is running, and HID idle is
+at least 120 seconds immediately before each launch. An unreadable process state
+counts as in use. Hold the bench host app lease. `run` queues behind a
 bounded drain reservation, then owns both compiler slots through capture copy
 and app cleanup; do not acquire those slots separately. Benchmark launches use
 their own AppStorageScope for defaults and files, an isolated
-GUI test host HostStore and transient credentials; never capture or restore production
+bench gateway HostStore and transient credentials; never capture or restore production
 preferences around a bench run. Use only throwaway conversations and harness
-fixtures. Never change the GUI test host display mode.
+fixtures. Never change the bench host display mode.
 
 `build --lab-config /absolute/book/lab/config.json` opts into a private loopback
-gateway configuration already on the GUI test host. The file and its parent directory
+gateway configuration already on the bench host. The file and its parent directory
 must be owned by the invoking user and inaccessible to other users; it must name
 127.0.0.1, an explicit port and a gateway token, with no primary host host or provider
 credentials. The isolated-gateway probe owner must already be running and have
 written its private metadata; port, token fingerprint and retained process
 identity must match. The lab must be outside all Git worktrees, source snapshots
 and RemoteCoder build caches. The caller checks placement and validates on the
-GUI test host before source snapshotting; install-mac revalidates there before building.
+bench host before source snapshotting; `scripts/install-mac --bench` revalidates there before building.
 It fails closed on invalid input. The signed app
 remains in that lab directory and is not copied back to the calling host; pass
-its returned path explicitly to `install --app` on the GUI test host. The lab owner
+its returned path explicitly to `install --app` on the bench host. The lab owner
 removes it with the rest of the lab after testing. Default bench builds keep
 using the canonical development configuration; release configuration is unchanged.
 
 `display` reports the current mode without changing it.
 `run` refuses a preexisting running app and leaves it untouched on idle denial.
-Use the explicit `quit` command under the GUI lease before a new measurement;
-it requires an idle GUI test host. TERM, HUP and INT unwind the run's resource owner,
+Use the explicit `quit` command under the app lease before a new measurement;
+it requires an unused bench host. TERM, HUP and INT unwind the run's resource owner,
 publish its terminal status and restore the caller's signal handlers.
-The default gateway is GUI test host; other gateway identities, including primary host, are
-rejected. Runs also require the isolated GUI test host HostStore factory before workspace
-bootstrap. A missing bundled GUI test host seed must fail closed; never fall back to a
+The bench gateway is the bundled secondary gateway seed (`macBenchmarkGatewayId`),
+whichever Mac is the bench host; other gateway identities, including primary host, are
+rejected, so a benchmark never drives the production gateway. A journey that opens a
+real conversation reads it from that gateway, which must be reachable from the bench
+host. Runs also require the isolated bench HostStore factory before workspace
+bootstrap. A missing bundled seed must fail closed; never fall back to a
 persisted primary host host.
 `run --thread ID --label NAME` saves the plan, report, capture and `summary.json`
 under `~/Library/Caches/RemoteCoder-Build/runs/mac-bench-<run-id>/`, outside the
@@ -504,7 +510,7 @@ gateway's own identity mid-measurement. A transcript container keeps the first
 conversation address it presents; SwiftUI updates the outgoing container once
 with the next conversation's environment before detaching it. Each run requires `--expected-display WIDTHxHEIGHT@HZ/SCALE`
 (default `2560x1440@120/1`), checks it before launch and after measurement,
-and records the app's screen dimensions/scale/refresh. Read the GUI test host's current
+and records the app's screen dimensions/scale/refresh. Read the bench host's current
 mode and supply it explicitly. Compare only runs from the same host and mode.
 Batch analysis and repeated-run spreads reject different
 or unknown display modes and mismatched measured cadence. `analyze RUN_DIR...`

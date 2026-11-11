@@ -84,7 +84,7 @@ def record_gateway(root: Path, port: int, token_sha256: str, executable: Path, p
 def load_config(path: Path, snapshot_root: Path, validate_fields: Callable[[bytes], None]) -> LabConfiguration:
     try:
         if not path.is_absolute():
-            raise LabConfigError("Supply an absolute MacBook lab configuration path.")
+            raise LabConfigError("Supply an absolute lab configuration path on the bench host.")
         reject_unsafe_location(path.parent, snapshot_root)
         path = path.resolve(strict=True)
         root = path.parent
@@ -94,7 +94,7 @@ def load_config(path: Path, snapshot_root: Path, validate_fields: Callable[[byte
         configuration = json.loads(data)
         token = configuration.get("codexGatewayAuthToken")
         if configuration.get("macBookHostname") != "127.0.0.1" or configuration.get("macMiniHostname") not in (None, ""):
-            raise LabConfigError("The lab configuration must name only its MacBook loopback gateway.")
+            raise LabConfigError("The lab configuration must name only its loopback bench gateway.")
         if any(configuration.get(key) is not None and not isinstance(configuration[key], str)
                for key in ("codexWorkdir", "googleMapsAPIKey")):
             raise LabConfigError("Lab configuration string fields are invalid.")

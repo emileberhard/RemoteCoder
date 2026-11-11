@@ -19,7 +19,7 @@ from remotecoder_tools import mac_bench
 @pytest.fixture(autouse=True)
 def benchmark_operator_settings(monkeypatch):
     monkeypatch.setattr(mac_bench, "maintainer_settings", lambda: {
-        "macGUIHost": "gui-host", "macBenchmarkGatewayId": "11111111-2222-4333-8444-555555555555",
+        "macBenchHost": "bench-host", "macBenchmarkGatewayId": "11111111-2222-4333-8444-555555555555",
     })
 
 
@@ -305,7 +305,7 @@ observed = {
         return spawn([sys.executable, "-c", probe, str(tmp_path)], **kwargs)
 
     monkeypatch.setattr(mac_bench.subprocess, "run", launch)
-    monkeypatch.setattr(mac_bench, "require_hid_idle", lambda: None)
+    monkeypatch.setattr(mac_bench, "require_unused_host", lambda: None)
     monkeypatch.setattr(mac_bench, "running_pids", lambda: [])
     monkeypatch.setattr(mac_bench, "quit_app", lambda: None)
     monkeypatch.setattr(mac_bench.time, "sleep", lambda _: None)
@@ -349,7 +349,7 @@ def test_cli_queues_the_measurement_without_losing_options_or_stdout(
     app = build_cache / "fixture.app"
     app.mkdir(parents=True)
     monkeypatch.setattr(mac_bench, "TARGET", app)
-    monkeypatch.setattr(mac_bench, "require_gui_host", lambda args: None)
+    monkeypatch.setattr(mac_bench, "require_bench_host", lambda args: None)
     captured = []
 
     def connected(command):
@@ -403,7 +403,7 @@ def test_reservation_rejects_unbounded_measurements(runs, timeout, sample):
 
 
 def test_internal_measurement_requires_an_active_reservation(monkeypatch):
-    monkeypatch.setattr(mac_bench, "require_gui_host", lambda args: None)
+    monkeypatch.setattr(mac_bench, "require_bench_host", lambda args: None)
     monkeypatch.delenv("RC_MEASUREMENT_RECEIPT", raising=False)
     with pytest.raises(SystemExit, match="acquire the measurement reservation"):
         mac_bench.run_admitted(argparse.Namespace())
@@ -439,7 +439,7 @@ def test_running_installed_app_is_preserved_when_a_measurement_is_refused(
     monkeypatch.setattr(mac_bench, "quit_app", quit_app)
     monkeypatch.setattr(mac_bench, "run_command", launch)
     monkeypatch.setattr(mac_bench, "running_pids", lambda: [42])
-    monkeypatch.setattr(mac_bench, "require_hid_idle", lambda: None)
+    monkeypatch.setattr(mac_bench, "require_unused_host", lambda: None)
     args = argparse.Namespace(expected_display={}, disable=None, mount_cap=None, scrollbars=None)
     with pytest.raises(SystemExit, match="already running"):
         with mac_bench.bench_output({"label": "running"}) as output:

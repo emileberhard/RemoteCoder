@@ -127,7 +127,6 @@ IOS_KINDS = frozenset(
     )
 )
 UNSIGNED_WORKER_KINDS = frozenset(KINDS) - {"ios-install"}
-MAC_APP_KINDS = frozenset(("mac-install", "mac-bench"))
 
 
 def selected_build_host(kind: str, environment) -> str:
@@ -136,7 +135,12 @@ def selected_build_host(kind: str, environment) -> str:
         if kind.startswith("ios-") or kind == "verify-all"
         else "RC_GATEWAY_BUILD_HOST"
     )
-    default = build_hosts.MAC_GUI_HOST if kind in MAC_APP_KINDS else build_hosts.build_host(ROOT)
+    if kind == "mac-install":
+        default = build_hosts.MAC_GUI_HOST
+    elif kind == "mac-bench":
+        default = build_hosts.MAC_BENCH_HOST
+    else:
+        default = build_hosts.build_host(ROOT)
     return environment.get(variable, default)
 
 LAB_VALIDATION = """import json,pathlib,sys,types
@@ -158,7 +162,7 @@ def validate_lab_request(arguments: list[str], shell: list[str]) -> None:
     if path is None:
         return
     if not path.is_absolute():
-        raise ValueError("Lab configuration needs an absolute MacBook path.")
+        raise ValueError("Lab configuration needs an absolute path on the bench host.")
     reject_unsafe_location(path.parent, ROOT)
     files = {"process_group": "process_group.py", "release_config": "release-config.py", "bench_lab": "bench_lab.py"}
     payload = {"config": str(path), "snapshotRoot": str(ROOT),
@@ -166,7 +170,7 @@ def validate_lab_request(arguments: list[str], shell: list[str]) -> None:
     result = subprocess.run([*shell, shlex.join(["python3", "-c", LAB_VALIDATION])],
                             input=json.dumps(payload), capture_output=True, text=True, timeout=30, check=False)
     if result.returncode != 0 or result.stdout.strip() != '{"validated": true}':
-        raise ValueError("MacBook lab validation failed; start the isolated gateway owner and check the private configuration.")
+        raise ValueError("Bench host lab validation failed; start the isolated gateway owner and check the private configuration.")
 
 
 def fingerprint(root: Path, files: list[str]) -> str:

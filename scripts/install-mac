@@ -150,7 +150,7 @@ def main() -> None:
                         help="build the RC_PERF_HARNESS app with this host's development configuration and leave the "
                         "signed app in the run directory for dev-tools/mac-bench instead of installing it")
     parser.add_argument("--lab-config", type=Path,
-                        help="bench only: use this private MacBook loopback configuration and keep the signed app "
+                        help="bench only: use this private bench host loopback configuration and keep the signed app "
                         "in its lab directory")
     args = parser.parse_args()
     if args.lab_config is not None and not args.bench:

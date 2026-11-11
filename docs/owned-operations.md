@@ -345,7 +345,8 @@ Plain `just` lists commands. `just install-dev`, `just gateway-candidate`,
 `just core-test`, `just gateway-check`, `just gateway-test <filter>`, `just test`,
 `just verify` and `just verify-all` snapshot source for the configured builder,
 `scripts/build-host`, which defaults to the local machine. `just install-mac`
-and `mac-bench` use the configured GUI host, which they install on and measure.
+uses the configured GUI host and `mac-bench` the configured bench host: each
+builds on the host it installs on.
 There is no implicit fallback after a builder fails. `RC_IOS_BUILD_HOST` (iOS
 kinds, `verify-all`) or `RC_GATEWAY_BUILD_HOST` (the other kinds) set to `local` or a
 host, such as `<gui-test-host>`, selects a builder through the same worker, capacity and
@@ -531,7 +532,7 @@ epoch returns absent, and permission/API failures remain errors. External caller
 use `signal_process(identity, signal)` or `terminate_process(identity)`, never a
 PID-only lookup followed by signaling.
 
-Keep the separate configured GUI lease and idle checks. Do not wrap `mac-bench run`
+Keep the separate app lease and the bench host's in-use checks. Do not wrap `mac-bench run`
 in an external compiler-slot holder: the CLI now acquires those slots itself.
 Adopt this protocol after older build workers and manual slot holders exit;
 workers predating the admission gate cannot participate in its drain guarantee.
@@ -828,10 +829,10 @@ before compiling; `/Applications/RemoteCoder.app` is never a signing reference.
 development allowlist and does not replace the copied release configuration.
 Readers and release pruning share `release-reference.lock`; pruning retains three
 versions and protects releases used or modified within 48 hours. After a GUI test
-window, `python3 scripts/release-cache.py restore` restores the newest
+or bench window, `python3 scripts/release-cache.py restore` restores the newest
 verified public Mac release through the existing app lease and installer. It
-does not install on the iPhone. Run it on the GUI test host under the authorized GUI
-test protocol. Mac install skipping requires a verified matching signed digest,
+does not install on the iPhone. Run it on the host that ran the test, under the
+authorized GUI test protocol. Mac install skipping requires a verified matching signed digest,
 so a bench app with the same version is still replaced.
 
 Codex packaging uses `scripts/codex-build.py` from either Mac. It negotiates

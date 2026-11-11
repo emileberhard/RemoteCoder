@@ -14,7 +14,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from build_cache import lease_path, touch_usage
-from build_hosts import MAC_GUI_HOST, is_local
+from build_hosts import MAC_BENCH_HOST, is_local
 from build_support import (
     MAX_MEASUREMENT_SECONDS,
     atomic_json,
@@ -356,8 +356,8 @@ def main():
     parser.add_argument("--hold-seconds", type=float, required=True)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
-    if not is_local(MAC_GUI_HOST):
-        parser.error(f"Measurements require {MAC_GUI_HOST}")
+    if not is_local(MAC_BENCH_HOST):
+        parser.error(f"Measurements require {MAC_BENCH_HOST}")
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("a measured command is required")

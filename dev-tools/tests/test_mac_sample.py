@@ -12,7 +12,7 @@ from remotecoder_tools.mac_sample import focus_sample, read_sample, summarize_sa
 @pytest.fixture(autouse=True)
 def benchmark_operator_settings(monkeypatch):
     monkeypatch.setattr(mac_bench, "maintainer_settings", lambda: {
-        "macGUIHost": "gui-host", "macBenchmarkGatewayId": "11111111-2222-4333-8444-555555555555",
+        "macBenchHost": "bench-host", "macBenchmarkGatewayId": "11111111-2222-4333-8444-555555555555",
     })
 
 

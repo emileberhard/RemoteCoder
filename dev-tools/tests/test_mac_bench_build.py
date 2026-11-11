@@ -26,7 +26,7 @@ def test_build_cli_refuses_a_relative_lab_path_before_submitting(monkeypatch):
     monkeypatch.setattr(mac_bench.subprocess, "run", run)
     monkeypatch.setattr(sys, "argv", ["mac-bench", "build", "--lab-config", str(Path("config.json"))])
 
-    with pytest.raises(SystemExit, match="absolute path on the MacBook"):
+    with pytest.raises(SystemExit, match="absolute path on the bench host"):
         mac_bench.main()
 
     run.assert_not_called()

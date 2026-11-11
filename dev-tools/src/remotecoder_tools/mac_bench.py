@@ -1,6 +1,6 @@
-"""Measure transcript scrolling in the Mac app on the MacBook.
+"""Measure transcript scrolling in the Mac app on the bench host.
 
-`build` compiles and signs the `RC_PERF_HARNESS` app on the MacBook
+`build` compiles and signs the `RC_PERF_HARNESS` app on the bench host
 (`scripts/remote-build.py mac-bench`) and returns it here; `install` places it in
 /Applications. `run` launches it with a scroll plan: the app opens one
 conversation, synthesizes trackpad gestures with momentum from a wall-clock-paced
@@ -96,7 +96,7 @@ def build(args: argparse.Namespace) -> None:
     arguments = []
     if args.lab_config is not None:
         if not args.lab_config.is_absolute():
-            raise SystemExit("--lab-config must be an absolute path on the MacBook")
+            raise SystemExit("--lab-config must be an absolute path on the bench host")
         arguments = ["--lab-config", str(args.lab_config)]
     result = subprocess.run([sys.executable, "scripts/remote-build.py", "mac-bench", *arguments], cwd=ROOT,
                             stdout=subprocess.PIPE, text=True)
@@ -115,7 +115,7 @@ def latest_build() -> Path:
 
 
 def install(args: argparse.Namespace) -> None:
-    require_gui_host(args)
+    require_bench_host(args)
     app = args.app or latest_build()
     run_command(["codesign", "--verify", "--deep", "--strict", str(app)])
     quit_app()
@@ -158,7 +158,7 @@ def plan(args: argparse.Namespace, label: str) -> dict:
     try:
         host = str(uuid.UUID(host)).upper()
     except (ValueError, TypeError, AttributeError):
-        raise SystemExit("Set --host UUID or maintainer macBenchmarkGatewayId to the GUI host gateway UUID") from None
+        raise SystemExit("Set --host UUID or maintainer macBenchmarkGatewayId to the bench gateway UUID") from None
     if args.fixture == "cold-table" and (args.stream is not None or args.check_interaction or args.pattern == "idle"):
         raise SystemExit("--fixture requires scrolling with no stream or interaction check")
     if args.fixture == "horizontal-overflow" or args.check_interaction == "horizontal-displacement":
@@ -239,25 +239,34 @@ def maintainer_settings() -> dict:
     return load()
 
 
-def require_gui_host(args: argparse.Namespace) -> None:
-    expected = args.gui_host or maintainer_settings().get("macGUIHost")
+def require_bench_host(args: argparse.Namespace) -> None:
+    expected = args.bench_host or maintainer_settings().get("macBenchHost")
     if not isinstance(expected, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,62}", expected):
-        raise SystemExit("Set --gui-host or maintainer macGUIHost to the dedicated GUI host")
+        raise SystemExit("Set --bench-host or maintainer macBenchHost to the bench host")
     host = subprocess.check_output(["scutil", "--get", "LocalHostName"], text=True).strip()
     if host.lower() != expected.lower():
-        raise SystemExit(f"Mac app installs and benchmark runs require the configured GUI host: {expected}")
+        raise SystemExit(f"Bench installs and runs require the configured bench host: {expected}")
 
 
-def require_hid_idle() -> None:
+def require_unused_host() -> None:
+    busy = maintainer_settings().get("macBenchBusyProcesses", [])
+    if not isinstance(busy, list) or not all(isinstance(name, str) and name for name in busy):
+        raise SystemExit("Maintainer macBenchBusyProcesses must list process names")
+    for name in busy:
+        status = subprocess.run(["/usr/bin/pgrep", "-x", name], stdout=subprocess.DEVNULL).returncode
+        if status == 0:
+            raise SystemExit(f"The bench host is in use: {name} is running")
+        if status != 1:
+            raise SystemExit(f"Cannot establish whether {name} is running on the bench host")
     idle = subprocess.check_output(["ioreg", "-c", "IOHIDSystem"], text=True)
     idle_time = re.search(r'"HIDIdleTime" = (\d+)', idle)
     if idle_time is None or int(idle_time[1]) < 120_000_000_000:
-        raise SystemExit("MacBook HID idle must be at least 120 seconds immediately before launch")
+        raise SystemExit("Bench host HID idle must be at least 120 seconds immediately before launch")
 
 
 def quit_installed_app(args: argparse.Namespace) -> None:
-    require_gui_host(args)
-    require_hid_idle()
+    require_bench_host(args)
+    require_unused_host()
     quit_app()
 
 
@@ -274,7 +283,7 @@ def measurement_hold_seconds(args: argparse.Namespace) -> float:
 
 
 def run(args: argparse.Namespace) -> None:
-    require_gui_host(args)
+    require_bench_host(args)
     if not TARGET.exists():
         raise SystemExit(f"{TARGET} is missing; run `mac-bench install`")
     hold = measurement_hold_seconds(args)
@@ -293,7 +302,7 @@ def run(args: argparse.Namespace) -> None:
 
 
 def run_admitted(args: argparse.Namespace) -> None:
-    require_gui_host(args)
+    require_bench_host(args)
     receipt_path = os.environ.get("RC_MEASUREMENT_RECEIPT")
     if receipt_path is None:
         raise SystemExit("Use `mac-bench run` to acquire the measurement reservation")
@@ -415,10 +424,10 @@ def measure_run(args: argparse.Namespace, bench: dict, output: Path) -> dict:
     if args.scrollbars:
         launch += ["-AppleShowScrollBars", args.scrollbars]
     started = time.monotonic()
-    require_hid_idle()
+    require_unused_host()
     if running_pids():
         raise SystemExit("RemoteCoder is already running; use `mac-bench quit` before starting a measurement")
-    require_hid_idle()
+    require_unused_host()
     sampler = None
     environment = {name: os.environ[name] for name in (
         "HOME", "USER", "LOGNAME", "TMPDIR", "__CF_USER_TEXT_ENCODING", "LANG", "LC_CTYPE", "LC_ALL",
@@ -795,17 +804,17 @@ def profile(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
-    building = commands.add_parser("build", help="build and sign the bench app on the MacBook and return it")
+    building = commands.add_parser("build", help="build and sign the bench app on the bench host and return it")
     building.add_argument("--lab-config", type=Path,
-                          help="private configuration on the MacBook for an isolated loopback gateway; the signed "
+                          help="private configuration on the bench host for an isolated loopback gateway; the signed "
                           "app stays in that lab directory")
     building.set_defaults(handler=build)
     installing = commands.add_parser("install", help="install the newest returned bench app into /Applications")
     installing.add_argument("--app", type=Path)
-    installing.add_argument("--gui-host")
+    installing.add_argument("--bench-host")
     installing.set_defaults(handler=install)
-    quitting = commands.add_parser("quit", help="explicitly quit the installed app on the idle GUI host")
-    quitting.add_argument("--gui-host")
+    quitting = commands.add_parser("quit", help="explicitly quit the installed app on the unused bench host")
+    quitting.add_argument("--bench-host")
     quitting.set_defaults(handler=quit_installed_app)
     displaying = commands.add_parser("display", help="report the current display mode without changing it")
     displaying.set_defaults(handler=display)
@@ -813,8 +822,8 @@ def main() -> None:
     running.add_argument("--thread", required=True)
     running.add_argument("--switches", action="store_true", help="measure cold and cached short/long fixture switches")
     running.add_argument("--persistence", action="store_true", help="measure durable sends and checkpoint writes with isolated fixtures")
-    running.add_argument("--host", help="GUI host gateway UUID (default: maintainer macBenchmarkGatewayId)")
-    running.add_argument("--gui-host", help="dedicated GUI hostname (default: maintainer macGUIHost)")
+    running.add_argument("--host", help="bench gateway UUID (default: maintainer macBenchmarkGatewayId)")
+    running.add_argument("--bench-host", help="bench hostname (default: maintainer macBenchHost)")
     running.add_argument("--label")
     running.add_argument("--appearance", choices=("light", "dark"), help="override appearance only in the benchmark app")
     running.add_argument("--scrollbars", choices=("Automatic", "Always"), help="override scrollbar preference in this launch's argument domain")

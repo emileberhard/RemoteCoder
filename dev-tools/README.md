@@ -159,9 +159,9 @@ configured GUI lease and follow the idle/container protocol in
 display mode when measuring a deterministic Markdown reply:
 
 ```sh
-dev-tools/mac-bench quit --gui-host <gui-test-host>
-dev-tools/mac-bench run --gui-host <gui-test-host> --host <gateway-uuid> --thread <thread-id> --expected-display <WIDTHxHEIGHT@HZ/SCALE> --pattern idle --stream 12 --label stream-follow
-dev-tools/mac-bench run --gui-host <gui-test-host> --host <gateway-uuid> --thread <thread-id> --expected-display <WIDTHxHEIGHT@HZ/SCALE> --pattern standard --stream 12 --label stream-history
+dev-tools/mac-bench quit --bench-host <bench-host>
+dev-tools/mac-bench run --bench-host <bench-host> --host <gateway-uuid> --thread <thread-id> --expected-display <WIDTHxHEIGHT@HZ/SCALE> --pattern idle --stream 12 --label stream-follow
+dev-tools/mac-bench run --bench-host <bench-host> --host <gateway-uuid> --thread <thread-id> --expected-display <WIDTHxHEIGHT@HZ/SCALE> --pattern standard --stream 12 --label stream-history
 ```
 
 The terminal receipt and summary record the output directory under
@@ -222,6 +222,6 @@ counters also appear in the per-frame marks. Tick deadlines are fixed relative
 to measurement start; delayed ticks catch up without dropping content. These are
 synthetic-input measurements, not evidence of real gateway or trackpad timing.
 
-`mac-bench` takes `--gui-host` and `--host` (gateway UUID), or the optional
-maintainer roles `macGUIHost` and `macBenchmarkGatewayId`. Voice probes accept
+`mac-bench` takes `--bench-host` and `--host` (gateway UUID), or the optional
+maintainer roles `macBenchHost` and `macBenchmarkGatewayId`. Voice probes accept
 `--cwd`; otherwise they use the selected gateway's reported home directory.
