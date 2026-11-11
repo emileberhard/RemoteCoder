@@ -2760,9 +2760,10 @@ fn sessions_conversations_refold_all_descendants_when_ancestor_arrives() -> Resu
         assert_eq!(grouped.conversations.len(), 1);
         assert_eq!(grouped.conversations[0].session_key, key("b"));
         assert_eq!(grouped.conversations[0].hit_count, 2);
-        f.store
-            .writer()?
-            .execute("INSERT INTO search_dirty VALUES(?1)", [key("b")])?;
+        f.store.writer()?.execute(
+            "INSERT INTO search_dirty(session_key,relink) VALUES(?1,1)",
+            [key("b")],
+        )?;
         let mut a_header = codex_meta("a", None);
         a_header["timestamp"] = json!("2026-10-28T10:00:00Z");
         write(&a, &[a_header]);
@@ -2883,6 +2884,17 @@ fn sessions_conversations_rebuild_indexes_from_rows_and_report_pending_work() {
         limit: 30,
     };
     let control = super::store::ReadControl::new(Instant::now() + super::conversations::DEADLINE);
+    assert_eq!(
+        conversation_search(&f.store, "PreciseIdentifier", 30, Default::default()).conversations[0]
+            .session_key,
+        root
+    );
+    {
+        let db = f.store.writer().unwrap();
+        db.execute("UPDATE meta SET value='old' WHERE key='search_version'", [])
+            .unwrap();
+        super::index::open(&db).unwrap();
+    }
     assert!(
         super::conversations::search(
             &f.store.reader().unwrap(),
@@ -2898,17 +2910,84 @@ fn sessions_conversations_rebuild_indexes_from_rows_and_report_pending_work() {
             .session_key,
         root
     );
-    {
-        let db = f.store.writer().unwrap();
-        db.execute("UPDATE meta SET value='old' WHERE key='search_version'", [])
-            .unwrap();
-        super::index::open(&db).unwrap();
-    }
+}
+
+#[test]
+fn sessions_conversations_defer_expensive_refreshes_without_marking_partial() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let root = super::session_key(&f.origins[0], "codex-root");
+    let mut db = f.store.writer()?;
+    db.execute(
+        "UPDATE coverage SET stale_reason=NULL,complete_through='2026-11-01'",
+        [],
+    )?;
+    db.execute("UPDATE meta SET value='1' WHERE key='catalog_ready'", [])?;
+    db.execute("UPDATE search_document SET refreshed_ms=CAST(unixepoch('subsec')*1000 AS INTEGER),cooldown_ms=60000 WHERE session_key=?1", [&root])?;
+    conversation_item(&db, &root, 1000, "DeferredIdentifier", "assistant", None);
+    let stopped = AtomicBool::new(false);
+    let next = super::index::drain(&mut db, &stopped, &mut |_| Ok(()))?;
+    assert!(next.is_some_and(|next| next > Instant::now()));
+    let query = |term: &str| {
+        let request = super::conversations::Request {
+            query: term.into(),
+            limit: 30,
+        };
+        let control =
+            super::store::ReadControl::new(Instant::now() + super::conversations::DEADLINE);
+        super::conversations::search(&f.store.reader()?, &request, &control, &Default::default())
+    };
+    let pending = query("DeferredIdentifier")?;
+    assert!(!pending.truncated);
+    assert!(pending.conversations.is_empty());
+    db.execute(
+        "UPDATE search_document SET refreshed_ms=0 WHERE session_key=?1",
+        [&root],
+    )?;
+    assert!(super::index::drain(&mut db, &stopped, &mut |_| Ok(()))?.is_none());
     assert_eq!(
-        conversation_search(&f.store, "PreciseIdentifier", 30, Default::default()).conversations[0]
-            .session_key,
+        query("DeferredIdentifier")?.conversations[0].session_key,
         root
     );
+    Ok(())
+}
+
+#[test]
+fn sessions_conversations_cap_only_other_document_text() -> Result<()> {
+    let f = fixture();
+    scan(&f);
+    let root = super::session_key(&f.origins[0], "codex-root");
+    {
+        let db = f.store.writer()?;
+        conversation_item(&db, &root, 1000, "OldAssistantAnchor", "assistant", None);
+        conversation_item(
+            &db,
+            &root,
+            1001,
+            &format!("{} TypedTailAnchor", "ab ".repeat(180_000)),
+            "user",
+            None,
+        );
+        conversation_item(
+            &db,
+            &root,
+            1002,
+            &format!("NewestAssistantAnchor {}", "cd ".repeat(174_752)),
+            "assistant",
+            None,
+        );
+    }
+    let search = |query| conversation_search(&f.store, query, 1, Default::default());
+    assert!(search("OldAssistantAnchor").conversations.is_empty());
+    assert_eq!(search("TypedTailAnchor").conversations[0].session_key, root);
+    assert_eq!(
+        search("NewestAssistantAnchor").conversations[0].session_key,
+        root
+    );
+    let db = f.store.reader()?;
+    let status = super::query::sql(&db, "SELECT 1")?;
+    assert_eq!(status["coverage"]["conversationSearch"]["cappedRoots"], 1);
+    Ok(())
 }
 
 #[test]
@@ -3277,6 +3356,10 @@ fn sessions_conversations_count_matches_without_bounded_excerpts() -> Result<()>
             "assistant",
             None,
         );
+        db.execute(
+            "UPDATE session SET cwd='/OversizeMatch' WHERE session_key=?1",
+            [&key],
+        )?;
     }
     let result = conversation_search(&f.store, "oversizematch", 1, Default::default());
     assert!(result.truncated);

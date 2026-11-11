@@ -182,7 +182,7 @@ fn settle_projection(
     origins: &[Origin],
     mailbox: &Mailbox,
     parents: &mut ParentProjection,
-) -> Result<()> {
+) -> Result<Option<Instant>> {
     refresh_metadata(db, origins, mailbox, parents)?;
     super::index::drain(db, &mailbox.stop, &mut |db| {
         mailbox.serve(db, origins);
@@ -404,14 +404,17 @@ impl Worker {
                     tracing::warn!(%error,"Session skill catalog unavailable");
                 }
                 let mut next_reconcile = Instant::now();
+                let mut next_document: Option<Instant> = None;
                 let mut retry_delay = Duration::from_secs(2);
                 while !flag.load(Ordering::Acquire) {
                     let mut pending = signal.0.lock().expect("Session worker wake poisoned");
-                    let deadline = if hot.is_empty() {
-                        next_reconcile
-                    } else {
-                        next_reconcile.min(next_hot)
-                    };
+                    let deadline = next_reconcile
+                        .min(next_document.unwrap_or(next_reconcile))
+                        .min(if hot.is_empty() {
+                            next_reconcile
+                        } else {
+                            next_hot
+                        });
                     pending = signal
                         .1
                         .wait_timeout_while(
@@ -436,9 +439,10 @@ impl Worker {
                             next_hot = Instant::now() + Duration::from_secs(1);
                         }
                         if !full && paths.is_empty() && !endpoint.requested() {
-                            if parent_update {
+                            if parent_update || next_document.is_some_and(|at| Instant::now() >= at)
+                            {
                                 let mut db = store.writer()?;
-                                settle_projection(
+                                next_document = settle_projection(
                                     &mut db,
                                     &origins,
                                     &endpoint,
@@ -480,7 +484,7 @@ impl Worker {
                         )?;
                         {
                             let mut db = store.writer()?;
-                            settle_projection(
+                            next_document = settle_projection(
                                 &mut db,
                                 &origins,
                                 &endpoint,
@@ -507,7 +511,7 @@ impl Worker {
                                 },
                             )?;
                             let mut db = store.writer()?;
-                            settle_projection(
+                            next_document = settle_projection(
                                 &mut db,
                                 &origins,
                                 &endpoint,

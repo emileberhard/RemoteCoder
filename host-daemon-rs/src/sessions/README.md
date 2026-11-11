@@ -256,16 +256,21 @@ raw transcript bytes have not changed.
 mismatch drops only those indexes and rebuilds them from catalog rows, without
 re-reading transcripts. The worker handles newest conversations first and
 coalesces affected roots in a persistent dirty queue. Canonical item changes
-maintain the scoped word index transactionally. A source save refreshes its root
-document; ancestry changes rebuild the old and new root. Initial catalog work,
-pending derived work and incomplete coverage make search results `truncated`.
-An empty startup catalog therefore never reports a complete empty result.
+maintain the scoped word index transactionally. A new conversation publishes its
+document during ingest. Ancestry changes rebuild the previous and current roots.
+Ordinary changes reuse the existing ancestry. A document refresh over 10 ms
+defers the next refresh of that root for nine times the observed refresh cost.
+The worker wakes at the next due refresh even if appends stop. The previous
+document can supply candidates while a refresh waits. That freshness lag does
+not set `truncated`. Initial catalog work, the derived rebuild backlog and
+incomplete coverage do set it.
 
-A copied-catalog MacBook prototype measured the no-tools document index at
-679 MB and 94 seconds, with warm ranking seeks of 0.15–6 ms. The tool-inclusive
-variant required 3.07 GB and 212 seconds and was rejected. These prototype
-measurements exclude the scoped item index and full transcript rebuild; final
-end-to-end measurements belong to the work issue.
+Documents retain the entire title, folder and typed-user text. Assistant and
+reasoning text use the newest indexed items up to 512 KiB, 4,096 items and 128
+member sessions. Earlier assistant or reasoning terms may be absent from
+candidate selection for a capped root. They remain available in the scoped
+word index for already matched conversations. `sessions/sql` reports the
+number of capped roots in `coverage.conversationSearch.cappedRoots`.
 
 ## Locate a matching item
 

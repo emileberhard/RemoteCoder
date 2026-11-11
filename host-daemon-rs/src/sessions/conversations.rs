@@ -124,7 +124,7 @@ pub(crate) fn search(
         ensure!(!control.stopped(), "conversation search interrupted");
         let snapshot = db.unchecked_transaction()?;
         let db = &snapshot;
-        let incomplete: bool = db.query_row("SELECT (SELECT value FROM meta WHERE key='catalog_ready')<>'1' OR EXISTS(SELECT 1 FROM meta WHERE key='mirror_rebuilding') OR EXISTS(SELECT 1 FROM search_dirty) OR EXISTS(SELECT 1 FROM coverage WHERE stale_reason IS NOT NULL OR complete_through IS NULL)", [], |r| r.get(0))?;
+        let incomplete: bool = db.query_row("SELECT (SELECT value FROM meta WHERE key='catalog_ready')<>'1' OR EXISTS(SELECT 1 FROM meta WHERE key='mirror_rebuilding') OR EXISTS(SELECT 1 FROM search_dirty WHERE backfill=1) OR EXISTS(SELECT 1 FROM coverage WHERE stale_reason IS NOT NULL OR complete_through IS NULL)", [], |r| r.get(0))?;
         let mut statement = db.prepare("SELECT s.session_key,s.origin_host,s.provider,s.thread_id,s.cwd,s.title,s.started_at,s.last_at,s.parent_session_key,src.present FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid JOIN session s ON s.session_key=d.session_key JOIN source src USING(source_id) WHERE conversation_fts MATCH ?1 AND src.present=1 ORDER BY bm25(conversation_fts,8,4,1,0),s.last_at DESC,s.session_key LIMIT 129")?;
         let candidates: Vec<_> = statement
             .query_map([&expression], super::query::session_header)?
@@ -143,11 +143,10 @@ pub(crate) fn search(
         for header in candidates.into_iter().take(128) {
             ensure!(!control.stopped(), "conversation search interrupted");
             let title_match: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid WHERE d.session_key=?1 AND conversation_fts MATCH ?2)", params![header.session_key, format!("title:({expression})")], |r| r.get(0))?;
-            let scopes: Vec<String> = db.prepare("SELECT 's'||s.source_id FROM search_member m JOIN session s USING(session_key) JOIN source src USING(source_id) WHERE m.root_key=?1 AND src.present=1 ORDER BY s.last_at DESC,s.session_key LIMIT 129")?.query_map([&header.session_key], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-            response.truncated |= scopes.len() > 128;
+            let (scopes, capped) = super::index::member_scopes(db, &header.session_key)?;
+            response.truncated |= capped;
             let scope = scopes
                 .iter()
-                .take(128)
                 .map(|s| format!("scope:{s}"))
                 .collect::<Vec<_>>()
                 .join(" OR ");

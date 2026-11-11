@@ -102,6 +102,8 @@ pub(crate) fn sql(db: &super::store::Reader, sql: &str) -> Result<Value> {
     let mut result = rows(&tx, sql, [])?;
     result["schemaVersion"] = json!(1);
     result["coverage"] = coverage(db)?;
+    result["coverage"]["conversationSearch"] =
+        json!({"cappedRoots":super::index::capped_roots(&tx)?});
     Ok(result)
 }
 

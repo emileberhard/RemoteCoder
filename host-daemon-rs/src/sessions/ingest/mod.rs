@@ -226,7 +226,8 @@ pub(crate) fn scan_scope(
     stop: &AtomicBool,
 ) -> Result<Value> {
     let outcome = scan_serving(store, origins, scope, stop, &|| false, &mut |_| Ok(()))?;
-    super::index::drain(&mut *store.writer()?, stop, &mut |_| Ok(()))?;
+    let mut db = store.writer()?;
+    while !stop.load(Ordering::Acquire) && super::index::rebuild_one(&mut db)? {}
     Ok(outcome)
 }
 
@@ -339,7 +340,7 @@ pub(super) fn scan_serving(
             let elapsed = started.elapsed().as_secs_f64();
             longest_source = longest_source.max(elapsed);
             slow_sources += usize::from(elapsed > 5.0);
-            super::index::rebuild_one(&mut db)?;
+            super::index::rebuild_ready(&mut db)?;
             between(&mut db)?;
         }
     }
