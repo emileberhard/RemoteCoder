@@ -297,24 +297,32 @@ index for already matched conversations. `sessions/sql` reports the
 number of capped roots in `coverage.conversationSearch.cappedRoots`. This count
 is null while the derived schema is being installed.
 
-Measured with isolated catalogs, the user/assistant word index and conversation
-index occupied 196.4 MB and 143.3 MB on a fully re-ingested 7,330-source copy.
-On a newer 7,394-session copy reprojected from prior canonical rows, version 5
-used 402.3 MB and 310.4 MB after persisted ownership folding. That second sample
+Measured on Linux with 438 copied transcripts (1.865 GB), schema 7 ingested and
+drained in 157.8 seconds at 0.103–0.459 load per core, with no parse failures.
+Its 407 conversation documents and scoped word index occupied 16.0 MB and
+14.7 MB. All 60 tuning requests answered with `truncated: false`. This bounded,
+target-focused sample is not a fleet-wide relevance or latency benchmark.
+A separate 200-source modern Codex replay (808 MB) took 59.3 seconds at
+0.118–0.190 load per core: 13.6 MB/s and 3.37 sources/s. Its 711 eligible typed
+prompts matched authoritative completed items exactly, including two attachment
+prompts and 49 steers, with no duplicates. The other 863 authoritative user
+events were agent-message or injected envelopes.
+
+On a 7,394-session copy reprojected from schema-6 rows, version 5 used 402.3 MB
+and 310.4 MB after persisted ownership folding. That sample
 has 3,716 roots: 11 exceed the typed budget, 3 exceed the assistant budget, and
 12 exceed either (0.32%). One additional root exceeds the member window.
-These are different classification samples, not an index-size A/B comparison.
-The initial version-5 derived pass over the copied rows took 227 seconds; the
-fully re-ingested corpus's prior derived pass took 262 seconds including an
-overlapping build. Neither pass read transcripts.
+The initial version-5 derived pass over the copied rows took 227 seconds.
+That timing is unqualified because host load rose above 0.7 per core. This is
+a derived-index rebuild from catalog rows, not schema-7 transcript extraction.
 
-Forty-three warm limit-30 requests on the MacBook took 88 ms at p50 and 193 ms at
-p95, with a 228 ms maximum at 0.555 load per core. On the newer copied-row corpus,
-the same query sample on Linux took 159 ms at p50 and 296 ms at p95, with a 420 ms
+Forty-three warm limit-30 requests on the copied-row corpus on Linux took
+159 ms at p50 and 296 ms at p95, with a 420 ms
 maximum at 0.549–0.575 load per core. Every Linux response was finished, including
-`search` with 1,654 matching candidates. Both samples stayed within the one-second
-deadline. The host and corpus changes prevent attributing the difference to
-statement preparation alone.
+`search` with 1,654 matching candidates. Earlier MacBook measurements preceded
+the authoritative Codex extraction correction and are not release-quality
+relevance evidence. The host and corpus changes prevent attributing latency
+differences to statement preparation alone.
 
 A sampled largest root refresh reads about 2.09 MB from each column, compared
 with its earlier unbounded 4.85 MB typed column. It took 153 ms before commit,
@@ -325,6 +333,10 @@ corpus took 37 ms before commit and 92 ms including commit, with 333 ms cooldown
 and about 0.43 seconds of candidate lag at 0.595 load per core. Storage commit
 time varies. The utility worker's cost-based cooldown limits tokenizing duty
 cycle; inventory and history reads use their separate read paths.
+A 1.03 MB tree in the 438-source replay refreshed in 33 ms before commit with
+297 ms cooldown at 0.684 load per core. After a final append, the worker woke
+without another source change and exposed the term within 411 ms; the pending
+refresh did not set `truncated`.
 
 Moving derived reset off startup reduced health readiness from 39.6 seconds to
 2.1 seconds on the MacBook (0.267 and 0.637 load per core respectively). While
