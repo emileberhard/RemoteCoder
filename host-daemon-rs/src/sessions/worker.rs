@@ -16,7 +16,7 @@ const PENDING_PATHS: usize = 512;
 struct Pending {
     paths: Vec<BTreeSet<PathBuf>>,
     inventory: Vec<InventoryRequest>,
-    parents: Option<Arc<super::metadata::Parents>>,
+    parents: Option<super::metadata::Parents>,
     mirror: Option<MirrorRequest>,
 }
 
@@ -160,7 +160,7 @@ impl Mailbox {
 
 #[derive(Default)]
 struct ParentProjection {
-    unresolved: Arc<super::metadata::Parents>,
+    unresolved: super::metadata::Parents,
     generation: Option<i64>,
 }
 
@@ -201,18 +201,32 @@ impl ParentProjection {
             .expect("Session worker wake poisoned")
             .parents
             .take();
-        if let Some(pending) = pending {
-            self.unresolved = pending;
-            self.generation = None;
-        }
-        if self.unresolved.is_empty() {
+        if pending.is_none() && self.unresolved.is_empty() {
             return Ok(());
         }
         let generation = super::metadata::identity_generation(db)?;
+        let mut updates = pending.unwrap_or_default();
         if self.generation != Some(generation) {
-            self.unresolved = Arc::new(super::metadata::parents(db, origins, &self.unresolved)?);
-            self.generation = Some(generation);
+            let mut unresolved = std::mem::take(&mut self.unresolved);
+            unresolved.extend(updates);
+            updates = unresolved;
         }
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let unresolved = match super::metadata::parents(db, origins, &updates) {
+            Ok(unresolved) => unresolved,
+            Err(error) => {
+                self.unresolved.extend(updates);
+                self.generation = None;
+                return Err(error);
+            }
+        };
+        for key in updates.keys() {
+            self.unresolved.remove(key);
+        }
+        self.unresolved.extend(unresolved);
+        self.generation = Some(generation);
         Ok(())
     }
 }
@@ -353,12 +367,17 @@ fn watch(
 }
 
 impl Worker {
-    pub(crate) fn parents(&self, parents: Arc<super::metadata::Parents>) {
+    pub(crate) fn parents(&self, parents: super::metadata::Parents) {
+        if parents.is_empty() {
+            return;
+        }
         self.wake
             .0
             .lock()
             .expect("Session worker wake poisoned")
-            .parents = Some(parents);
+            .parents
+            .get_or_insert_default()
+            .extend(parents);
         self.wake.1.notify_one();
     }
 
@@ -650,6 +669,73 @@ mod tests {
         .unwrap();
         super::super::index::open(&store.writer().unwrap()).unwrap();
         (directory, store, origin, path)
+    }
+
+    #[test]
+    fn sessions_parent_deltas_coalesce_and_retry_new_catalog_identities() -> Result<()> {
+        use crate::agents::jobs::model::{ConversationIdentity, Provider, ProviderHome};
+        use crate::wire::cluster::AgentAddress;
+        let (_directory, store, origin, _path) = fixture();
+        let stop = Arc::new(AtomicBool::new(false));
+        let wake = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
+        let worker = Worker {
+            stop: stop.clone(),
+            wake: wake.clone(),
+            thread: Mutex::new(None),
+        };
+        let mailbox = Mailbox {
+            stop,
+            wake,
+            discovery: Mutex::new((vec![origin.clone()], Discovery::default())),
+        };
+        let identity = |thread: &str| ConversationIdentity {
+            provider: Provider::Codex,
+            provider_home: ProviderHome::Known {
+                path: origin.provider_home.clone(),
+            },
+            thread_id: thread.into(),
+        };
+        let cold = identity("cold");
+        let late = identity("late");
+        worker.parents(
+            [(
+                cold.clone(),
+                Some(AgentAddress {
+                    host_id: origin.host.clone(),
+                    thread_id: "late".into(),
+                }),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        worker.parents([(late.clone(), None)].into_iter().collect());
+        worker.parents([(cold.clone(), None)].into_iter().collect());
+        ingest::scan(&store, std::slice::from_ref(&origin), &worker.stop)?;
+        let mut projection = ParentProjection::default();
+        projection.refresh(&store.writer()?, std::slice::from_ref(&origin), &mailbox)?;
+        assert_eq!(
+            projection.unresolved.keys().collect::<Vec<_>>(),
+            vec![&late]
+        );
+        let db = store.reader()?;
+        assert!(db.query_row("SELECT delegated_parent_known AND delegated_parent_session_key IS NULL FROM session WHERE thread_id='cold'",[],|r|r.get::<_,bool>(0))?);
+        drop(db);
+        std::fs::write(
+            origin.path().join("late.jsonl"),
+            format!(
+                "{}\n",
+                json!({"type":"session_meta","payload":{"id":"late"}})
+            ),
+        )?;
+        ingest::scan(&store, std::slice::from_ref(&origin), &worker.stop)?;
+        projection.refresh(&store.writer()?, std::slice::from_ref(&origin), &mailbox)?;
+        assert!(projection.unresolved.is_empty());
+        assert!(store.reader()?.query_row(
+            "SELECT delegated_parent_known FROM session WHERE thread_id='late'",
+            [],
+            |r| r.get::<_, bool>(0)
+        )?);
+        Ok(())
     }
 
     #[test]

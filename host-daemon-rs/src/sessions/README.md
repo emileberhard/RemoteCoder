@@ -253,7 +253,7 @@ search endpoint.
 
 The origin records Codex names from its native append-only session index and
 current delegated parents from `JobStore`'s authoritative parent tags. The ingest
-worker applies these facts outside request lifetimes, on ownership changes and
+worker applies these facts outside request lifetimes, only for changed identities on ownership changes and
 when a new transcript can resolve a previously missing identity. Searches never consult the
 job store. Optional `sessionMetadata` fields on mirror page envelopes carry the
 facts with transcript evidence. Entry shapes and mirror schemaVersion remain
