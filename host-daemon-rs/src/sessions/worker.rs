@@ -712,7 +712,7 @@ mod tests {
         worker.parents([(cold.clone(), None)].into_iter().collect());
         ingest::scan(&store, std::slice::from_ref(&origin), &worker.stop)?;
         let mut projection = ParentProjection::default();
-        projection.refresh(&store.writer()?, std::slice::from_ref(&origin), &mailbox)?;
+        projection.refresh(&*store.writer()?, std::slice::from_ref(&origin), &mailbox)?;
         assert_eq!(
             projection.unresolved.keys().collect::<Vec<_>>(),
             vec![&late]
@@ -728,7 +728,7 @@ mod tests {
             ),
         )?;
         ingest::scan(&store, std::slice::from_ref(&origin), &worker.stop)?;
-        projection.refresh(&store.writer()?, std::slice::from_ref(&origin), &mailbox)?;
+        projection.refresh(&*store.writer()?, std::slice::from_ref(&origin), &mailbox)?;
         assert!(projection.unresolved.is_empty());
         assert!(store.reader()?.query_row(
             "SELECT delegated_parent_known FROM session WHERE thread_id='late'",
