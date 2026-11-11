@@ -1109,7 +1109,10 @@ entrypoint linked above.
     composer grows by one row however many are added. Each tile has a corner
     remove control with a `ControlMetrics.minimumTarget` hit area, and the whole
     strip is a composer control hit region, so it scrolls.
-  - The attachment menu offers camera, photo library, file import and paste.
+  - The attachment menu offers camera, photo library, file import and paste. It
+    is an `AppActionMenu`, so it opens on touch-down instead of on release, and a
+    touch that starts on it belongs to the menu: press, slide and release picks
+    an item, and a swipe from it does not move the drawer.
   - **Choose File** attaches any file, or a folder as a zip. `UploadStaging`
     copies it locally and `GatewayUploadClient` streams it to the gateway's
     resumable `/uploads/<id>` session. Four files upload at once. An
@@ -1702,7 +1705,8 @@ entrypoint linked above.
   `RenderedMessageStore`, driven by the existing reveal-cover ticks through a
   stateless handle. `HapticService` owns global cadence and a separate streaming
   player. Ineligible frames discard pending marks; no replay, extra clock or
-  per-frame observation is allowed. New native menus use `AppMenu`. Preserve native menus and the
+  per-frame observation is allowed. New native menus use `AppMenu`, or `AppActionMenu` for a plain
+  action list that opens on touch-down. Preserve native menus and the
   reasoning gesture bridge when adding control coverage. `scripts/lint-haptics`
   enforces these boundaries.
 
