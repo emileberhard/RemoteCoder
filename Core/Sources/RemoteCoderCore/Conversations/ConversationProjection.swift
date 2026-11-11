@@ -344,7 +344,7 @@ enum ConversationProjection {
                     if index == ids.count - 1, turn.terminalStatus == .completed, !turn.isActive,
                        state.window.map({ $0.newer == nil || $0.turns.last?.id != turnID }) ?? true {
                         forkBoundaries[message.id] = .turnEnd(canonicalTurnID)
-                    } else if let itemID = message.canonicalItemID {
+                    } else if let itemID = message.canonicalItemID, !record.value.isAsyncDelivery {
                         forkBoundaries[message.id] = .item(turnID: canonicalTurnID, itemID: itemID)
                     }
                 }

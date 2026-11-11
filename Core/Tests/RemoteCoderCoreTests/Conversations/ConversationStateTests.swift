@@ -741,6 +741,18 @@ struct ConversationStateTests: ConversationHistoryFixtures {
         #expect(ConversationProjection.project(state).forkBoundaries == [reply.id: .item(turnID: "turn", itemID: "reply")])
     }
 
+    @Test func aToolDeliveredMessageHasNoItemForkBoundary() throws {
+        var state = ConversationState(conversationID: UUID(), threadID: "thread")
+        state.merge(history(items: [
+            .userMessage(id: "user", content: [.text(text: "Start", textElements: [])], clientId: nil),
+            .agentMessage(id: "call_note", text: "Heads up", delivery: .async),
+            .agentMessage(id: "reply", text: "Working")
+        ]))
+        let snapshot = ConversationProjection.project(state)
+        let reply = try #require(snapshot.messages.last)
+        #expect(snapshot.forkBoundaries == [reply.id: .item(turnID: "turn", itemID: "reply")])
+    }
+
     @Test func aStreamingReplyHasNoForkBoundary() throws {
         var state = ConversationState(conversationID: UUID(), threadID: "thread")
         state.merge(history(items: [.userMessage(id: "user", content: [.text(text: "Start", textElements: [])], clientId: nil)]))
