@@ -9,7 +9,9 @@ struct ThemedAppBackground: View {
 
 struct ThemedSheetBackground: View {
     var body: some View {
-        ThemedSheetLayers()
+        ThemedSheetLayers { color in
+            color
+        }
             .ignoresSafeArea()
     }
 }
@@ -18,39 +20,32 @@ struct ThemedSheetBottomBarBackground: View {
     private let fadeHeight: CGFloat = 28
 
     var body: some View {
-        ThemedSheetLayers(fadeHeight: fadeHeight)
+        ThemedSheetLayers { color in
+            VStack(spacing: 0) {
+                LinearGradient(colors: [color.opacity(0), color], startPoint: .top, endPoint: .bottom)
+                    .frame(height: fadeHeight)
+                color
+            }
+        }
             .padding(.top, -fadeHeight)
             .ignoresSafeArea(edges: .bottom)
             .allowsHitTesting(false)
     }
 }
 
-private struct ThemedSheetLayers: View {
-    var fadeHeight: CGFloat?
+private struct ThemedSheetLayers<Layer: View>: View {
     @Environment(AppThemeStore.self) private var themeStore
     @Environment(\.colorScheme) private var colorScheme
+    private let layer: (Color) -> Layer
 
-    var body: some View {
-        if let fadeHeight {
-            GeometryReader { geometry in
-                let stop = min(fadeHeight / max(geometry.size.height, 1), 1)
-                ZStack {
-                    gradient(Color.appSystemBackground, stop: stop)
-                    gradient(themeStore.theme.sheetBackgroundTint(for: colorScheme), stop: stop)
-                }
-            }
-        } else {
-            ZStack {
-                Color.appSystemBackground
-                themeStore.theme.sheetBackgroundTint(for: colorScheme)
-            }
-        }
+    init(@ViewBuilder layer: @escaping (Color) -> Layer) {
+        self.layer = layer
     }
 
-    private func gradient(_ color: Color, stop: CGFloat) -> some View {
-        LinearGradient(stops: [.init(color: .clear, location: 0),
-                               .init(color: color, location: stop),
-                               .init(color: color, location: 1)],
-                       startPoint: .top, endPoint: .bottom)
+    var body: some View {
+        ZStack {
+            layer(Color.appSystemBackground)
+            layer(themeStore.theme.sheetBackgroundTint(for: colorScheme))
+        }
     }
 }
