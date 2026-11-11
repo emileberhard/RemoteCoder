@@ -57,7 +57,7 @@ final class DictationVoiceProfiles {
     }
 
     func checked(_ result: VoiceCheckResult) {
-        if result.labelledReplyTime != nil { routeUnavailable = false }
+        if result.outcome.path != .failed, result.labelledReplyTime != nil { routeUnavailable = false }
         refresh()
     }
 

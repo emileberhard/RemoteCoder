@@ -45,7 +45,7 @@ struct DictationVoiceTests {
         #expect(voices.status == .unavailable)
     }
 
-    @Test @MainActor func controllerUsesItsInjectedSpeakerRequest() async throws {
+    @Test(arguments: [false, true]) @MainActor func controllerUsesItsInjectedSpeakerRequest(refused: Bool) async throws {
         let fixture = try await VoiceFixture(trusted: true)
         defer { fixture.cleanUp() }
         let recordings = try TemporaryDictationRecordings()
@@ -54,7 +54,7 @@ struct DictationVoiceTests {
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let voices = DictationVoiceProfiles(defaults: defaults, directory: fixture.directory)
-        let transcriber = InjectedVoiceTranscriber(phrases: fixture.phrases)
+        let transcriber = InjectedVoiceTranscriber(phrases: fixture.phrases, refused: refused)
         let controller = VoiceInputController(access: .fixture, owner: ExecutionTarget(hostID: UUID()),
             transcriber: transcriber, recorder: VoiceFixtureRecorder(pcm: fixture.mix), recordings: recordings.store,
             voices: voices, configuration: { .init(model: .openAIGPT4oMini, language: .english, voiceChoice: .onlyMine) })
@@ -62,9 +62,15 @@ struct DictationVoiceTests {
         try await controller.startAsync()
         try await controller.stopRecording()
         let result = try await controller.transcribe()
-        #expect(result.text == "Only my words.")
         #expect(result.transcript.everyone == "Selected provider text.")
-        #expect(result.transcript.model == TranscriptionModel.azureMAITranscribe2.batchLibraryID)
+        if refused {
+            #expect(result.text == "Selected provider text.")
+            #expect(result.transcript.outcome?.path == .failed)
+            #expect(try await waitUntil { voices.status == .unavailable })
+        } else {
+            #expect(result.text == "Only my words.")
+            #expect(result.transcript.model == TranscriptionModel.azureMAITranscribe2.batchLibraryID)
+        }
         #expect(transcriber.requestCount.withLock { $0 } == 1)
     }
 
@@ -239,7 +245,8 @@ private final class InjectedVoiceTranscriber: TranscriptionService {
     let requestCount = Mutex(0)
     private let requested = AsyncStream<Void>.makeStream()
     let phrases: [SpeakerPhrase]
-    init(phrases: [SpeakerPhrase]) { self.phrases = phrases }
+    let refused: Bool
+    init(phrases: [SpeakerPhrase], refused: Bool) { self.phrases = phrases; self.refused = refused }
     func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription? { nil }
     @concurrent func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
         for await _ in requested.stream { break }
@@ -251,6 +258,7 @@ private final class InjectedVoiceTranscriber: TranscriptionService {
         requested.continuation.yield(())
         requested.continuation.finish()
         uploadFinished(.milliseconds(10))
+        if refused { throw SpeechKitError.relayRejected(kind: "credentialsUnavailable") }
         return phrases
     }
 }
