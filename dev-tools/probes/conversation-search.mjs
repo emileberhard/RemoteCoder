@@ -64,7 +64,7 @@ try {
     return result.result?.conversations?.length===1;
   },30);
   assert.equal(result.result.conversations[0].threadId,`claude_${root}`);
-  const hit=result.result.conversations[0].hits[0];
+  const hit=result.result.conversations[0].hit;
   assert.ok(hit?.excerpt.includes('flicker'));
   const located=await rpc('sessions/locate',{itemKey:hit.itemKey});
   assert.equal(located.result.threadId,`claude_${root}`);
@@ -79,7 +79,7 @@ try {
     const reply=await rpc('sessions/conversations/search',{query:'ClaudeNativeChildNeedle',limit:30});
     return reply.result?.conversations[0];
   },30);
-  const nativeHit=native.hits[0];
+  const nativeHit=native.hit;
   const nativeLocated=(await rpc('sessions/locate',{itemKey:nativeHit.itemKey})).result;
   assert.equal(native.threadId,`claude_${root}`);
   assert.equal(nativeHit.agentThreadId,null);
@@ -90,7 +90,7 @@ try {
     const conversation=reply.result?.conversations[0];
     return conversation?.threadId===codexThread&&conversation;
   },30);
-  const codexLocated=await rpc('sessions/locate',{itemKey:codex.hits[0].itemKey});
+  const codexLocated=await rpc('sessions/locate',{itemKey:codex.hit.itemKey});
   assert.equal(codexLocated.result.threadId,codexThread);
   assert.equal(codexLocated.result.turnId,'fixture-turn-1');
   assert.ok(codexLocated.result.turnsCursor&&codexLocated.result.itemsCursor&&codexLocated.result.itemId);
@@ -113,7 +113,7 @@ try {
     const conversation=reply.result?.conversations[0];
     return conversation?.threadId===codexThread&&conversation;
   },30);
-  const delegatedHit=delegated.hits[0];
+  const delegatedHit=delegated.hit;
   const delegatedLocated=(await rpc('sessions/locate',{itemKey:delegatedHit.itemKey})).result;
   assert.equal(delegatedHit.agentThreadId,delegatedChild);
   assert.equal(delegatedLocated.threadId,delegatedHit.agentThreadId??delegated.threadId);

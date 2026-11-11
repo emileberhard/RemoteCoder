@@ -686,10 +686,7 @@ mod tests {
             response["conversations"][0]["sessionKey"],
             crate::sessions::session_key(&origin, root)
         );
-        assert_eq!(
-            response["conversations"][0]["hits"][0]["agentThreadId"],
-            child
-        );
+        assert_eq!(response["conversations"][0]["hit"]["agentThreadId"], child);
         jobs.set_parent_for_test("search-child".into(), None, Recipient::None)
             .await
             .unwrap();
@@ -717,7 +714,7 @@ mod tests {
             response["conversations"][0]["sessionKey"],
             crate::sessions::session_key(&origin, child)
         );
-        assert!(response["conversations"][0]["hits"][0]["agentThreadId"].is_null());
+        assert!(response["conversations"][0]["hit"]["agentThreadId"].is_null());
         for params in [
             json!({"query":"needle"}),
             json!({"query":"needle","limit":0}),

@@ -1,6 +1,6 @@
 use super::store::{ReadControl, Reader};
 use anyhow::{Result, ensure};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Statement, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -8,6 +8,7 @@ use std::time::Duration;
 
 pub(crate) const DEADLINE: Duration = Duration::from_secs(1);
 pub(super) const TERM_WINDOW: usize = 64;
+const CANDIDATE_WINDOW: usize = 128;
 const EXCERPT_INPUT_BYTES: i64 = 1 << 20;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -74,7 +75,7 @@ pub(crate) struct Conversation {
     pub last_at: Option<String>,
     pub title_match: bool,
     pub hit_count: usize,
-    pub hits: Vec<Hit>,
+    pub hit: Option<Hit>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -140,17 +141,30 @@ pub(crate) fn search(
             .lock()
             .expect("conversation search progress poisoned") = Some(response.clone());
         let snippets = Snippets::new(control, &expressions)?;
-        for header in candidates.into_iter().take(128) {
+        let mut find_hits = db.prepare(
+            "SELECT i.rowid,i.at,i.text_bytes FROM item_word_fts
+             JOIN item i ON i.rowid=item_word_fts.rowid WHERE item_word_fts MATCH ?1
+             ORDER BY item_word_fts.rowid DESC LIMIT ?2",
+        )?;
+        let mut hit_text = db.prepare(
+            "SELECT i.item_key,s.thread_id,s.provider,i.text
+             FROM item i JOIN session s USING(session_key) WHERE i.rowid=?1",
+        )?;
+        for header in candidates {
             ensure!(!control.stopped(), "conversation search interrupted");
             let title_match = title_match(db, &header.session_key, &expression)?;
-            let hits = collect_hits(db, &header.session_key, &expressions, control)?;
+            let hits = collect_hits(
+                db,
+                &mut find_hits,
+                &header.session_key,
+                &expressions,
+                control,
+            )?;
             let hit_count = hits.len();
             if !title_match && hit_count == 0 {
                 continue;
             }
-            let hits = render_hit(db, &header.thread_id, hits, &snippets, control)?
-                .into_iter()
-                .collect();
+            let hit = render_hit(&mut hit_text, &header.thread_id, hits, &snippets, control)?;
             response.conversations.push(Conversation {
                 session_key: header.session_key,
                 host_id: header.host_id,
@@ -161,7 +175,7 @@ pub(crate) fn search(
                 last_at: header.last_at,
                 title_match,
                 hit_count,
-                hits,
+                hit,
             });
             *completed
                 .lock()
@@ -187,10 +201,13 @@ fn candidates(db: &Connection, expression: &str) -> Result<Vec<super::query::Ses
          FROM conversation_fts JOIN search_document d ON d.id=conversation_fts.rowid
          JOIN session s ON s.session_key=d.session_key JOIN source src USING(source_id)
          WHERE conversation_fts MATCH ?1 AND src.present=1
-         ORDER BY bm25(conversation_fts,8,4,1,0),s.last_at DESC,s.session_key LIMIT 128",
+         ORDER BY bm25(conversation_fts,8,4,1,0),s.last_at DESC,s.session_key LIMIT ?2",
     )?;
     Ok(statement
-        .query_map([expression], super::query::session_header)?
+        .query_map(
+            params![expression, CANDIDATE_WINDOW as i64],
+            super::query::session_header,
+        )?
         .collect::<rusqlite::Result<_>>()?)
 }
 
@@ -206,6 +223,7 @@ fn title_match(db: &Connection, key: &str, expression: &str) -> Result<bool> {
 
 fn collect_hits(
     db: &Connection,
+    statement: &mut Statement<'_>,
     key: &str,
     expressions: &[String],
     control: &ReadControl,
@@ -218,11 +236,6 @@ fn collect_hits(
         .join(" OR ");
     let mut hits = HashMap::new();
     if !scope.is_empty() {
-        let mut statement = db.prepare(
-            "SELECT i.rowid,i.at,i.text_bytes FROM item_word_fts
-             JOIN item i ON i.rowid=item_word_fts.rowid WHERE item_word_fts MATCH ?1
-             ORDER BY item_word_fts.rowid DESC LIMIT ?2",
-        )?;
         for (n, term) in expressions.iter().enumerate() {
             ensure!(!control.stopped(), "conversation search interrupted");
             let mut rows = statement.query(params![
@@ -254,16 +267,12 @@ fn collect_hits(
 }
 
 fn render_hit(
-    db: &Connection,
+    statement: &mut Statement<'_>,
     root_thread: &str,
     hits: Vec<(i64, RankedHit)>,
     snippets: &Snippets,
     control: &ReadControl,
 ) -> Result<Option<Hit>> {
-    let mut statement = db.prepare(
-        "SELECT i.item_key,s.thread_id,s.provider,i.text
-         FROM item i JOIN session s USING(session_key) WHERE i.rowid=?1",
-    )?;
     for (id, hit) in hits {
         ensure!(!control.stopped(), "conversation search interrupted");
         if hit.bytes > EXCERPT_INPUT_BYTES {

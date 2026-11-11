@@ -75,7 +75,7 @@ fn sessions_conversation_hit_destination_matches_catalog_locate() -> Result<()> 
         (folded_claude, Some("claude_root"), Some("child")),
     ] {
         let conversation = &result.conversations[0];
-        let hit = &conversation.hits[0];
+        let hit = conversation.hit.as_ref().unwrap();
         let control = crate::sessions::store::ReadControl::new(
             Instant::now() + crate::sessions::conversations::DEADLINE,
         );
@@ -131,7 +131,7 @@ fn sessions_conversations_match_across_messages_fold_and_rank_titles() {
     assert_eq!(result.conversations[0].hit_count, 2);
     assert!(
         result.conversations[0]
-            .hits
+            .hit
             .iter()
             .any(|h| h.agent_thread_id.as_deref() == Some("codex-child"))
     );
@@ -159,7 +159,7 @@ fn sessions_conversations_match_across_messages_fold_and_rank_titles() {
         promoted
             .conversations
             .iter()
-            .any(|c| c.session_key == child && c.hits.iter().all(|h| h.agent_thread_id.is_none()))
+            .any(|c| c.session_key == child && c.hit.iter().all(|h| h.agent_thread_id.is_none()))
     );
 }
 
@@ -279,7 +279,7 @@ fn sessions_conversations_share_document_and_hit_kinds() -> Result<()> {
     assert_eq!(result.conversations[0].hit_count, 1);
     let kind: String = f.store.reader()?.query_row(
         "SELECT kind FROM item WHERE item_key=?1",
-        [&result.conversations[0].hits[0].item_key],
+        [&result.conversations[0].hit.as_ref().unwrap().item_key],
         |r| r.get(0),
     )?;
     assert_eq!(kind, "assistant");
@@ -307,7 +307,7 @@ fn sessions_conversations_bound_hits_and_exclude_folder_only_matches() {
         result.conversations[0].hit_count,
         crate::sessions::conversations::TERM_WINDOW
     );
-    assert_eq!(result.conversations[0].hits.len(), 1);
+    assert!(result.conversations[0].hit.is_some());
     assert!(
         conversation_search(&f.store, "absent needle", 30, Default::default())
             .conversations
@@ -545,7 +545,10 @@ fn sessions_conversations_index_pasted_payload_and_skip_injected_prompt_text() -
     );
     assert_eq!(found.conversations[0].session_key, root);
     assert!(
-        found.conversations[0].hits[0]
+        found.conversations[0]
+            .hit
+            .as_ref()
+            .unwrap()
             .excerpt
             .contains("PastedPayloadAnchor")
     );
@@ -899,7 +902,7 @@ fn sessions_conversations_excerpt_keeps_the_match_on_character_boundaries() {
         );
     }
     let result = conversation_search(&f.store, "malmo", 1, Default::default());
-    let excerpt = &result.conversations[0].hits[0].excerpt;
+    let excerpt = &result.conversations[0].hit.as_ref().unwrap().excerpt;
     assert!(excerpt.contains("Malmö"));
     assert!(excerpt.chars().count() <= 240);
 }
@@ -925,7 +928,7 @@ fn sessions_conversations_excerpt_finds_a_deep_prefix() {
         );
     }
     let result = conversation_search(&f.store, "deepmalmoflick", 1, Default::default());
-    let excerpt = &result.conversations[0].hits[0].excerpt;
+    let excerpt = &result.conversations[0].hit.as_ref().unwrap().excerpt;
     assert!(excerpt.contains("DeepMalmöFlickering"));
     assert!(excerpt.chars().count() <= 240);
 }
@@ -956,7 +959,7 @@ fn sessions_conversations_count_matches_without_bounded_excerpts() -> Result<()>
     let conversation = &result.conversations[0];
     assert!(!conversation.title_match);
     assert_eq!(conversation.hit_count, 1);
-    assert!(conversation.hits.is_empty());
+    assert!(conversation.hit.is_none());
     Ok(())
 }
 

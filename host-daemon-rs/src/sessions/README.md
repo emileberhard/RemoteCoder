@@ -203,8 +203,8 @@ full message text.
 
 Schema-version-1 responses contain `truncated` and ranked `conversations`. Each
 conversation carries its root `sessionKey`, origin `hostId`, `provider`,
-`threadId`, nullable `title`, `cwd` and `lastAt`, `titleMatch`, `hitCount`, and up
-to one `hits` entry. A hit contains its exact `itemKey`, an excerpt of at most
+`threadId`, nullable `title`, `cwd` and `lastAt`, `titleMatch`, `hitCount`, and a
+nullable `hit` object. A hit contains its exact `itemKey`, an excerpt of at most
 240 Unicode characters, and nullable `agentThreadId`.
 A hit opens in `agentThreadId` when present and the conversation's `threadId`
 otherwise. `sessions/locate` returns that same destination for the item key.
@@ -221,7 +221,7 @@ uses the same user and assistant kinds as the document. It covers
 at most 128 member sessions and finds 64 newest hits per term per
 candidate. Ranking reads metadata. The gateway applies SQLite's tokenizer to
 the selected text of one hit per result to build its excerpt. Items larger than
-1 MiB still count toward `hitCount`. A conversation can match with zero excerpts.
+1 MiB still count toward `hitCount`. A conversation can match with `hit: null`.
 Hits prefer distinct-term coverage, then recency. `hitCount`
 counts unique items inside these bounded windows. The app clamps this displayed
 count. Candidate, member and hit windows are ordinary result bounds.
