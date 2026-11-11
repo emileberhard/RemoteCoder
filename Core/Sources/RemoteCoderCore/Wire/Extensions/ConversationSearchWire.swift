@@ -18,7 +18,7 @@ struct ConversationSearchResponse: Decodable, Sendable {
         let lastAt: Date?
         let titleMatch: Bool
         let hitCount: Int
-        let hits: [Hit]
+        let hit: Hit?
     }
 
     struct Hit: Decodable, Sendable {

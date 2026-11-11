@@ -239,10 +239,9 @@ struct ConversationSearchSessionTests {
           {"sessionKey":"\(mini.uuidString):claude:home:claude_1","hostId":"\(mini.uuidString)","provider":"claude",
            "threadId":"claude_1","title":"Fix sidebar open hitch","cwd":"/Users/emil/RemoteCoder",
            "lastAt":"2026-11-03T14:02:11Z","titleMatch":false,"hitCount":5,
-           "hits":[{"itemKey":"k@item:1","kind":"assistant","at":"2026-11-03T13:58:40.250Z",
-                    "excerpt":"…the drawer still shows a flicker…","agentThreadId":"child-thread"}]},
+           "hit":{"itemKey":"k@item:1","excerpt":"…the drawer still shows a flicker…","agentThreadId":"child-thread"}},
           {"sessionKey":"\(mini.uuidString):codex:home:t2","hostId":"\(mini.uuidString)","provider":"codex",
-           "threadId":"t2","title":null,"cwd":null,"lastAt":null,"titleMatch":true,"hitCount":0,"hits":[]}
+           "threadId":"t2","title":null,"cwd":null,"lastAt":null,"titleMatch":true,"hitCount":0,"hit":null}
         ]}
         """.utf8)
         let decoder = JSONDecoder()
@@ -254,10 +253,10 @@ struct ConversationSearchSessionTests {
         let first = response.conversations[0]
         #expect(first.hostId == mini && first.provider == .claude && first.hitCount == 5 && !first.titleMatch)
         #expect(first.lastAt == Date(timeIntervalSince1970: 1_793_714_531))
-        #expect(first.hits.first?.agentThreadId == "child-thread")
-        #expect(first.hits.map(\.excerpt) == ["…the drawer still shows a flicker…"])
+        #expect(first.hit?.agentThreadId == "child-thread")
+        #expect(first.hit?.excerpt == "…the drawer still shows a flicker…")
         let second = response.conversations[1]
-        #expect(second.title == nil && second.cwd == nil && second.lastAt == nil && second.titleMatch && second.hits.isEmpty)
+        #expect(second.title == nil && second.cwd == nil && second.lastAt == nil && second.titleMatch && second.hit == nil)
     }
 
     @Test func aPaintedQueryIsReplacedRatherThanMixedWithTheNextQuery() async throws {
@@ -390,7 +389,7 @@ struct ConversationSearchSessionTests {
         {"schemaVersion":1,"truncated":false,"conversations":[
           {"sessionKey":"root-session","hostId":"\(mini.uuidString)","provider":"\(provider.rawValue)",
            "threadId":"\(root)","title":"Root conversation","cwd":null,"lastAt":null,"titleMatch":false,"hitCount":1,
-           "hits":[{"itemKey":"child-session@item:0","excerpt":"drawer result","agentThreadId":\(child.map { "\"\($0)\"" } ?? "null")}]}
+           "hit":{"itemKey":"child-session@item:0","excerpt":"drawer result","agentThreadId":\(child.map { "\"\($0)\"" } ?? "null")}}
         ]}
         """.utf8)
         let response = try JSONDecoder().decode(ConversationSearchResponse.self, from: json)
@@ -461,7 +460,7 @@ struct ConversationSearchSessionTests {
             sessionKey: sessionKey ?? "\(host.uuidString):codex:home:\(thread)", hostId: host, provider: .codex,
             threadId: thread, title: title, cwd: "/Users/developer/RemoteCoder",
             lastAt: lastAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }, titleMatch: titleMatch,
-            hitCount: hitCount, hits: excerpt.map { [.init(itemKey: "fixture@item:1", excerpt: $0, agentThreadId: nil)] } ?? [])
+            hitCount: hitCount, hit: excerpt.map { .init(itemKey: "fixture@item:1", excerpt: $0, agentThreadId: nil) })
     }
 
     private func ids(_ section: ConversationSearchSection) -> [String] {

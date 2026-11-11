@@ -146,7 +146,7 @@ enum ConversationSearchMerge {
         return response.conversations.compactMap { conversation in
             guard let host = host(conversation.hostId, among: hosts),
                   host.marks.purpose(of: conversation.threadId) != .probe else { return nil }
-            let excerpt = conversation.hits.first.map { query.emphasizedExcerpt($0.excerpt) }
+            let excerpt = conversation.hit.map { query.emphasizedExcerpt($0.excerpt) }
             let knownTitle = conversation.title ?? {
                 if localTitles[host.id] == nil {
                     localTitles[host.id] = Dictionary(host.headers.map { header in
@@ -161,10 +161,10 @@ enum ConversationSearchMerge {
             return ConversationSearchCandidate(
                 row: ConversationSearchRow(
                     address: ConversationAddress(hostID: host.id, threadID: conversation.threadId),
-                    agentThreadID: conversation.titleMatch ? nil : conversation.hits.first?.agentThreadId,
+                    agentThreadID: conversation.titleMatch ? nil : conversation.hit?.agentThreadId,
                     section: conversation.titleMatch ? .titles : .messages,
-                    itemKey: conversation.titleMatch ? nil : conversation.hits.first?.itemKey,
-                    findTerm: conversation.hits.first.flatMap { query.bestTerm(in: $0.excerpt) },
+                    itemKey: conversation.titleMatch ? nil : conversation.hit?.itemKey,
+                    findTerm: conversation.hit.flatMap { query.bestTerm(in: $0.excerpt) },
                     sessionKey: conversation.sessionKey, generation: generation, headline: headline,
                     excerpt: knownTitle == nil ? nil : excerpt,
                     dateLabel: conversation.lastAt.map { dateLabel($0, now: now) }, provider: conversation.provider,
