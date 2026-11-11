@@ -369,7 +369,7 @@ private struct ChatScreen: View {
         #endif
         #if RC_PERF_HARNESS
         .background {
-            PerformanceReplaySidebarPublisher(window: window, isOpen: { drawerPresentation.isOpen }, toggle: toggleHistory, select: selectConversation)
+            PerformanceReplaySidebarPublisher(window: window, isOpen: { drawerPresentation.isOpen }, toggle: toggleHistory, select: { selectConversation($0) })
         }
         #endif
         return surface
