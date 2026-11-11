@@ -39,6 +39,7 @@ struct ConversationHistoryList: View, Equatable {
             }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 bottomBar
+                    .background { ThemedSheetBottomBarBackground() }
             }
             .scrollEdgeEffectHidden(true, for: .bottom)
         }
