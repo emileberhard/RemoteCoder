@@ -275,6 +275,22 @@ word index for already matched conversations. `sessions/sql` reports the
 number of capped roots in `coverage.conversationSearch.cappedRoots`. This count
 is null while the derived schema is being installed.
 
+On a MacBook Pro with an isolated copy of 7,330 sources, 3 of 4,911 roots
+reached the 2 MiB cap. The word and conversation FTS indexes used 196.4 MB and
+143.3 MB of SQLite pages. Forty-three warm limit-30 requests at 0.555 load per
+core took 88 ms at p50 and 193 ms at p95, with a 228 ms maximum. The version 4
+derived rebuild took 262 seconds from process start, including an overlapping
+build. Health was ready in 2.1 seconds at 0.637 load per core, compared with
+39.6 seconds at 0.267 before the reset moved to the worker. With 7,330 sources
+pending, inventory and search took 1.38 and 1.28 ms at 0.401 load per core.
+
+One append to the p95 tree by catalog text bytes and one to the largest tree
+took 37 and 894 ms to refresh the document before commit at 0.595 load per core.
+Those refreshes scheduled 333 ms and 8.05 seconds of cooldown. Adding the
+observed refreshes including WAL commit gives approximately 0.42 and 9.86
+seconds of candidate lag if a new append waits the full cooldown. These are
+measured examples. Typed text remains complete and storage commit time varies.
+
 ## Locate a matching item
 
 `sessions/locate {itemKey}` returns `{threadId,turnId,turnsCursor,itemId,itemsCursor}`.
