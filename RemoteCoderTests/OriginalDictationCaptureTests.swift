@@ -15,10 +15,10 @@ struct OriginalDictationCaptureTests {
         let directory = URL.temporaryDirectory.appending(path: "original-dictation-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let seal = OriginalFinalizationGate()
-        let library = SharedDictationLibrary(defaults: fixture.defaults, directory: directory) { writer in
+        let library = SharedDictationLibrary(defaults: fixture.defaults, directory: directory, background: DictationFixtureBackground(), finalize: { writer in
             await seal.wait()
             _ = try await writer.finish()
-        }
+        })
         library.isEnabled = true
         library.cancelPublication()
         defer { library.cancelPublication(); await seal.release(); await library.finishArchiving() }
@@ -59,7 +59,7 @@ struct OriginalDictationCaptureTests {
         defer { defaults.removePersistentDomain(forName: defaultsName) }
         let directory = URL.temporaryDirectory.appending(path: defaultsName)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = SharedDictationLibrary(defaults: defaults, directory: directory)
+        let library = SharedDictationLibrary(defaults: defaults, directory: directory, background: DictationFixtureBackground())
         library.isEnabled = true
         library.cancelPublication()
         defer { library.cancelPublication(); await library.finishArchiving() }

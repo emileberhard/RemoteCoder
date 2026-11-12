@@ -872,7 +872,10 @@ originating draft and finish there after navigation.
 
 Opted-in built-in dictation also uses the workspace-owned `SharedDictationLibrary`
 for account-fenced personal settings, original microphone journaling and immutable
-result publication. `docs/unified-dictation.md` owns that contract. Draft receipts
+result publication. One library-owned background execution covers sealing,
+result writes and publication until idle, with cancellation on expiration.
+Foreground profile refresh is separate from publication.
+`docs/unified-dictation.md` owns that contract. Draft receipts
 remove only the provider recovery copy, never the separate archival original.
 
 Dictation is recorded to SpeechKit's `DictationRecordingStore` while it is

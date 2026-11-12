@@ -89,7 +89,7 @@ final class RemoteCoderAppModel {
             gatewayPolicy: PerfBuild.isHarness ? .isolated : .production,
             storage: scope.hostStorage,
             dictationLibrary: PerfBuild.isHarness ? nil : SharedDictationLibrary(defaults: defaults,
-                directory: scope.hostStorage.directory(for: .device).appending(path: "dictation-library"))
+                directory: scope.hostStorage.directory(for: .device).appending(path: "dictation-library"), background: makeBackgroundExecution())
         )
         return RemoteCoderAppModel(workspace: workspace, voiceCalls: voiceCalls, scenes: scenes,
                                    makeBackgroundExecution: makeBackgroundExecution)
@@ -203,7 +203,7 @@ final class RemoteCoderAppModel {
         telemetry.sceneChanged()
         switch phase {
         case .active:
-            workspace.dictationLibrary?.requestPublication()
+            workspace.dictationLibrary?.applicationDidBecomeActive()
             syncDiagnosticsHost()
             synchronizeHosts()
             if workspace.gatewayPolicy.registersDevice {
@@ -217,7 +217,7 @@ final class RemoteCoderAppModel {
         case .inactive:
             await workspace.handleScenePhaseInactive()
         case .background:
-            workspace.dictationLibrary?.cancelPublication()
+            workspace.dictationLibrary?.applicationDidEnterBackground()
             drainDiagnosticsOnBackground()
             await workspace.handleScenePhaseBackground()
         @unknown default:

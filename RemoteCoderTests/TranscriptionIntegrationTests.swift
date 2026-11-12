@@ -155,7 +155,7 @@ struct TranscriptionIntegrationTests {
             defer { recordings.cleanUp() }
             let directory = URL.temporaryDirectory.appending(path: "azure-stop-latency-\(UUID())")
             defer { try? FileManager.default.removeItem(at: directory) }
-            let library = SharedDictationLibrary(defaults: fixture.defaults, directory: directory)
+            let library = SharedDictationLibrary(defaults: fixture.defaults, directory: directory, background: DictationFixtureBackground())
             library.isEnabled = archived
             library.cancelPublication()
             defer { library.cancelPublication(); await library.finishArchiving() }

@@ -137,8 +137,10 @@ Gateway logs live under `~/Library/Logs/remote-coder/`. The journal records RPC,
 turn, tool, transport and error evidence and can include conversation content,
 paths and selected provider responses; it is private operational data. The app
 exports bounded diagnostic/log segments to its selected gateway for diagnosis,
-including lifecycle, connection, performance and failure metadata. Device and
-push tokens are redacted or represented by fingerprints in diagnostics. Voice
+including lifecycle, connection, performance and failure metadata, plus the
+random identifiers of up to three recordings that could not be uploaded to your
+iCloud dictation library. Device and push tokens are redacted or represented by
+fingerprints in diagnostics. Voice
 logs contain the text described above. Default journal, uploaded app-log and
 Desktop-reconciliation retention is 30 days. Retention is not a guarantee that
 all data is erased after 30 days: provider transcripts, recovery state, uploaded

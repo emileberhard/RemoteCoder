@@ -29,6 +29,12 @@ final class SharedDictationLibrary {
     private static let enabledKey = "dictation.sharedLibrary.enabled"
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let directory: URL
+    @ObservationIgnored private let background: any BackgroundExecution
+    @ObservationIgnored private var backgroundHeld = false
+    @ObservationIgnored private var backgroundExpired = false
+    @ObservationIgnored private var isInBackground = false
+    @ObservationIgnored private var profileRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private let openStore: @Sendable (URL) async throws -> DictationLibraryStore
     @ObservationIgnored private var publicationTask: Task<Void, Never>?
     @ObservationIgnored private var publicationRequested = false
     @ObservationIgnored private var publicationGeneration: UInt64 = 0
@@ -42,8 +48,11 @@ final class SharedDictationLibrary {
     @ObservationIgnored private let finalize: @Sendable (DictationCaptureWriter) async throws -> Void
     @ObservationIgnored private var storeTask: Task<DictationLibraryStore, any Error>?
 
-    init(defaults: UserDefaults, directory: URL,
+    init(defaults: UserDefaults, directory: URL, background: any BackgroundExecution,
+         openStore: @escaping @Sendable (URL) async throws -> DictationLibraryStore = { try await SharedDictationLibrary.open(directory: $0) },
          finalize: @escaping @Sendable (DictationCaptureWriter) async throws -> Void = { _ = try await $0.finish() }) {
+        self.background = background
+        self.openStore = openStore
         self.finalize = finalize
         self.defaults = defaults
         self.directory = directory
@@ -113,6 +122,8 @@ final class SharedDictationLibrary {
                 try await finalize(writer)
                 status = unsavedResults.isEmpty ? "Saved on this device" : unsavedResultsStatus
                 requestPublication()
+            } catch DictationLibraryError.noAudio {
+                logger.notice("dictation ended without audio capture=\(capture.id.uuidString)")
             } catch {
                 status = "Recording retained for recovery: \(error.localizedDescription)"
             }
@@ -125,10 +136,61 @@ final class SharedDictationLibrary {
 
     private func startArchiving(_ work: @escaping @MainActor () async -> Void) {
         let id = UUID()
+        holdBackgroundExecution()
         archiving[id] = Task(priority: .utility) { [self] in
             await work()
             archiving[id] = nil
+            releaseBackgroundExecutionIfIdle()
         }
+    }
+
+    private func holdBackgroundExecution() {
+        guard !backgroundHeld, !backgroundExpired else { return }
+        backgroundHeld = true
+        background.hold(named: "Save dictation library") { [weak self] in
+            guard let self else { return }
+            backgroundExpired = true
+            cancelPublication()
+            background.release()
+            backgroundHeld = false
+        }
+    }
+
+    private func releaseBackgroundExecutionIfIdle() {
+        guard archiving.isEmpty, publicationTask == nil else { return }
+        backgroundExpired = false
+        guard backgroundHeld else { return }
+        background.release()
+        backgroundHeld = false
+    }
+
+    func applicationDidBecomeActive() {
+        isInBackground = false
+        backgroundExpired = false
+        guard isEnabled, profileRefreshTask == nil else { return }
+        profileRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            defer { profileRefreshTask = nil }
+            do { try await refreshProfile(in: store()) }
+            catch is CancellationError { return }
+            catch { status = "Shared settings unavailable: \(error.localizedDescription)" }
+            guard !Task.isCancelled else { return }
+            requestPublication()
+        }
+    }
+
+    func applicationDidEnterBackground() {
+        isInBackground = true
+    }
+
+    private func refreshProfile(in store: DictationLibraryStore) async throws {
+        _ = try await store.refresh()
+        let state = await store.profileState()
+        let account = store.accountSession()
+        if case .ready(let snapshot) = state, snapshot.accountIdentifier == account?.accountIdentifier {
+            profileAccount = account
+            profile = snapshot.profile
+        } else { profile = nil; profileAccount = nil }
     }
 
     private func archive(_ version: DictationResultVersion) {
@@ -250,7 +312,9 @@ final class SharedDictationLibrary {
     }
 
     func requestPublication() {
-        guard isEnabled else { return }
+        guard isEnabled, !backgroundExpired else { return }
+        holdBackgroundExecution()
+        guard !backgroundExpired else { return }
         publicationRequested = true
         if let publicationTask, !publicationTask.isCancelled { return }
         let previous = publicationTask
@@ -262,44 +326,77 @@ final class SharedDictationLibrary {
                 self.publicationRequested = false
                 await self.performPublication()
             }
-            if self?.publicationGeneration == generation { self?.publicationTask = nil }
+            if self?.publicationGeneration == generation {
+                self?.publicationTask = nil
+                self?.releaseBackgroundExecutionIfIdle()
+            }
         }
     }
 
     private func performPublication() async {
         guard isEnabled else { return }
+        let started = ContinuousClock.now
+        var before: DictationPublicationStatus?
+        var after: DictationPublicationStatus?
+        var stopped: (any Error)?
+        defer {
+            logPublication(started: started, before: before, after: after, error: stopped)
+        }
         do {
             let store = try await store()
+            if store.accountSession() == nil { try await refreshProfile(in: store) }
+            before = try await store.status()
             for version in unsavedResults.values { await save(version) }
-            _ = try await store.recoverInterruptedCaptures()
-            _ = try await store.refresh()
-            let profile = await store.profileState()
-            let account = store.accountSession()
-            if case .ready(let snapshot) = profile, snapshot.accountIdentifier == account?.accountIdentifier {
-                profileAccount = account
-                self.profile = snapshot.profile
-            } else { self.profile = nil }
             let pending = try await store.publishPending()
+            after = pending
             unassignedCaptureCount = pending.unverifiedCaptureCount
             if !unsavedResults.isEmpty {
                 status = unsavedResultsStatus
             } else if let failure = pending.failures.first {
-                status = "\(pending.failures.count) recordings need attention: \(failure.message)"
+                status = "\(pending.failures.count) recordings need attention: \(failure.error.localizedDescription)"
             } else if pending.heldCaptureCount > 0 {
                 status = "\(pending.heldCaptureCount) recordings held for account reconciliation"
             } else if pending.pendingCaptureCount > 0 {
                 status = "\(pending.pendingCaptureCount) recordings waiting to upload"
-            } else if case .absent = profile {
+            } else if case .absent = await store.profileState() {
                 status = "Set up your profile in WisprClone"
-            } else if case .ready(let snapshot) = profile, !snapshot.profile.archiveEnabled {
+            } else if let profile, !profile.archiveEnabled {
                 status = "Shared settings active · original archiving off"
             } else {
                 status = "Synced to iCloud"
             }
-        } catch is CancellationError {
         } catch {
-            status = unsavedResults.isEmpty ? "Saved on this device · upload pending: \(error.localizedDescription)" : unsavedResultsStatus
+            stopped = error
+            if let storeTask, let store = try? await storeTask.value { after = try? await store.status() }
+            if !(error is CancellationError) {
+                status = unsavedResults.isEmpty ? "Saved on this device · upload pending: \(error.localizedDescription)" : unsavedResultsStatus
+            }
         }
+    }
+
+    private func logPublication(started: ContinuousClock.Instant, before: DictationPublicationStatus?, after: DictationPublicationStatus?, error: (any Error)?) {
+        guard error != nil || (before?.pendingCaptureCount ?? 0) > 0 || before != after || !(after?.failures.isEmpty ?? true) else { return }
+        let elapsed = started.duration(to: .now)
+        let milliseconds = elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000
+        let outcome = error.map { $0 is CancellationError ? "cancelled" : "failed" } ?? ((after?.failures.isEmpty ?? true) ? "completed" : "capture_failures")
+        let failures = (after?.failures ?? before?.failures ?? []).prefix(3).map {
+            "\($0.captureID.uuidString):\(Self.diagnostic($0.error))"
+        }.joined(separator: ",")
+        logger.notice("publication background=\(isInBackground) duration_ms=\(milliseconds) pending_before=\(before.map { String($0.pendingCaptureCount) } ?? "unknown") pending_after=\(after.map { String($0.pendingCaptureCount) } ?? "unknown") held=\(after.map { String($0.heldCaptureCount) } ?? "unknown") outcome=\(outcome) error=\(error.map(Self.diagnostic) ?? "none") failures=[\(failures)]")
+    }
+
+    private static func diagnostic(_ error: any Error) -> String {
+        if error is CancellationError { return "cancelled" }
+        if let error = error as? DictationLibraryError {
+            switch error {
+            case .cloudFailure(let domain, let code): return "cloud_failure:\(domain):\(code)"
+            case .storageFailure(let domain, let code): return "storage_failure:\(domain):\(code)"
+            default: return Mirror(reflecting: error).children.first?.label ?? String(describing: error)
+            }
+        }
+        let value = error as NSError
+        let domain = [NSCocoaErrorDomain, NSURLErrorDomain, NSPOSIXErrorDomain, NSOSStatusErrorDomain].contains(value.domain) ? value.domain : String(reflecting: type(of: error))
+        return "\(domain):\(value.code)"
     }
 
     func failure(recordingID: UUID, plan: DictationPlan, error: any Error) {
@@ -371,7 +468,7 @@ final class SharedDictationLibrary {
         if let storeTask { return try await storeTask.value }
         let directory = directory
         let task = Task {
-            let store = try await Self.open(directory: directory)
+            let store = try await openStore(directory)
             await followAccount(of: store)
             return store
         }
@@ -391,7 +488,7 @@ final class SharedDictationLibrary {
         }
     }
 
-    deinit { accountTask?.cancel(); settingsTask?.cancel() }
+    deinit { accountTask?.cancel(); settingsTask?.cancel(); profileRefreshTask?.cancel() }
 
     @concurrent private static func open(directory: URL) async throws -> DictationLibraryStore {
         guard let container = Bundle.main.object(forInfoDictionaryKey: "RemoteCoderDictationContainer") as? String,

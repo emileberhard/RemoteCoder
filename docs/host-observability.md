@@ -394,6 +394,13 @@ took a third of the app's CPU in the field while RemoteCoder's own records were
 3.5% of what it exported. A failure that matters to RemoteCoder reaches its
 own log where the app handles it, for example a thrown SpeechKit error.
 
+Shared dictation publication emits one app-owned `DictationLibrary` notice for
+work or failure: background state, duration, pending before/after, held count,
+outcome and at most three UUID/case/domain/code capture failures. These pass
+summaries use `AppLogger`, so they reach the normal app-log upload; SpeechKit
+emits no publication log. Capture identifiers are random UUIDs and summaries
+exclude account identifiers and dictation content.
+
 **Log levels.** `AppLogger` offers `notice`, `info`, `error` and `fault`, and
 every level reaches the host copy.
 

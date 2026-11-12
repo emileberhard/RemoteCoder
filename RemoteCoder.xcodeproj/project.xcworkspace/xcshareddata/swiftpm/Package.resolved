@@ -24,8 +24,8 @@
       "kind": "remoteSourceControl",
       "location": "https://github.com/emileberhard/SpeechKit.git",
       "state": {
-        "revision": "3590785752845895dc3d3d4058844afe8bb7ebed",
-        "version": "0.6.0"
+        "revision": "e050285e46a96ef634f9d0445f7664149b0dd86c",
+        "version": "0.7.0"
       }
     },
     {

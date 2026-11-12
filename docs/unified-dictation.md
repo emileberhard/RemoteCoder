@@ -168,3 +168,32 @@ History decoding keeps its streaming AVAudioConverter loop: the capture
 processor has no file-reading/end-of-stream contract and buffers capture-sized
 chunks without draining resampler tail at EOF. Reusing it would require a new
 contract for file conversion, so the decoder remains the explicit file boundary.
+
+## Publication lifetime and observability
+
+`SharedDictationLibrary` owns a single background execution across overlapping
+original sealing, result writes and its serial publication task. It acquires the
+hold before admitting any of that work and releases it once all work is idle.
+UIKit expiration cancels the pass and ends the hold; sealing that finishes
+after expiry cannot restart publication in that expired interval. App
+backgrounding keeps publication running. The Mac uses the existing foreground-only execution seam.
+A committed write keeps its local receipt even when cancellation arrives during
+the request, so a later pass resumes without losing progress.
+
+Activation refreshes the shared profile explicitly. A publication pass refreshes
+only when it has no verified account session, and never runs its own recovery.
+SpeechKit owns recovery, the sealed/current-account pending predicate,
+newest-first publication, chunk-before-capture-before-result ordering, and
+bounded transient retries. An empty dictation logs a notice without replacing
+the status with a recovery warning.
+
+Every pass that did or attempted work emits one `AppLogger` notice in category
+`DictationLibrary`: background state, duration, pending before/after, held count,
+outcome and at most three capture failures with UUID, case, domain and code.
+Unavailable counts stay unknown. Errors use their typed fields; account
+identifiers and transcript text never enter these notices. Both app targets use
+one producer in the main application process; extensions have no producer store,
+and no command mode performs producer recovery or publication.
+
+Apple references: [background execution lifetime](https://developer.apple.com/documentation/uikit/extending-your-app-s-background-execution-time)
+and [CloudKit request configuration](https://developer.apple.com/documentation/cloudkit/ckdatabase/configuredwith(configuration:group:body:)-637p1).

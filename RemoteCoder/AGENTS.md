@@ -1881,7 +1881,15 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
 - **Shared library opt-in.** The workspace owns `SharedDictationLibrary`; the
   device-local choice is off by default. It freezes a shared chat plan and
   journals original microphone buffers before provider resampling. Connected model/language controls edit the shared profile; composer UI contains no library status. The workspace owns and drains utility-priority original sealing and result writes independently of each other and of stop-to-text delivery, which checks the account through the store's synchronous session snapshot and never waits on the store actor. Failed result writes stay queued for the next publication pass and keep their status visible. The shared
-  capture and provider recovery recording use one UUID but separate lifetimes:
+  library holds one `BackgroundExecution` before sealing, result archiving or
+  publication starts and releases it only when all are idle. Expiration cancels
+  publication; scene backgrounding keeps it running. Foreground activation
+  refreshes the profile explicitly, and a pass refreshes only if no account
+  session exists; SpeechKit owns interrupted-capture recovery. A non-idle pass
+  emits one `AppLogger` notice with background state, duration, pending counts,
+  held count, outcome and at most three capture UUID/case/domain/code failures.
+  Empty capture finalization logs a notice without changing the status line.
+  The shared capture and provider recovery recording use one UUID but separate lifetimes:
   draft receipts never authorize archival deletion. Unconfirmed owners remain
   held; recovery of a known other-account capture is fenced. The 512 MiB spool
   never evicts unpublished originals. See `docs/unified-dictation.md` for
