@@ -143,9 +143,32 @@ jobs:
       - name: Install native test tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes lsof tmux zsh
+          sudo apt-get install --yes bubblewrap lsof tmux zsh
+      - name: Test relay provisioning in a disposable filesystem
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          RC_RELAY_REQUIRE_SANDBOX=1 python3 -m unittest discover -s scripts/tests -p test_relay_installer.py -v
       - run: rustup show
       - run: python3 scripts/gateway-check.py cargo
+
+  relay-debian:
+    runs-on: ubuntu-24.04
+    container: debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+    timeout-minutes: 10
+    steps:
+      - name: Install Debian test prerequisites
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends ca-certificates git init-system-helpers procps python3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require Debian 13 package-helper coverage
+        run: |
+          . /etc/os-release
+          test "$ID" = debian && test "$VERSION_ID" = 13
+          mkdir -p /run/systemd/system
+          RC_RELAY_REQUIRE_DEBIAN=1 python3 -m unittest scripts.tests.test_relay_activation.RelayPolicyTests.test_debian_helper_observes_the_policy_before_systemctl -v
 
   swift:
     needs: reuse
@@ -268,7 +291,7 @@ jobs:
         working-directory: web-client
 
   passed:
-    needs: [reuse, agent-calls, gateway, gateway-lint, gateway-linux, swift, apps-ios, apps-mac, web]
+    needs: [reuse, agent-calls, gateway, gateway-lint, gateway-linux, relay-debian, swift, apps-ios, apps-mac, web]
     if: ${{ always() && !github.event.repository.private }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
