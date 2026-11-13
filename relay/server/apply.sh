@@ -38,8 +38,8 @@ systemctl enable --quiet nftables
 if systemctl is-active --quiet nftables; then
     activate_config_change nftables restart
 else
-    systemctl start nftables
-    clear_config_change nftables
+    activate_config_change nftables start
+    systemctl is-active --quiet nftables || systemctl start nftables
 fi
 
 id relay-tunnel >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/relay-tunnel --shell /usr/sbin/nologin relay-tunnel
@@ -70,8 +70,8 @@ systemctl enable --quiet remote-coder-relay-hosts
 if systemctl is-active --quiet remote-coder-relay-hosts; then
     activate_config_change remote-coder-relay-hosts restart
 else
-    systemctl start remote-coder-relay-hosts
-    clear_config_change remote-coder-relay-hosts
+    activate_config_change remote-coder-relay-hosts start
+    systemctl is-active --quiet remote-coder-relay-hosts || systemctl start remote-coder-relay-hosts
 fi
 
 record_config_change "$src/sshd.conf" /etc/ssh/sshd_config.d/00-0-remote-coder-relay.conf ssh

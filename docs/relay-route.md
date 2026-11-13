@@ -31,6 +31,8 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   directly activates changed configuration; this is not a maintenance fence.
   The operator must verify no client work is interrupted before provisioning
   changed configuration or activating installed packages.
+  Package installation alone does not activate new binaries or libraries; the
+  future maintenance owner or an explicit supervised operation must activate them.
 - **HAProxy** terminates TLS 1.3 on 443 with a self-signed P-256 certificate
   whose SPKI the app pins, and passes only streams that begin with `CONNECT `.
 - **tinyproxy** requires Basic auth (it answers 407 and closes; URLSession

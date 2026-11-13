@@ -115,11 +115,17 @@ class RelayPolicyTests(unittest.TestCase):
             101,
         )
 
-    @unittest.skipUnless(
-        Path("/usr/bin/deb-systemd-invoke").exists(),
-        "Debian service helper is unavailable",
-    )
     def test_debian_helper_observes_the_policy_before_systemctl(self):
+        required = os.environ.get("RC_RELAY_REQUIRE_DEBIAN") == "1"
+        if not Path("/usr/bin/deb-systemd-invoke").exists():
+            if required:
+                self.fail("Debian service helper is required")
+            self.skipTest("Debian service helper is unavailable")
+        invoke = Path("/usr/sbin/invoke-rc.d")
+        if required and (
+            not invoke.exists() or not Path("/run/systemd/system").is_dir()
+        ):
+            self.fail("invoke-rc.d and its systemd query fixture are required")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             policy = root / "usr/sbin/policy-rc.d"
@@ -165,7 +171,6 @@ class RelayPolicyTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("start haproxy.service", calls.read_text())
 
-            invoke = Path("/usr/sbin/invoke-rc.d")
             if invoke.exists() and Path("/run/systemd/system").is_dir():
                 for action in ("stop", "restart", "reload", "force-reload"):
                     with self.subTest(helper="invoke-rc.d", action=action):
@@ -188,6 +193,88 @@ class RelayPolicyTests(unittest.TestCase):
 
 
 class RelayConfigActivationTests(unittest.TestCase):
+    def test_rollback_after_uncertain_activation_reactivates_current_configuration(
+        self,
+    ):
+        for failure in ("interrupted", "stopped", "damaged"):
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                incoming, installed = root / "incoming", root / "installed"
+                runtime, running, calls = (
+                    root / "runtime",
+                    root / "running",
+                    root / "calls",
+                )
+                for path in (incoming, installed, runtime):
+                    path.write_text("A")
+                running.touch()
+                incoming.write_text("B")
+                shell = r"""
+set -eu
+activation_dir=$2
+source "$1"
+systemctl() {
+    printf '%s\n' "$*" >> "$CALLS"
+    case "$FAILURE" in
+        interrupted) cp "$INSTALLED" "$RUNTIME"; kill -TERM $$ ;;
+        stopped) rm -f "$RUNNING"; return 1 ;;
+        *) cp "$INSTALLED" "$RUNTIME"; : > "$RUNNING" ;;
+    esac
+}
+record_config_change "$INCOMING" "$INSTALLED" haproxy
+cp "$INCOMING" "$INSTALLED"
+activate_config_change haproxy restart
+"""
+                pending = root / "pending"
+                pending.mkdir()
+                command = [
+                    "/bin/bash",
+                    "-c",
+                    shell,
+                    "--",
+                    str(ACTIVATION),
+                    str(pending),
+                ]
+                environment = os.environ | {
+                    "INCOMING": str(incoming),
+                    "INSTALLED": str(installed),
+                    "RUNTIME": str(runtime),
+                    "RUNNING": str(running),
+                    "CALLS": str(calls),
+                    "FAILURE": "interrupted" if failure == "damaged" else failure,
+                }
+                result = subprocess.run(
+                    command,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                if failure == "damaged":
+                    for record in (pending / "haproxy").iterdir():
+                        if record.name != "attempted":
+                            record.write_text("")
+                incoming.write_text("A")
+                result = subprocess.run(
+                    command,
+                    env=environment | {"FAILURE": "none"},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(running.exists())
+                self.assertEqual(runtime.read_text(), "A")
+                self.assertEqual(
+                    calls.read_text().splitlines(),
+                    ["restart haproxy", "restart haproxy"],
+                )
+                self.assertFalse((pending / "haproxy").exists())
+
     def test_only_changed_configuration_triggers_activation_and_failed_action_is_retried(
         self,
     ):
