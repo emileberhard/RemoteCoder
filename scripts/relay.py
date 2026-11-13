@@ -139,6 +139,8 @@ def provision(_: argparse.Namespace) -> None:
         "sshd.conf": (RELAY / "server" / "sshd-remote-coder-relay.conf").read_text().replace(
             "@PERMIT_LISTEN@", " ".join(f"127.0.0.1:{entry['port']}" for entry in hosts.values())).encode(),
         "unattended-upgrades.conf": (RELAY / "server" / "unattended-upgrades.conf").read_bytes(),
+        "policy-rc.d": (RELAY / "server" / "policy-rc.d").read_bytes(),
+        "config-activation.sh": (RELAY / "server" / "config-activation.sh").read_bytes(),
         "authorized_keys": authorized_keys.encode(),
         "credential": credential.encode(),
         "username": PROXY_USER.encode(),

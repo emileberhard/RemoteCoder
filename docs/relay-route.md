@@ -20,6 +20,17 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   443, and SSH takes keys only. Unattended upgrades install updates, but automatic
   reboot is disabled. Activating a new kernel requires a separately coordinated
   reboot that preserves active work.
+- **Package activation.** Provisioning installs the relay-owned `policy-rc.d`
+  before APT runs. Debian's `invoke-rc.d` and `deb-systemd-invoke` then deny
+  stop, restart and reload actions for HAProxy, tinyproxy and SSH while still
+  permitting package installation and service starts. An existing policy owned
+  by something else blocks provisioning instead of being overwritten. Direct
+  `systemctl` calls and other helpers bypass this policy. Provisioning records
+  changed service configuration until its activation succeeds, so retrying an
+  interrupted apply does not silently leave a change unapplied. It still
+  directly activates changed configuration; this is not a maintenance fence.
+  The operator must verify no client work is interrupted before provisioning
+  changed configuration or activating installed packages.
 - **HAProxy** terminates TLS 1.3 on 443 with a self-signed P-256 certificate
   whose SPKI the app pins, and passes only streams that begin with `CONNECT `.
 - **tinyproxy** requires Basic auth (it answers 407 and closes; URLSession
