@@ -2660,7 +2660,16 @@ The existing capture sink supplies a separate 16 kHz mono PCM16 feed when the
 provider uses another rate. The same recognition chunks reach the shared check
 and the check, which hands its admitted audio to the label request. At stop the check may request Azure
 speaker phrases through the existing relay, overlapping ordinary transcription.
-Untrusted profiles, Everyone and a negative watcher preserve ordinary delivery.
+When the watcher heard nothing, a line break in an Azure MAI-Transcribe-2
+transcript, which marks another speaker, requests them once that transcript
+arrives; `DictationVoicePolicy` states this for that model only, because other
+models break lines at paragraphs.
+That request starts after the transcript, so its whole upload counts against
+the delivery budget; the budget was calibrated on requests that overlap
+transcription, and this case is unmeasured. The outcome log's `labels_trigger`
+(`watcher`, `transcript` or `none`), `upload_ms` and `labelled_reply_ms` are
+there to measure it.
+Untrusted profiles, Everyone and a negative watcher with no marked speaker preserve ordinary delivery.
 A missed delivery budget records a failed outcome and preserves My Voice's
 profile status. Saved recovery recordings skip Only Mine because they have no
 live watcher evidence. Failure or a missed delivery budget keeps the selected provider's text. User cancellation cancels both requests.
@@ -2673,7 +2682,8 @@ persists everyone's text and tracked insertion ranges with its draft. Restore
 Everyone replaces those dictation ranges without another transcription;
 unrelated edits move ranges, replacing their text removes them, and sending
 clears them. Live learning follows the shared check. With the library enabled,
-its recent local originals can teach the profile once; replay downloads no audio
+its recent local originals can teach the profile once; replay downloads no audio,
+verifies the library's account when a cold launch has not yet done so,
 and validates the account lease before applying candidates.
 
 Composer dictation (realtime and batch) and dictation cleanup use SpeechKit's own

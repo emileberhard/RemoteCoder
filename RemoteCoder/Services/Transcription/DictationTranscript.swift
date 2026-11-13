@@ -30,4 +30,8 @@ struct DictationTranscript: Sendable {
 
 enum DictationVoicePolicy {
     static let labelledModel = (selection: TranscriptionModel.azureMAITranscribe2, provider: AzureSpeechModel.maiTranscribe2)
+
+    static func breaksLinesAtSpeakerTurns(_ model: String) -> Bool {
+        [labelledModel.selection.libraryID, labelledModel.selection.batchLibraryID].contains(model)
+    }
 }

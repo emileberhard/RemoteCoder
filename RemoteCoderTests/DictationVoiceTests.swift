@@ -1,6 +1,6 @@
 import AVFoundation
 import Foundation
-import SpeakerRecognition
+@testable import SpeakerRecognition
 import SpeechKit
 import Synchronization
 import Testing
@@ -186,6 +186,28 @@ struct DictationVoiceTests {
         let result = try await session.resolve(DictationTranscript(text: "Selected complete words.", model: "selected/model"))
         #expect(result.transcript.removedVoices)
         #expect(result.transcript.everyone == "Selected complete words.")
+        await session.cancel()
+    }
+
+    @Test(arguments: [(TranscriptionModel.azureMAITranscribe2.libraryID, 1), (TranscriptionModel.azureMAITranscribe2.batchLibraryID, 1),
+                      (TranscriptionModel.openAIGPT4oMini.batchLibraryID, 0)])
+    func onlyTheLabelledModelsLineBreakRequestsLabels(model: String, requests: Int) async throws {
+        let fixture = try await VoiceFixture(trusted: true)
+        defer { fixture.cleanUp() }
+        let session = DictationVoiceSession(state: .active(fixture.check))
+        let requested = Mutex(0)
+        session.append(fixture.owner)
+        await session.finish { _, _ in
+            requested.withLock { $0 += 1 }
+            return [fixture.phrases[0]]
+        }
+        await fixture.check.checking?.value
+        #expect(requested.withLock { $0 } == 0)
+        let original = DictationTranscript(text: "Only my words.\nOther voice.", model: model)
+        let result = try await session.resolve(original)
+        #expect(requested.withLock { $0 } == requests)
+        #expect(result.transcript.outcome?.path == (requests == 1 ? .keptEveryone : .notHeard))
+        #expect(result.transcript.text == original.text)
         await session.cancel()
     }
 

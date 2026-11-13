@@ -48,8 +48,8 @@ nonisolated final class DictationVoiceSession: Sendable {
 
     func finish(fetch: @escaping @Sendable (Data, @escaping @Sendable (Duration) -> Void) async throws -> [SpeakerPhrase]) async {
         guard case .active(let check) = state.withLock({ $0 }) else { return }
-        await check.finish { [self] pcm in
-            try await fetch(pcm) { [self] duration in uploadTime.withLock { $0 = duration } }
+        await check.finish { [weak self] pcm in
+            try await fetch(pcm) { [weak self] duration in self?.uploadTime.withLock { $0 = duration } }
         }
     }
 
@@ -61,7 +61,9 @@ nonisolated final class DictationVoiceSession: Sendable {
         case .unavailable(let error): return failed(original, error: error)
         case .active(let check):
             do {
-                let result = try await check.resolve(everyone: original.text, waitingUpTo: budget(samples.withLock { $0 }))
+                let result = try await check.resolve(everyone: original.text,
+                    linesAreSpeakerTurns: DictationVoicePolicy.breaksLinesAtSpeakerTurns(original.model),
+                    waitingUpTo: budget(samples.withLock { $0 }))
                 try Task.checkCancellation()
                 if case .unavailable(let error) = state.withLock({ $0 }) { return failed(original, error: error) }
                 let transcript = DictationTranscript(text: result.text, everyone: result.everyone,

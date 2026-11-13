@@ -302,8 +302,10 @@ final class VoiceInputController {
             case nil: return result.transcript
             }
             let upload = result.upload.map { String(Self.milliseconds($0)) } ?? "unknown"
-            let completion = (try? result.check?.get())?.labelledReplyTime.map { String(Self.milliseconds($0)) } ?? "unknown"
-            VoiceModeDiagnostics.log("dictation voice check outcome=\(result.transcript.outcome?.path.rawValue ?? "unknown") upload_ms=\(upload) labelled_reply_ms=\(completion) added_wait_ms=\(Self.milliseconds(result.wait))")
+            let check = try? result.check?.get()
+            let completion = check?.labelledReplyTime.map { String(Self.milliseconds($0)) } ?? "unknown"
+            let trigger = check?.labelRequest?.rawValue ?? "none"
+            VoiceModeDiagnostics.log("dictation voice check outcome=\(result.transcript.outcome?.path.rawValue ?? "unknown") labels_trigger=\(trigger) upload_ms=\(upload) labelled_reply_ms=\(completion) added_wait_ms=\(Self.milliseconds(result.wait))")
             await recognition.cancel()
             return result.transcript
         } catch is CancellationError where !Task.isCancelled {
