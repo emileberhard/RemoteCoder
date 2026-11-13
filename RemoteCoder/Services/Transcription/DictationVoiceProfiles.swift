@@ -102,7 +102,7 @@ final class DictationVoiceProfiles {
             defer { historyTask = nil }
             do {
                 try await applyForget()
-                guard let originals = try await history(), let window = try await store.beginHistory() else { return }
+                guard let window = try await store.beginHistory(), let originals = try await history() else { return }
                 let history = try await VoiceHistory.learn(from: originals.recordings, in: window, decode: Self.decode)
                 try Task.checkCancellation()
                 try await originals.validate()

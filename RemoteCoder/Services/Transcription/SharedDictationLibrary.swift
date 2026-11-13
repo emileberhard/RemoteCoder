@@ -444,6 +444,7 @@ final class SharedDictationLibrary {
     func localVoiceHistory() async throws -> DictationVoiceHistory? {
         guard isEnabled else { return nil }
         let store = try await store()
+        if store.accountSession() == nil { _ = try await store.refresh() }
         guard let account = store.accountSession() else { throw DictationLibraryError.accountUnavailable }
         let entries = try await store.entries()
         try store.validateAccountSession(account)

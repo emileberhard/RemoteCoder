@@ -102,6 +102,26 @@ final class DictationFixtureBackground: BackgroundExecution {
         #expect(fixture.background.releases == 1)
     }
 
+    @Test func voiceHistoryVerifiesTheAccountAtAColdLaunch() async throws {
+        let name = "SyntheticVoiceHistory.\(UUID())"
+        let root = URL.temporaryDirectory.appending(path: name)
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: name)
+        }
+        defaults.set(true, forKey: "dictation.sharedLibrary.enabled")
+        let store = try DictationLibraryStore(directory: root, source: "synthetic", capacityBytes: 16 * 1_024 * 1_024,
+                                             cloud: DictationPublicationCloud(profile: Self.profile))
+        let library = SharedDictationLibrary(defaults: defaults, directory: root, background: DictationFixtureBackground(), openStore: { _ in store })
+        #expect(store.accountSession() == nil)
+        let history = try #require(try await library.localVoiceHistory())
+        #expect(history.recordings.isEmpty)
+        try await history.validate()
+    }
+
+    private static let profile = DictationProfile(archiveEnabled: true, preferredModel: TranscriptionModel.openAIGPT4oMini.libraryID, languages: ["en"], dictionary: [], cleanupEnabled: false, outputLanguage: nil, thinkingLevel: "minimal")
+
     @MainActor private struct Fixture {
         let root: URL
         let defaults: UserDefaults
@@ -121,7 +141,7 @@ final class DictationFixtureBackground: BackgroundExecution {
         let name = "SyntheticPublication.\(UUID())"
         let root = URL.temporaryDirectory.appending(path: name)
         let defaults = try #require(UserDefaults(suiteName: name))
-        let cloud = DictationPublicationCloud(profile: DictationProfile(archiveEnabled: true, preferredModel: TranscriptionModel.openAIGPT4oMini.libraryID, languages: ["en"], dictionary: [], cleanupEnabled: false, outputLanguage: nil, thinkingLevel: "minimal"))
+        let cloud = DictationPublicationCloud(profile: Self.profile)
         let store = try DictationLibraryStore(directory: root, source: "synthetic", capacityBytes: 16 * 1_024 * 1_024, cloud: cloud)
         let background = DictationFixtureBackground()
         let library = SharedDictationLibrary(defaults: defaults, directory: root, background: background, openStore: { _ in store }, finalize: finalize)
