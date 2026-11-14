@@ -312,6 +312,8 @@ async fn a_cancelled_caller_never_leaves_a_partial_frame() {
 
 #[test]
 fn applied_models_must_match_the_requested_identity_or_family() {
+    assert!(claude_model_matches("mythos", "claude-mythos-5-2"));
+    assert!(claude_model_matches("mythos[1m]", "claude-mythos-5-2"));
     assert!(claude_model_matches("sonnet", "claude-sonnet-5"));
     assert!(claude_model_matches("fable", "claude-fable-5-1"));
     assert!(claude_model_matches("haiku", "claude-haiku-5-5"));

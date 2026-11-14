@@ -84,6 +84,13 @@ never resolve a retry against a newer invocation. Message-driven Continue uses
 the atomic previous-job and Stop fence. `agent/messages/read` is the read owner;
 scoped receipt reads require the exact sender conversation.
 
+## Claude model catalog
+
+The gateway reads the configured router's account-specific Anthropic model list,
+projects one native Claude `model/list` row per active family, and caches the
+result for a bounded interval. Failures leave native rows absent; clients own
+their compatibility fallback. External Claude-harness rows retain their provider.
+
 ## Process model
 
 `runtime serve` owns only the managed Codex control loop, external token renewal

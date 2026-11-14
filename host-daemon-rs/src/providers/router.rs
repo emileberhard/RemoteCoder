@@ -218,7 +218,27 @@ impl Router {
         self.response(self.client.get(self.config()?.accounts_url.join(path)?))
             .await
     }
+    pub(crate) async fn anthropic_models(&self, after: Option<&str>) -> Result<Value> {
+        let mut request = self
+            .client
+            .get(self.config()?.url.join("v1/models")?)
+            .header("anthropic-version", "2023-06-01")
+            .query(&[("limit", "1000")]);
+        if let Some(after) = after {
+            request = request.query(&[("after_id", after)]);
+        }
+        self.response_with_limit(request, 4 * 1024 * 1024).await
+    }
+
     async fn response(&self, request: reqwest::RequestBuilder) -> Result<Value> {
+        self.response_with_limit(request, 64 * 1024).await
+    }
+
+    async fn response_with_limit(
+        &self,
+        request: reqwest::RequestBuilder,
+        limit: usize,
+    ) -> Result<Value> {
         let config = self.config()?.clone();
         let key = tokio::task::spawn_blocking(move || config.key())
             .await
@@ -234,7 +254,7 @@ impl Router {
         let body = async {
             if response
                 .content_length()
-                .is_some_and(|size| size > 64 * 1024)
+                .is_some_and(|size| size > limit as u64)
             {
                 return Err(RouterError::InvalidResponse);
             }
@@ -244,7 +264,7 @@ impl Router {
                 .await
                 .map_err(|_| RouterError::RequestFailed)?
             {
-                if bytes.len() + chunk.len() > 64 * 1024 {
+                if bytes.len() + chunk.len() > limit {
                     return Err(RouterError::InvalidResponse);
                 }
                 bytes.extend_from_slice(&chunk);

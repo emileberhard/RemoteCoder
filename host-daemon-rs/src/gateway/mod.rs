@@ -283,6 +283,7 @@ mod account_context;
 mod activity;
 pub(crate) mod admission;
 mod claude_fork;
+mod claude_models;
 mod external_auth;
 mod external_providers;
 mod provider_fallback;
@@ -330,6 +331,7 @@ pub(crate) struct Gateway {
     next_client_id: Arc<AtomicU64>,
     turn_state_path: Option<PathBuf>,
     turn_state_write_lock: Arc<Mutex<()>>,
+    claude_models: claude_models::Catalog,
     claude_settings: ClaudeSettings,
     claude_history: crate::providers::claude::history::ClaudeHistory,
     external_activity: crate::activity::external::ExternalActivity,
@@ -553,6 +555,12 @@ impl Gateway {
             claude_history: crate::providers::claude::history::ClaudeHistory::new(
                 claude_settings.claude_home.clone(),
                 claude_projections,
+            ),
+            claude_models: claude_models::Catalog::new(
+                claude_settings
+                    .enabled
+                    .then(|| claude_settings.router.clone())
+                    .flatten(),
             ),
             claude_settings,
             claude_auth_task: Mutex::new(None),

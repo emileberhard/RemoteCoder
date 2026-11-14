@@ -142,21 +142,14 @@ pub(crate) async fn resolve(
     Ok(Route::Default)
 }
 
-pub(crate) fn is_native_model(model: &str) -> bool {
+pub(crate) fn is_family_alias(model: &str) -> bool {
     let model = model.to_ascii_lowercase();
-    matches!(
-        model.as_str(),
-        "default"
-            | "best"
-            | "fable"
-            | "fable[1m]"
-            | "haiku"
-            | "opus"
-            | "opus[1m]"
-            | "opusplan"
-            | "sonnet"
-            | "sonnet[1m]"
-    ) || model.starts_with("claude-")
+    let family = model.strip_suffix("[1m]").unwrap_or(&model);
+    !family.is_empty() && family.bytes().all(|byte| byte.is_ascii_lowercase())
+}
+
+pub(crate) fn is_native_model(model: &str) -> bool {
+    is_family_alias(model) || model.to_ascii_lowercase().starts_with("claude-")
 }
 
 /// Builds a `claude` command with a cleared, allow-listed environment.
@@ -253,6 +246,22 @@ pub(crate) fn resolve_claude_path(configured: Option<&str>, home: &Path) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_aliases_accept_future_families_without_external_routes() {
+        for model in [
+            "mythos",
+            "future",
+            "MYTHOS[1M]",
+            "claude-mythos-5-2",
+            "CLAUDE-SONNET-4-6",
+        ] {
+            assert!(is_native_model(model), "{model}");
+        }
+        for model in ["", "copilot/gemini", "model-1", "mythos[2m]"] {
+            assert!(!is_native_model(model), "{model}");
+        }
+    }
 
     #[test]
     fn router_credentials_are_private_rotatable_and_never_diagnosed() {

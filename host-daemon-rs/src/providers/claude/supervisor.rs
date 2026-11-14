@@ -839,7 +839,7 @@ fn claude_model_matches(requested: &str, actual: &str) -> bool {
         return true;
     }
     let family = requested.strip_suffix("[1m]").unwrap_or(requested);
-    matches!(family, "sonnet" | "opus" | "fable" | "haiku")
+    crate::providers::claude::exec::is_family_alias(family)
         && actual.starts_with(&format!("claude-{family}-"))
 }
 

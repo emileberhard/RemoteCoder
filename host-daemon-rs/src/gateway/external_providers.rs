@@ -73,19 +73,24 @@ impl Gateway {
     }
 
     pub(super) async fn model_list(&self, params: Value) -> RpcResult {
-        let Some(external) = self.external_providers.as_deref() else {
-            return self
-                .call_control("model/list", params)
-                .await
-                .map_err(|error| native_error(&error));
+        let refresh_external = async {
+            if let Some(external) = self.external_providers.as_deref() {
+                external.refresh().await;
+            }
         };
-        let (listing, ()) =
-            tokio::join!(self.call_control("model/list", params), external.refresh());
+        let (listing, (), claude) = tokio::join!(
+            self.call_control("model/list", params),
+            refresh_external,
+            self.claude_models.rows()
+        );
         let mut listing = listing.map_err(|error| native_error(&error))?;
         if listing["nextCursor"].is_null()
             && let Some(models) = listing["data"].as_array_mut()
         {
-            models.extend(external.model_rows());
+            if let Some(external) = self.external_providers.as_deref() {
+                models.extend(external.model_rows());
+            }
+            models.extend(claude);
         }
         Ok(listing)
     }

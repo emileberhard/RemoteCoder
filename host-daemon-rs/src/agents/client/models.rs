@@ -22,19 +22,7 @@ struct Effort {
 }
 
 pub(super) fn is_claude_alias(model: &str) -> bool {
-    matches!(
-        model.to_ascii_lowercase().as_str(),
-        "default"
-            | "best"
-            | "fable"
-            | "fable[1m]"
-            | "haiku"
-            | "opus"
-            | "opus[1m]"
-            | "opusplan"
-            | "sonnet"
-            | "sonnet[1m]"
-    )
+    crate::providers::claude::exec::is_family_alias(model)
 }
 
 fn family(model: &str) -> Option<(Vec<u32>, &str)> {
