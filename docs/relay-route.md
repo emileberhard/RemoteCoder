@@ -36,7 +36,9 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   A dpkg pre-invoke guard refuses package changes while a maintenance marker
   exists, including after its owner exits. The maintenance owner must hold the
   package-manager locks while creating that marker; the guard alone cannot
-  exclude a transaction that has already started.
+  exclude a transaction that has already started. During maintenance the policy
+  also denies package-triggered nftables stops, reloads and restarts: its systemd
+  stop command flushes the ruleset, including the ingress fence.
 - **Maintenance ingress.** The checked-in firewall fragment rejects TCP packets
   to port 443 classified as new while keeping tracked existing connections;
   handshakes already in progress can still complete. Provisioning stages the
