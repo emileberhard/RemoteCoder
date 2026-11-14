@@ -2,6 +2,7 @@ import fcntl
 import json
 import os
 import stat
+import subprocess
 import tempfile
 import uuid
 from contextlib import ExitStack, contextmanager
@@ -11,6 +12,7 @@ DIRECTORY = Path("/var/lib/remote-coder-relay")
 MARKER = DIRECTORY / "maintenance.json"
 BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 DPKG_LOCKS = (Path("/var/lib/dpkg/lock-frontend"), Path("/var/lib/dpkg/lock"))
+FIREWALL = Path("/usr/local/lib/remote-coder-relay/maintenance-firewall.nft")
 
 
 def check_directory():
@@ -122,10 +124,35 @@ def _remove_stale_temporaries():
             os.close(directory_fd)
 
 
+def remove_fence_and_marker():
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/nft", "-f", "-"],
+            input="destroy table inet remote_coder_relay_maintenance\n",
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            "reopening relay admission timed out; keep the marker"
+        ) from error
+    if result.returncode:
+        raise RuntimeError("could not reopen relay admission; keep the marker")
+    MARKER.unlink()
+    directory_fd = os.open(DIRECTORY, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 class RelayTransaction:
     def __init__(self):
         self._locks = None
         self._operation_id = None
+        self._fenced = False
 
     def __enter__(self):
         if self._locks is not None:
@@ -155,6 +182,7 @@ class RelayTransaction:
         self._locks.close()
         self._locks = None
         self._operation_id = None
+        self._fenced = False
 
     def prepare(self, master_pid, worker_pid):
         if self._locks is None:
@@ -179,6 +207,16 @@ class RelayTransaction:
         self._operation_id = marker["operation_id"]
 
     def commit(self):
+        marker = self._preparing_marker()
+        if not self._fenced:
+            raise RuntimeError("relay admission has not been fenced")
+        for name in ("master", "worker"):
+            if worker_identity(marker[name]["pid"]) != marker[name]:
+                raise RuntimeError("relay worker identity changed")
+        marker["phase"] = "committed"
+        _write_marker(marker)
+
+    def _preparing_marker(self):
         if self._locks is None or self._operation_id is None:
             raise RuntimeError("relay preparation is not active")
         marker = read_marker()
@@ -188,8 +226,27 @@ class RelayTransaction:
             or marker.get("operation_id") != self._operation_id
         ):
             raise RuntimeError("relay preparation identity changed")
-        for name in ("master", "worker"):
-            if worker_identity(marker[name]["pid"]) != marker[name]:
-                raise RuntimeError("relay worker identity changed")
-        marker["phase"] = "committed"
-        _write_marker(marker)
+        return marker
+
+    def fence(self):
+        self._preparing_marker()
+        try:
+            result = subprocess.run(
+                ["/usr/sbin/nft", "-f", str(FIREWALL)],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(
+                "fencing relay admission timed out; keep the marker"
+            ) from error
+        if result.returncode:
+            raise RuntimeError("could not fence relay admission; keep the marker")
+        self._fenced = True
+
+    def abort(self):
+        self._preparing_marker()
+        remove_fence_and_marker()
+        self._operation_id = None
+        self._fenced = False

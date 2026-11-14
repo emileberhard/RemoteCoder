@@ -32,6 +32,15 @@ class RelayTransactionTests(unittest.TestCase):
         shutil.copyfile(
             SERVER / "maintenance_state.py", self.src / "maintenance_state.py"
         )
+        self.sbin = self.root / "sbin"
+        self.sbin.mkdir()
+        nft = self.sbin / "nft"
+        nft.write_text(
+            "#!/bin/sh\ntest -f /var/lib/remote-coder-relay/maintenance.json || exit 1\n"
+            'printf "%s\\n" "$*" >> /tmp/fixture/nft-calls\n'
+            "test ! -e /tmp/fixture/fail-nft\n"
+        )
+        nft.chmod(0o755)
 
     def run_owner(self, code):
         return subprocess.run(
@@ -51,9 +60,12 @@ class RelayTransactionTests(unittest.TestCase):
                 "--bind",
                 str(self.varlib),
                 "/var/lib",
-                "--ro-bind",
+                "--bind",
                 str(self.src),
                 "/tmp/fixture",
+                "--bind",
+                str(self.sbin),
+                "/usr/sbin",
                 "--proc",
                 "/proc",
                 "--",
@@ -105,6 +117,13 @@ try:
         assert before["master"]["pid"] == os.getpid()
         assert before["worker"]["pid"] == child.pid
         assert state.MARKER.stat().st_mode & 0o777 == 0o600
+        try:
+            transaction.commit()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("commit without a fence was accepted")
+        transaction.fence()
         for path, kind in [
             (state.DIRECTORY / "provision.lock", "flock"),
             (state.DIRECTORY / "admission.lock", "flock"),
@@ -130,6 +149,12 @@ try:
         assert after["phase"] == "committed"
         assert after["operation_id"] == before["operation_id"]
         assert after["master"] == before["master"] and after["worker"] == before["worker"]
+        try:
+            transaction.abort()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("a committed fence was reopened")
     try:
         transaction.commit()
     except RuntimeError:
@@ -187,6 +212,7 @@ try:
         assert not state.MARKER.exists()
         assert not list(state.DIRECTORY.glob(".maintenance-*"))
         transaction.prepare(os.getpid(), child.pid)
+        transaction.fence()
         child.terminate()
         child.wait(timeout=5)
         try:
@@ -206,6 +232,45 @@ finally:
         self.assertEqual(
             json.loads((self.directory / "maintenance.json").read_text())["phase"],
             "preparing",
+        )
+
+    def test_abort_reopens_and_retains_marker_if_reopening_fails(self):
+        code = r"""
+import os, subprocess, sys
+from pathlib import Path
+sys.path.insert(0, "/tmp/fixture")
+import maintenance_state as state
+child = subprocess.Popen(["/bin/sleep", "10"])
+try:
+    with state.RelayTransaction() as transaction:
+        transaction.prepare(os.getpid(), child.pid)
+        transaction.fence()
+        failure = Path("/tmp/fixture/fail-nft")
+        failure.touch()
+        try:
+            transaction.abort()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("a failed reopen was ignored")
+        assert state.read_marker()["phase"] == "preparing"
+        failure.unlink()
+        transaction.abort()
+        assert not state.MARKER.exists()
+finally:
+    child.terminate()
+    child.wait(timeout=5)
+"""
+        result = self.run_owner(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.directory / "maintenance.json").exists())
+        self.assertEqual(
+            (self.src / "nft-calls").read_text().splitlines(),
+            [
+                "-f /usr/local/lib/remote-coder-relay/maintenance-firewall.nft",
+                "-f -",
+                "-f -",
+            ],
         )
 
 
