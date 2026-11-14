@@ -240,8 +240,8 @@ esac
         self.assertIn(
             "systemctl enable --quiet remote-coder-relay-maintenance-recover", first
         )
-        self.assertIn(
-            "systemctl enable --quiet --now remote-coder-relay-maintenance.timer", first
+        self.assertFalse(
+            any("remote-coder-relay-maintenance.timer" in line for line in first)
         )
         self.assertNotIn(
             "systemctl start remote-coder-relay-maintenance-recover", first
@@ -318,6 +318,38 @@ esac
         self.assertEqual((self.shared / "runtime/haproxy").read_text(), original)
         self.assertFalse(
             (self.root / "varlib/remote-coder-relay/activation/haproxy").exists()
+        )
+
+    def test_staging_maintenance_files_does_not_restart_haproxy_or_arm_timer(self):
+        result, _ = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for path in (
+            self.root / "local/lib/remote-coder-relay/maintenance-firewall.nft",
+            self.root / "local/lib/remote-coder-relay/maintenance-startup",
+            self.root
+            / "etc/systemd/system/haproxy.service.d/10-relay-maintenance.conf",
+        ):
+            path.unlink()
+        result, calls = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("systemctl daemon-reload", calls)
+        self.assertFalse(
+            any(
+                line in ("systemctl restart haproxy", "systemctl reload haproxy")
+                for line in calls
+            )
+        )
+        self.assertFalse(
+            any("remote-coder-relay-maintenance.timer" in line for line in calls)
+        )
+        self.assertTrue(
+            (self.root / "local/lib/remote-coder-relay/maintenance-startup").exists()
+        )
+        self.assertTrue(
+            (
+                self.root
+                / "etc/systemd/system/haproxy.service.d/10-relay-maintenance.conf"
+            ).exists()
         )
 
     def test_foreign_policy_stops_before_apt(self):

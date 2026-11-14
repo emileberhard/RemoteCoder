@@ -64,9 +64,13 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   checks before commit; failures reopen admission or retain the marker if that
   fails. Its staged reboot operation rechecks drain during the 06:33 Stockholm
   window and persists the committed phase before requesting reboot; an uncertain
-  request leaves the fence. A relay-local timer invokes it at 06:33 Stockholm
-  time only when `/run/reboot-required` exists; it does not catch up after a
-  missed window. A busy or uncertain drain aborts and reopens admission.
+  request leaves the fence. A staged relay-local timer invokes it at 06:33
+  Stockholm time only when `/run/reboot-required` exists; it does not catch up
+  after a missed window. Provisioning does not enable or start this timer: its
+  owner must explicitly enable it after recovery and a supervised cycle have
+  been accepted. Provisioning stages the HAProxy startup guard without restarting
+  HAProxy; that guard takes effect at the next coordinated restart. A busy or
+  uncertain drain aborts and reopens admission.
   On a new boot the staged recovery unit waits boundedly for local service
   states, firewall, listeners and HAProxy generation; it reopens admission and
   removes the marker only when those checks pass. The Mini must then run
