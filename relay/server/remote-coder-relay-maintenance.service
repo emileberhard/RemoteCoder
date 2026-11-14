@@ -1,0 +1,8 @@
+[Unit]
+Description=Prepare relay for a required reboot
+ConditionPathExists=/run/reboot-required
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/remote-coder-relay/maintenance-prepare
+TimeoutStartSec=150

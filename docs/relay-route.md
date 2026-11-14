@@ -64,15 +64,15 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   checks before commit; failures reopen admission or retain the marker if that
   fails. Its staged reboot operation rechecks drain during the 06:33 Stockholm
   window and persists the committed phase before requesting reboot; an uncertain
-  request leaves the fence. Before invoking `maintenance-prepare`, its caller
-  must establish that the Mini is in its authorized reboot workflow; a network
-  timeout alone is not that proof.
+  request leaves the fence. A relay-local timer invokes it at 06:33 Stockholm
+  time only when `/run/reboot-required` exists; it does not catch up after a
+  missed window. A busy or uncertain drain aborts and reopens admission.
   On a new boot the staged recovery unit waits boundedly for local service
   states, firewall, listeners and HAProxy generation; it reopens admission and
   removes the marker only when those checks pass. The Mini must then run
   `just relay-probe` independently and report a failed public route as an
   outage. This probe is post-hoc; it is not part of the local boot decision.
-  The caller and post-boot probe are not yet integrated into an automated owner.
+  The post-boot Mini probe and its outage alert are not yet automated.
 - **HAProxy** terminates TLS 1.3 on 443 with a self-signed P-256 certificate
   whose SPKI the app pins, and passes only streams that begin with `CONNECT `.
 - **tinyproxy** requires Basic auth (it answers 407 and closes; URLSession

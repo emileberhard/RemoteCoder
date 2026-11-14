@@ -43,6 +43,8 @@ record_config_change "$src/haproxy-maintenance.conf" /etc/systemd/system/haproxy
 record_config_change "$src/haproxy-maintenance.conf" /etc/systemd/system/haproxy.service.d/10-relay-maintenance.conf daemon-reload
 record_config_change "$src/nftables-maintenance.conf" /etc/systemd/system/nftables.service.d/10-relay-maintenance.conf daemon-reload
 record_config_change "$src/remote-coder-relay-maintenance-recover.service" /etc/systemd/system/remote-coder-relay-maintenance-recover.service daemon-reload
+record_config_change "$src/remote-coder-relay-maintenance.service" /etc/systemd/system/remote-coder-relay-maintenance.service daemon-reload
+record_config_change "$src/remote-coder-relay-maintenance.timer" /etc/systemd/system/remote-coder-relay-maintenance.timer daemon-reload
 install -m 0644 "$src/maintenance-firewall.nft" /usr/local/lib/remote-coder-relay/maintenance-firewall.nft
 install -m 0755 "$src/maintenance-startup" /usr/local/lib/remote-coder-relay/maintenance-startup
 install -m 0755 "$src/maintenance-recover" /usr/local/lib/remote-coder-relay/maintenance-recover
@@ -54,8 +56,11 @@ install -m 0644 "$src/haproxy-maintenance.conf" /etc/systemd/system/haproxy.serv
 install -d -m 0755 /etc/systemd/system/nftables.service.d
 install -m 0644 "$src/nftables-maintenance.conf" /etc/systemd/system/nftables.service.d/10-relay-maintenance.conf
 install -m 0644 "$src/remote-coder-relay-maintenance-recover.service" /etc/systemd/system/remote-coder-relay-maintenance-recover.service
+install -m 0644 "$src/remote-coder-relay-maintenance.service" /etc/systemd/system/remote-coder-relay-maintenance.service
+install -m 0644 "$src/remote-coder-relay-maintenance.timer" /etc/systemd/system/remote-coder-relay-maintenance.timer
 activate_config_change daemon-reload daemon-reload
 systemctl enable --quiet remote-coder-relay-maintenance-recover
+systemctl enable --quiet --now remote-coder-relay-maintenance.timer
 
 record_config_change "$src/nftables.conf" /etc/nftables.conf nftables
 install -m 0644 "$src/nftables.conf" /etc/nftables.conf

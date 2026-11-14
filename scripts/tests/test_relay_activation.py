@@ -57,6 +57,25 @@ class RelayProvisioningTests(unittest.TestCase):
         )
         self.assertEqual(unit["Install"]["WantedBy"], "multi-user.target")
 
+    def test_daily_maintenance_requires_reboot_and_never_catches_up(self):
+        service = configparser.ConfigParser(interpolation=None)
+        service.read(ROOT / "relay/server/remote-coder-relay-maintenance.service")
+        timer = configparser.ConfigParser(interpolation=None)
+        timer.read(ROOT / "relay/server/remote-coder-relay-maintenance.timer")
+        self.assertEqual(service["Unit"]["ConditionPathExists"], "/run/reboot-required")
+        self.assertEqual(
+            service["Service"]["ExecStart"],
+            "/usr/local/lib/remote-coder-relay/maintenance-prepare",
+        )
+        self.assertEqual(
+            timer["Timer"]["OnCalendar"], "*-*-* 06:33:00 Europe/Stockholm"
+        )
+        self.assertEqual(timer["Timer"]["AccuracySec"], "1s")
+        self.assertEqual(timer["Timer"]["Persistent"], "false")
+        self.assertEqual(
+            timer["Timer"]["Unit"], "remote-coder-relay-maintenance.service"
+        )
+
     def test_provisioning_transports_the_policy_and_activation_owner(self):
         maintainer = types.ModuleType("maintainer_config")
         maintainer.load = dict
@@ -111,6 +130,8 @@ class RelayProvisioningTests(unittest.TestCase):
                 "haproxy-maintenance.conf",
                 "nftables-maintenance.conf",
                 "remote-coder-relay-maintenance-recover.service",
+                "remote-coder-relay-maintenance.service",
+                "remote-coder-relay-maintenance.timer",
             ):
                 self.assertEqual(
                     archive.extractfile(name).read(),

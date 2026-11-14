@@ -50,6 +50,8 @@ class RelayInstallerTests(unittest.TestCase):
             "haproxy-maintenance.conf",
             "nftables-maintenance.conf",
             "remote-coder-relay-maintenance-recover.service",
+            "remote-coder-relay-maintenance.service",
+            "remote-coder-relay-maintenance.timer",
             "config-activation.sh",
             "nftables.conf",
             "haproxy.cfg",
@@ -237,6 +239,9 @@ esac
         self.assertTrue((self.root / "sbin/policy-rc.d").is_symlink())
         self.assertIn(
             "systemctl enable --quiet remote-coder-relay-maintenance-recover", first
+        )
+        self.assertIn(
+            "systemctl enable --quiet --now remote-coder-relay-maintenance.timer", first
         )
         self.assertNotIn(
             "systemctl start remote-coder-relay-maintenance-recover", first
