@@ -333,7 +333,7 @@ final class VoiceInputController {
     private func recordAttempt(recordingID: UUID, audio: SavedAudio, outcome: String) async {
         let origin = (try? await access.credentials.cachedOrigin())?.absoluteString ?? "unknown"
         let duration = audio.recording.map { String(Self.milliseconds($0.duration)) } ?? "unknown"
-        logger.notice("dictation attempt id=\(recordingID) configured_origin=\(origin) audio_ms=\(duration) body_bytes_sent=unknown outcome=\(outcome)")
+        logger.notice("dictation attempt id=\(recordingID) configured_origin=\(origin) audio_ms=\(duration) outcome=\(outcome)")
         Task { await DiagnosticsOutbox.shared.persistPending() }
     }
 

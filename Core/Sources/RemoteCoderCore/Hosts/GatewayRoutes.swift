@@ -750,6 +750,9 @@ actor GatewayRoutes {
             if path == "dictation", status == 403 {
                 return "This gateway does not permit dictation for this installation. Ask its operator to allow speech access."
             }
+            if path == "dictation", status == 404 {
+                return "Dictation is not configured on this gateway."
+            }
             return "The gateway /\(path) read answered \(status.map { "HTTP \($0)" } ?? "without HTTP")."
         }
     }

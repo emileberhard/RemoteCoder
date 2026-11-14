@@ -106,7 +106,7 @@ holds the detailed history, recovery, voice and persistence contracts.
 defaults; ignored `Config/Local.xcconfig` supplies operator overrides. Derive
 extension identifiers and runtime group/container access from the same settings.
 No private runtime seed or Maps key is required to compile basic chat. Maps stays
-unavailable without a key. Gate speech on `host/info.speechAvailable` and resolve
+unavailable without a key. Resolve
 automation authority through reported physical `hostname`/`automationsAuthority`,
 never a personal hostname or display-name heuristic. Missing capability evidence
 stays unavailable. Keep the full maintainer values in the private operations

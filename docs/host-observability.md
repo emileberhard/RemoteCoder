@@ -397,8 +397,7 @@ own log where the app handles it, for example a thrown SpeechKit error.
 Dictation stop and outcome records include the recording UUID, configured
 router origin when cached, audio duration and outcome, and are flushed to the
 existing on-device outbox in the background, so the flush never delays
-stop-to-text. Upload at stop has no sent-byte measurement at stop and reports
-`body_bytes_sent=unknown`. A first capture before credential delivery reports
+stop-to-text. A first capture before credential delivery reports
 an unknown origin. SpeechKit's upload metrics report the actual origin,
 body bytes, connect/TLS completion
 and first-byte time through the transport's uploadLog callback, which persists
