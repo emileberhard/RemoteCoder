@@ -11,6 +11,41 @@ drain = importlib.import_module("maintenance_drain")
 
 
 class RelayDrainTests(unittest.TestCase):
+    def test_local_boot_health_requires_services_fence_and_all_listeners(self):
+        units = []
+        identity = {"worker": {"pid": 7}}
+
+        def command(args, _deadline):
+            units.append(args[-1])
+            if args[-1] == "ssh.service" and len(units) > 4:
+                raise RuntimeError("SSH is not active")
+            return ""
+
+        with (
+            patch.object(drain, "command", side_effect=command),
+            patch.object(drain, "tracking_is_configured") as tracking,
+            patch.object(drain, "fence_is_configured") as fence,
+            patch.object(drain, "tracked_ports", return_value={443, 8888, 20001}),
+            patch.object(drain, "haproxy_identity", return_value=identity),
+            patch.object(drain, "listener_queues", return_value=False) as listeners,
+            patch.object(drain, "haproxy_busy", return_value=False),
+        ):
+            self.assertEqual(drain.verify_local_boot_prerequisites(10), identity)
+            self.assertEqual(
+                units,
+                [
+                    "nftables.service",
+                    "ssh.service",
+                    "tinyproxy.service",
+                    "haproxy.service",
+                ],
+            )
+            tracking.assert_called_once()
+            fence.assert_called_once()
+            listeners.assert_called_once_with({443, 8888, 20001})
+            with self.assertRaises(RuntimeError):
+                drain.verify_local_boot_prerequisites(10)
+
     def test_candidate_waits_with_admission_open_until_idle(self):
         clock = [0.0]
         checks = []

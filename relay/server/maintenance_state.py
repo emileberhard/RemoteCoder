@@ -226,6 +226,20 @@ class RelayTransaction:
         self.fence()
         self.drain(drain_timeout)
 
+    def check_new_boot_prerequisites(self, timeout_seconds):
+        from maintenance_drain import verify_local_boot_prerequisites
+
+        if self._locks is None or self._operation_id is not None:
+            raise RuntimeError("relay transaction is not ready for recovery")
+        marker = read_marker()
+        current_boot = boot_id()
+        if marker["boot_id"] == current_boot:
+            raise RuntimeError("relay has not booted since maintenance began")
+        identity = verify_local_boot_prerequisites(timeout_seconds)
+        if boot_id() != current_boot:
+            raise RuntimeError("relay boot identity changed during verification")
+        return identity
+
     def commit(self):
         marker = self._preparing_marker()
         if not self._fenced:
