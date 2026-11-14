@@ -338,7 +338,7 @@ final class VoiceInputController {
         let sentBytes = await live?.progressive?.uploadedBodyByteCount
         let sent = sentBytes.map(String.init) ?? "unknown"
         logger.notice("dictation attempt id=\(recordingID) configured_origin=\(origin) audio_ms=\(duration) live_body_bytes_sent=\(sent) outcome=\(outcome)")
-        await DiagnosticsOutbox.shared.persistPending()
+        Task { await DiagnosticsOutbox.shared.persistPending() }
     }
 
     private static func logTranscribed(_ stopped: StoppedDictation, route: StaticString, model: String, characters: Int) {

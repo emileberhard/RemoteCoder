@@ -396,7 +396,7 @@ own log where the app handles it, for example a thrown SpeechKit error.
 
 Dictation stop and outcome records include the recording UUID, configured
 origin, audio duration and outcome, and are flushed to the existing on-device
-outbox before the operation returns. Progressive sessions report actual sent
+outbox in the background, so the flush never delays stop-to-text. Progressive sessions report actual sent
 body bytes, including framing, even after disconnect. Sessions without that
 measurement report unknown. SpeechKit's upload metrics report the actual origin,
 body bytes, connect/TLS completion
