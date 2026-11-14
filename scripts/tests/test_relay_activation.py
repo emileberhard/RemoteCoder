@@ -66,6 +66,7 @@ class RelayProvisioningTests(unittest.TestCase):
                 "dpkg-maintenance.conf",
                 "maintenance-firewall.nft",
                 "maintenance-startup",
+                "maintenance-recover",
                 "haproxy-maintenance.conf",
             ):
                 self.assertEqual(

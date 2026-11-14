@@ -1,3 +1,5 @@
+import fcntl
+import json
 import os
 import shutil
 import subprocess
@@ -40,6 +42,7 @@ class RelayInstallerTests(unittest.TestCase):
             "dpkg-maintenance.conf",
             "maintenance-firewall.nft",
             "maintenance-startup",
+            "maintenance-recover",
             "haproxy-maintenance.conf",
             "config-activation.sh",
             "nftables.conf",
@@ -381,6 +384,102 @@ esac
         )
         (self.shared / "fail-nft").touch()
         self.assertNotEqual(start().returncode, 0)
+
+    def test_recovery_reopens_only_an_abandoned_same_boot_preparation(self):
+        directory = self.root / "varlib/remote-coder-relay"
+        directory.mkdir(mode=0o700)
+        marker = directory / "maintenance.json"
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        nft = self.root / "sbin/nft"
+        nft.write_text(
+            "#!/bin/sh\ncat >> /tmp/fixture/nft-input\n"
+            "test ! -e /tmp/fixture/fail-nft\n"
+        )
+        nft.chmod(0o755)
+
+        def write_marker(phase, boot=boot_id):
+            marker.write_text(
+                json.dumps({"schema": 1, "phase": phase, "boot_id": boot})
+            )
+            marker.chmod(0o600)
+
+        def recover():
+            return subprocess.run(
+                [
+                    "bwrap",
+                    "--unshare-all",
+                    "--uid",
+                    "0",
+                    "--gid",
+                    "0",
+                    "--die-with-parent",
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--tmpfs",
+                    "/tmp",
+                    "--bind",
+                    str(self.root / "varlib"),
+                    "/var/lib",
+                    "--bind",
+                    str(self.root / "sbin"),
+                    "/usr/sbin",
+                    "--bind",
+                    str(self.shared),
+                    "/tmp/fixture",
+                    "--proc",
+                    "/proc",
+                    "--",
+                    "/usr/bin/python3",
+                    "/tmp/fixture/src/maintenance-recover",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(recover().returncode, 0)
+        for phase, boot in (
+            ("committed", boot_id),
+            ("preparing", "00000000-0000-0000-0000-000000000000"),
+        ):
+            with self.subTest(phase=phase, boot=boot):
+                write_marker(phase, boot)
+                self.assertNotEqual(recover().returncode, 0)
+                self.assertTrue(marker.exists())
+                self.assertFalse((self.shared / "nft-input").exists())
+
+        marker.write_text("invalid")
+        marker.chmod(0o600)
+        self.assertNotEqual(recover().returncode, 0)
+        self.assertFalse((self.shared / "nft-input").exists())
+        marker.write_text(
+            '{"schema":1,"phase":"committed","phase":"preparing",'
+            f'"boot_id":"{boot_id}"' + "}"
+        )
+        self.assertNotEqual(recover().returncode, 0)
+        self.assertFalse((self.shared / "nft-input").exists())
+        write_marker("preparing")
+        marker.chmod(0o644)
+        self.assertNotEqual(recover().returncode, 0)
+        self.assertFalse((self.shared / "nft-input").exists())
+
+        write_marker("preparing")
+        with (directory / "provision.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertNotEqual(recover().returncode, 0)
+        self.assertTrue(marker.exists())
+        (self.shared / "fail-nft").touch()
+        self.assertNotEqual(recover().returncode, 0)
+        self.assertTrue(marker.exists())
+        (self.shared / "fail-nft").unlink()
+        result = recover()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertEqual(
+            (self.shared / "nft-input").read_text().splitlines(),
+            ["destroy table inet remote_coder_relay_maintenance"] * 2,
+        )
 
 
 if __name__ == "__main__":
