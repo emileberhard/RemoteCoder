@@ -1,9 +1,14 @@
 #!/usr/bin/python3
 import os
-import subprocess
 import sys
 
-from maintenance_state import DIRECTORY, MARKER, boot_id, owner_locks, read_marker
+from maintenance_state import (
+    MARKER,
+    boot_id,
+    owner_locks,
+    read_marker,
+    remove_fence_and_marker,
+)
 
 
 def recover():
@@ -30,27 +35,12 @@ def recover_preparing():
         raise RuntimeError(
             "committed or new-boot maintenance requires verification; keep the fence"
         )
-    result = subprocess.run(
-        ["/usr/sbin/nft", "-f", "-"],
-        input="destroy table inet remote_coder_relay_maintenance\n",
-        text=True,
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
-    if result.returncode:
-        raise RuntimeError("could not reopen relay admission; keep the marker")
-    MARKER.unlink()
-    directory_fd = os.open(DIRECTORY, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
+    remove_fence_and_marker()
 
 
 if __name__ == "__main__":
     try:
         recover()
-    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+    except (OSError, RuntimeError) as error:
         print(f"relay recovery: {error}", file=sys.stderr)
         sys.exit(1)
