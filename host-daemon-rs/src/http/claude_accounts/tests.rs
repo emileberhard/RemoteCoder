@@ -80,6 +80,51 @@ fn maps_claude_accounts_without_inventing_missing_observations() {
     automatic["claude"]["preference"] = Value::Null;
     assert!(map_directory(automatic).unwrap().preference.is_none());
 }
+
+#[test]
+fn model_choices_preserve_unknown_empty_selected_and_exhausted_states() {
+    let older = serde_json::to_value(map_directory(payload()).unwrap()).unwrap();
+    assert!(older.get("models").is_none());
+    let mut inventory = payload();
+    inventory["claude"]["models"] = json!([]);
+    let empty = serde_json::to_value(map_directory(inventory.clone()).unwrap()).unwrap();
+    assert_eq!(empty["models"], json!([]));
+    inventory["claude"]["models"] = json!([
+        {"model":"fable","automatic":"first","available_at":null},
+        {"model":"sonnet","automatic":null,"available_at":"2026-10-09T16:00:00Z"},
+        {"model":"opus","automatic":null,"available_at":null}
+    ]);
+    inventory["accounts"][0]["availability"] = json!("exhausted");
+    let wire = serde_json::to_value(map_directory(inventory.clone()).unwrap()).unwrap();
+    assert_eq!(
+        wire["models"],
+        json!([
+            {"model":"fable","automatic":"first","availableAt":null},
+            {"model":"sonnet","automatic":null,"availableAt":1791561600.0},
+            {"model":"opus","automatic":null,"availableAt":null}
+        ])
+    );
+    assert_eq!(wire["accounts"][0]["availability"], "exhausted");
+    inventory["accounts"][0]["availability"] = json!("cooling");
+    assert!(map_directory(inventory).is_ok());
+}
+
+#[test]
+fn invalid_model_choices_fail_the_directory_mapping() {
+    for models in [
+        json!([{"model":"fable","automatic":"absent","available_at":null}]),
+        json!([{"model":"fable","automatic":"ca4d1cbc-865c-4136-a13c-bd004f229c93","available_at":null}]),
+        json!([{"model":"","automatic":"first","available_at":null}]),
+        json!([{"model":"fable","automatic":null,"available_at":"invalid"}]),
+        json!([{"model":"fable","automatic":"first","available_at":"2026-10-09T16:00:00Z"}]),
+        json!([{"model":"fable","automatic":"first"},{"model":"fable","automatic":"second"}]),
+        json!({"fable":"first"}),
+    ] {
+        let mut inventory = payload();
+        inventory["claude"]["models"] = models;
+        assert!(map_directory(inventory).is_err());
+    }
+}
 #[tokio::test]
 async fn private_router_authenticates_and_preserves_actionable_refusals() {
     async fn backend(headers: axum::http::HeaderMap) -> Response {

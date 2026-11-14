@@ -21,8 +21,15 @@ struct RouterInventory {
 #[derive(Deserialize)]
 struct RouterChoice {
     automatic: String,
+    models: Option<Vec<RouterModelChoice>>,
     preference: Option<String>,
     route: Option<RouterRoute<ClaudeRoute>>,
+}
+#[derive(Deserialize)]
+struct RouterModelChoice {
+    model: String,
+    automatic: Option<String>,
+    available_at: Option<String>,
 }
 #[derive(Deserialize)]
 struct RouterCodex {
@@ -121,11 +128,20 @@ struct RouterModelWindow {
 #[serde(rename_all = "camelCase")]
 struct Directory {
     automatic: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    models: Option<Vec<ModelChoice>>,
     preference: Option<String>,
     route: Option<ClaudeRoute>,
     codex_route: Option<CodexRoute>,
     copilot: Option<Copilot>,
     accounts: Vec<Account>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelChoice {
+    model: String,
+    automatic: Option<String>,
+    available_at: Option<f64>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -232,8 +248,38 @@ fn map_directory(value: Value) -> Result<Directory> {
                 .is_none_or(|preference| ids.contains(preference)),
         "Unknown Claude account choice"
     );
+    let models = inventory
+        .claude
+        .models
+        .map(|models| {
+            let mut families = std::collections::HashSet::new();
+            models
+                .into_iter()
+                .map(|choice| {
+                    ensure!(
+                        valid_id(&choice.model) && families.insert(choice.model.clone()),
+                        "Invalid Claude model choice"
+                    );
+                    ensure!(
+                        choice.automatic.as_ref().is_none_or(|id| ids.contains(id)),
+                        "Unknown Claude model account choice"
+                    );
+                    ensure!(
+                        choice.automatic.is_none() || choice.available_at.is_none(),
+                        "Available Claude model has a return time"
+                    );
+                    Ok(ModelChoice {
+                        model: choice.model,
+                        automatic: choice.automatic,
+                        available_at: choice.available_at.as_deref().map(timestamp).transpose()?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?;
     Ok(Directory {
         automatic: inventory.claude.automatic,
+        models,
         preference: inventory.claude.preference,
         route: inventory.claude.route.map(|route| route.kind),
         codex_route: inventory
