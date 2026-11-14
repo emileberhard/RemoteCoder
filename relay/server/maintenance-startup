@@ -2,6 +2,8 @@
 set -eu
 
 marker=/var/lib/remote-coder-relay/maintenance.json
+exec 9>/var/lib/remote-coder-relay/admission.lock
+flock -x 9
 if [ -e "$marker" ] || [ -L "$marker" ]; then
-    exec /usr/sbin/nft -f /usr/local/lib/remote-coder-relay/maintenance-firewall.nft
+    /usr/sbin/nft -f /usr/local/lib/remote-coder-relay/maintenance-firewall.nft
 fi
