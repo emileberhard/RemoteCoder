@@ -16,6 +16,7 @@ struct ClaudeRouterAccountList: Codable, Equatable, Sendable {
     let automatic: String
     let preference: String?
     let accounts: [ClaudeRouterAccount]
+    var models: [ClaudeModelAutomaticChoice]? = nil
     var route: ClaudeRoute? = nil
     var codexRoute: CodexRoute? = nil
     var copilot: CopilotRouterAccount? = nil
@@ -26,6 +27,12 @@ struct ClaudeRouterAccountList: Codable, Equatable, Sendable {
         case .openrouter: .openrouter
         case .subscription, nil: preference.map(ClaudeChoice.account) ?? .automatic
         }
+    }
+
+    func automaticMarks(for accountID: String) -> [String] {
+        let choices = models ?? []
+        let general = accountID == automatic ? [choices.isEmpty ? "Automatic" : "Others"] : []
+        return general + choices.filter { $0.automatic == accountID }.sorted { $0.model < $1.model }.map(\.title)
     }
 
     func offers(_ selection: RouterSelection) -> Bool {
@@ -48,10 +55,25 @@ struct ClaudeRouterAccountList: Codable, Equatable, Sendable {
     func validate() throws {
         let ids = Set(accounts.map(\.id))
         guard ids.count == accounts.count, ids.contains(automatic), preference.map(ids.contains) ?? true,
+              models.map({ choices in
+                  Set(choices.map(\.model)).count == choices.count && choices.allSatisfy {
+                      !$0.model.isEmpty && ($0.automatic.map(ids.contains) ?? true)
+                          && ($0.automatic == nil || $0.availableAt == nil)
+                          && ($0.availableAt?.isFinite ?? true)
+                  }
+              }) ?? true,
               accounts.allSatisfy({ account in
                   account.windows.allSatisfy { $0.usedPercent.isFinite && (0...100).contains($0.usedPercent) }
               }), copilot?.budget?.isValid ?? true else { throw AccountServiceError.invalidResponse }
     }
+}
+
+struct ClaudeModelAutomaticChoice: Codable, Equatable, Sendable {
+    let model: String
+    let automatic: String?
+    let availableAt: Double?
+
+    var title: String { model.prefix(1).uppercased() + model.dropFirst() }
 }
 
 struct CopilotRouterAccount: Codable, Equatable, Sendable {
@@ -151,7 +173,7 @@ struct ClaudeRouterAccount: Codable, Equatable, Sendable, Identifiable {
     }
 
     var availabilityText: String {
-        if [.cooling, .exhausted, .rejected].contains(availability), let availableAt {
+        if availability != .available, let availableAt {
             return "\(availability.rawValue.capitalized) until \(Date(timeIntervalSince1970: availableAt).formatted(date: .abbreviated, time: .shortened))"
         }
         return availability.rawValue.capitalized

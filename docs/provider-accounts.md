@@ -18,8 +18,16 @@ record and its membership, even when usage becomes unknown after a restart.
 The drawer shows the selected Claude and Codex subscriptions in separate usage
 rings. Claude rows show the plan (the observed tier, such as Max 20x, when the
 router reports it), a shared marker, 5-hour, weekly and model-specific usage
-such as Fable weekly with reset times, and availability. **Automatic** follows the router's own choice and
-marks the account it picks; choosing an account stores RemoteCoder's router
+such as Fable weekly with reset times, and availability. **Automatic** follows the router's choice for each model family.
+With multiple Claude accounts, its usage popover shows every account's remaining
+5-hour, weekly and model-family allowances in columns, stacking rows when space
+or text size requires it. Missing windows show an em dash ("Not reported" to
+VoiceOver). The popover and overview mark the chosen account with each family's
+name, and mark the general choice "Others" when model choices exist; otherwise
+the general choice is marked "Automatic". An unavailable account shows its return
+time instead of routing marks in the popover. An older router or gateway with no
+model choices keeps the single-account Automatic popover. The ring continues to
+follow the general automatic choice. Choosing an account stores RemoteCoder's router
 preference, shared by both hosts, and choosing Automatic clears it. An error
 keeps the prior preference. When the router reports Copilot, a GitHub Copilot
 row with the seat's monthly budget joins the Claude choices, and the Codex

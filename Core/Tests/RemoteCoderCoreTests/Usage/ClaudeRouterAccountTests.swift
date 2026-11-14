@@ -3,6 +3,27 @@ import Testing
 @testable import RemoteCoderCore
 
 struct ClaudeRouterAccountTests {
+    @Test func automaticMarksDistinguishGeneralAndModelChoices() throws {
+        var response = list(selected: "one", observed: 9000, used: 30)
+        #expect(response.models == nil)
+        #expect(response.automaticMarks(for: "one") == ["Automatic"])
+        #expect(response.automaticMarks(for: "two").isEmpty)
+        response.models = []
+        #expect(response.automaticMarks(for: "one") == ["Automatic"])
+        response.models = [.init(model: "fable", automatic: "two", availableAt: nil)]
+        try response.validate()
+        #expect(response.automaticMarks(for: "one") == ["Others"])
+        #expect(response.automaticMarks(for: "two") == ["Fable"])
+        response.models = [.init(model: "fable", automatic: "one", availableAt: nil)]
+        #expect(response.automaticMarks(for: "one") == ["Others", "Fable"])
+        response.models = [.init(model: "fable", automatic: nil, availableAt: 18000)]
+        try response.validate()
+        #expect(response.automaticMarks(for: "one") == ["Others"])
+        #expect(response.automaticMarks(for: "two").isEmpty)
+        response.models = [.init(model: "fable", automatic: "unknown", availableAt: nil)]
+        #expect(throws: AccountServiceError.self) { try response.validate() }
+    }
+
     @Test func latestWholeResponseReplacesOldUsageCredentialsAndMembership() throws {
         var state = ClaudeRouterAccountState()
         try state.accept(list(selected: "one", observed: 200, used: 70))
@@ -64,6 +85,7 @@ struct ClaudeRouterAccountTests {
         let response = try JSONDecoder().decode(ClaudeRouterAccountList.self, from: data)
         try response.validate()
         #expect(response.automatic == "one")
+        #expect(response.models == nil)
         #expect(response.preference == nil)
         #expect(response.accounts.first?.plan == "max")
         #expect(response.accounts.first?.shared == true)
@@ -92,11 +114,13 @@ struct ClaudeRouterAccountTests {
         #expect(!older.offers(.claude(.copilot)))
         #expect(!older.offers(.codex(.copilot)))
         let current = try JSONDecoder().decode(ClaudeRouterAccountList.self, from: Data(#"""
-        {"automatic":"one","preference":null,"route":"copilot","codexRoute":"subscription","accounts":[\#(account)],
+        {"automatic":"one","models":[{"model":"fable","automatic":null,"availableAt":1796083200}],
+         "preference":null,"route":"copilot","codexRoute":"subscription","accounts":[\#(account)],
          "copilot":{"label":"octo","plan":"business","availability":"exhausted","availableAt":1796083200,"error":null,
            "budget":{"limitUsd":150,"spentUsd":150.25,"remainingUsd":0,"resetsAt":1796083200}}}
         """#.utf8))
         try current.validate()
+        #expect(current.models == [.init(model: "fable", automatic: nil, availableAt: 1796083200)])
         #expect(current.choice == .copilot)
         #expect(current.confirms(.claude(.copilot)))
         #expect(!current.confirms(.claude(.automatic)))

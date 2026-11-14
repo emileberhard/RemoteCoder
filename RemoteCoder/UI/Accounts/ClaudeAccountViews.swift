@@ -71,7 +71,8 @@ struct ClaudeUsageDetailsView: View {
     }
 
     private func menuTitle(_ account: ClaudeRouterAccount) -> String {
-        account.menuTitle(now: .now) + (account.id == directory.state.automatic ? " · Automatic" : "")
+        let marks = directory.state.list?.automaticMarks(for: account.id) ?? []
+        return ([account.menuTitle(now: .now)] + marks).joined(separator: " · ")
     }
 
     private var selection: Binding<ClaudeChoice?> {
@@ -137,6 +138,9 @@ struct ClaudeUsageDetailsView: View {
             }
             if let copilot {
                 UsageDetailsContent(rows: copilot.usageRows(now: .now), notice: copilot.notice, isLoading: directory.isRefreshing)
+            } else if directory.state.choice == .automatic, let list = directory.state.list, list.accounts.count > 1,
+                      list.models != nil {
+                ClaudeAutomaticUsageView(list: list)
             } else {
                 UsageDetailsContent(rows: directory.effectiveAccount?.usageRows(now: .now) ?? [],
                                     notice: directory.effectiveAccount?.notice, isLoading: directory.isRefreshing)
@@ -145,6 +149,137 @@ struct ClaudeUsageDetailsView: View {
         }
         .padding([.horizontal, .bottom], 16)
         .padding(.top, 6)
+    }
+}
+
+private struct ClaudeAutomaticUsageView: View {
+    let list: ClaudeRouterAccountList
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var columns: [Column] {
+        [.fiveHour, .weekly] + Set(list.accounts.flatMap { $0.windows.compactMap(\.model) }).sorted().map(Column.model)
+    }
+
+    var body: some View {
+        let columns = columns
+        let now = Date.now
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                stacked(columns: columns, now: now)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    grid(columns: columns, now: now)
+                    stacked(columns: columns, now: now)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func grid(columns: [Column], now: Date) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 12) {
+            GridRow {
+                Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                ForEach(columns) { column in
+                    Text(column.title).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                }
+            }
+            .accessibilityHidden(true)
+            ForEach(list.accounts) { account in
+                GridRow(alignment: .firstTextBaseline) {
+                    Text(account.label)
+                    ForEach(columns) { column in
+                        value(account: account, column: column, now: now)
+                    }
+                    status(account: account)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .scaledFont(.caption2)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func stacked(columns: [Column], now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ForEach(list.accounts) { account in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(account.label).scaledFont(.subheadline.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    status(account: account).scaledFont(.caption)
+                    ForEach(columns) { column in
+                        ViewThatFits(in: .horizontal) {
+                            HStack {
+                                Text(column.title).foregroundStyle(.secondary)
+                                Spacer(minLength: 8)
+                                value(account: account, column: column, now: now)
+                            }
+                            VStack(alignment: .leading) {
+                                Text(column.title).foregroundStyle(.secondary)
+                                value(account: account, column: column, now: now)
+                            }
+                        }
+                        .scaledFont(.subheadline)
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+        }
+    }
+
+    private func value(account: ClaudeRouterAccount, column: Column, now: Date) -> some View {
+        let window = account.windows.filter { column.includes($0) }.min { $0.remainingPercent < $1.remainingPercent }
+        let row = window.flatMap { window in account.usageRows(now: now).first { $0.id == "claude-\(account.id)-\(window.id)" } }
+        return Text(row.map { "\($0.remainingPercent)%" } ?? "—")
+            .fontWeight(.semibold)
+            .monospacedDigit()
+            .foregroundStyle(row?.remainingColor ?? .secondary)
+            .accessibilityLabel("\(column.title) allowance")
+            .accessibilityValue(row.map { "\($0.remainingPercent) percent left\($0.isStale ? ", last known" : "")" } ?? "Not reported")
+    }
+
+    @ViewBuilder
+    private func status(account: ClaudeRouterAccount) -> some View {
+        if account.availability != .available {
+            if let availableAt = account.availableAt {
+                let date = Date(timeIntervalSince1970: availableAt)
+                Text(date.formatted(Calendar.autoupdatingCurrent.isDateInToday(date)
+                    ? .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)
+                    : .dateTime.month(.abbreviated).day().hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(account.availabilityText)
+            } else {
+                Text(account.availabilityText).foregroundStyle(.secondary)
+            }
+        } else {
+            let marks = list.automaticMarks(for: account.id)
+            if !marks.isEmpty {
+                Text(marks.joined(separator: " · "))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(.quaternary, in: .capsule)
+                    .accessibilityLabel("Automatic: \(marks.joined(separator: ", "))")
+            }
+        }
+    }
+
+    private enum Column: Hashable, Identifiable {
+        case fiveHour, weekly, model(String)
+        var id: Self { self }
+        var title: String {
+            switch self {
+            case .fiveHour: "5h"
+            case .weekly: "Week"
+            case .model(let name): name.prefix(1).uppercased() + name.dropFirst()
+            }
+        }
+        func includes(_ window: AccountUsageWindow) -> Bool {
+            switch self {
+            case .fiveHour: window.model == nil && window.kind == .fiveHour
+            case .weekly: window.model == nil && window.kind == .weekly
+            case .model(let name): window.model == name
+            }
+        }
     }
 }
 
@@ -165,8 +300,9 @@ struct ClaudeAccountSummaryRow: View {
                         Text(account.label).scaledFont(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                         Spacer(minLength: 0)
-                        if account.id == directory.state.automatic {
-                            Text("Automatic").scaledFont(.caption).foregroundStyle(.secondary)
+                        let marks = directory.state.list?.automaticMarks(for: account.id) ?? []
+                        if !marks.isEmpty {
+                            Text(marks.joined(separator: " · ")).scaledFont(.caption).foregroundStyle(.secondary)
                         }
                     }
                     .frame(minHeight: ControlMetrics.minimumTarget)

@@ -21,6 +21,36 @@ private enum RouterAccountFixture {
         return directory
     }
 
+    static func automaticDirectory() -> RouterAccountDirectory {
+        let directory = RouterAccountDirectory(storage: HostStorage(root: .temporaryDirectory.appending(path: "router-automatic-preview")),
+            beginBackgroundExecution: { _ in {} }, routes: { _ in nil })
+        let accounts = [
+            automaticAccount(id: "emileberhard388", fiveHour: nil, weekly: 68, fable: 100),
+            automaticAccount(id: "tent62-latch", fiveHour: 100, weekly: 15, fable: 25),
+            automaticAccount(id: "eberhard-emil", fiveHour: nil, weekly: 96, fable: 81),
+        ]
+        do {
+            try directory.showPreview(ClaudeRouterAccountList(automatic: "emileberhard388", preference: nil,
+                accounts: accounts, models: [.init(model: "fable", automatic: "eberhard-emil", availableAt: nil)],
+                route: .subscription))
+        } catch { preconditionFailure("Invalid automatic account preview: \(error)") }
+        return directory
+    }
+
+    private static func automaticAccount(id: String, fiveHour: Double?, weekly: Double, fable: Double) -> ClaudeRouterAccount {
+        let windows = [
+            fiveHour.map { AccountUsageWindow(id: "five-hour", label: "Five hours", durationMinutes: 300,
+                usedPercent: $0, resetsAt: now + 10_800, model: nil) },
+            AccountUsageWindow(id: "weekly", label: "Weekly", durationMinutes: 10_080,
+                usedPercent: weekly, resetsAt: now + 3 * 86_400, model: nil),
+            AccountUsageWindow(id: "fable-weekly", label: "Fable weekly", durationMinutes: 10_080,
+                usedPercent: fable, resetsAt: now + 3 * 86_400, model: "fable", observedAt: now),
+        ].compactMap { $0 }
+        return ClaudeRouterAccount(id: id, label: id, plan: "max", shared: id == "eberhard-emil", credential: .ready,
+            availability: fiveHour == 100 ? .exhausted : .available,
+            availableAt: fiveHour == 100 ? now + 10_800 : nil, windows: windows, observedAt: now)
+    }
+
     private static func account(id: String, label: String, fiveHour: Double, weekly: Double) -> ClaudeRouterAccount {
         ClaudeRouterAccount(id: id, label: label, plan: "max", shared: false, credential: .ready, availability: .available,
             availableAt: nil, windows: [
@@ -123,5 +153,26 @@ private struct PreviewFrame<Content: View>: View {
     PreviewFrame {
         UsageRingsFixture(directory: RouterAccountFixture.directory(route: .copilot))
     }
+}
+
+#Preview("Automatic · Light") {
+    PreviewFrame {
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(), providerReason: nil, onShowAllAccounts: {})
+    }
+    .preferredColorScheme(.light)
+}
+
+#Preview("Automatic · Dark") {
+    PreviewFrame {
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(), providerReason: nil, onShowAllAccounts: {})
+    }
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Automatic · Accessibility") {
+    PreviewFrame {
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(), providerReason: nil, onShowAllAccounts: {})
+    }
+    .dynamicTypeSize(.accessibility1)
 }
 #endif

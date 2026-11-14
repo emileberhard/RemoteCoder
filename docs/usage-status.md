@@ -104,7 +104,7 @@ windows; utilization becomes used percentage, capped at 100. Each router
 `model_limits` entry, such as Fable's weekly allowance, becomes a window with
 its `model`, labeled by model and group ("Fable weekly"); session and weekly
 groups get the matching duration and the entry's own `observedAt`, so a model
-row turns stale on its own when the router's usage reads stop. Missing windows
+row turns stale on its own when neither response headers nor usage reads refresh it. Missing windows
 remain absent; unknown or malformed model limits add none and never fail the
 directory. A model window is shown with its own label and never
 counts as the account's 5-hour or weekly limit. The router's observed plan
@@ -114,15 +114,35 @@ Native stream token/context observations remain canonical.
 
 Tapping the Claude ring explicitly refreshes router usage. The selector lists
 each account's label, plan, shared marker, remaining usage and availability.
-**Automatic** follows the router's own choice and marks the account it picks;
-choosing an account stores RemoteCoder's router preference, which both hosts
+**Automatic** follows the router's general choice for families without scoped
+limits, and its per-family choice for families such as Fable. The gateway maps
+`claude.models` into optional directory `models` entries with `model`, nullable
+`automatic`, and nullable Unix-seconds `availableAt`. Unknown account IDs fail
+the directory mapping. An absent `models` key stays absent (unknown); an empty
+array means no scoped choices. A null family choice means no account can serve
+that family, with its earliest return time when known.
+
+With Automatic and multiple accounts, known model choices show every account
+in the popover with remaining 5-hour, Week and model-family columns. Missing
+windows show an em dash, announced as "Not reported"; low and stale values keep
+the existing usage styling. Rows stack at accessibility sizes or when the grid
+does not fit. The family's chosen account carries its name; the general account
+is marked "Others" when scoped choices exist, or "Automatic" otherwise. The
+overview uses the same routing marks. Unavailable popover rows show their return
+time, or availability when that time is unknown. Older routers and gateways that
+omit model choices retain the single-account Automatic popover. Explicit account,
+Copilot and OpenRouter views are unchanged.
+
+Choosing an account stores RemoteCoder's router preference, which both hosts
 share and new Claude requests use immediately. The ring shows the preferred
 account, or the automatic choice when there is none. A preference change uses
 the most recent responding route, checking other hosts when it is unavailable.
 A lost response triggers an immediate read to confirm the router's actual
 preference; it never repeats the mutation. If that read fails or does not
-confirm the requested preference, the error remains visible. Credentials,
-availability and cooldowns come from the router.
+confirm the requested preference, the error remains visible. Credentials and
+account-wide availability come from the router. Exhausted 5-hour or weekly
+windows report `exhausted` with `availableAt`; `cooling` still decodes from older
+routers. Model exhaustion stays separate from account-wide availability.
 
 When the router reports Copilot (llm-router 1.10.0 and a gateway that passes
 it on), the selector also offers **Copilot**, which routes every Claude request
