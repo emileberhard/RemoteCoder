@@ -148,6 +148,7 @@ def provision(_: argparse.Namespace) -> None:
         "maintenance_state.py": (RELAY / "server" / "maintenance_state.py").read_bytes(),
         "maintenance_drain.py": (RELAY / "server" / "maintenance_drain.py").read_bytes(),
         "haproxy-maintenance.conf": (RELAY / "server" / "haproxy-maintenance.conf").read_bytes(),
+        "nftables-maintenance.conf": (RELAY / "server" / "nftables-maintenance.conf").read_bytes(),
         "config-activation.sh": (RELAY / "server" / "config-activation.sh").read_bytes(),
         "authorized_keys": authorized_keys.encode(),
         "credential": credential.encode(),

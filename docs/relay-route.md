@@ -54,6 +54,8 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   reapply a fence between recovery removing it and deleting the marker. The
   future owner must take the provisioning lock before the admission lock when
   writing the marker or changing its fence, and must verify the new boot.
+  The nftables service stop leaves existing rules loaded; its normal restart
+  reloads the base table without removing the separate maintenance table.
   The staged transaction helper holds those locks and both Debian package locks
   while atomically syncing a preparing or committed marker. It waits for an idle
   candidate with admission open, fences ingress, and requires two clean drain

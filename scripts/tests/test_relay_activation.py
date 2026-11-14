@@ -30,6 +30,15 @@ class RelayProvisioningTests(unittest.TestCase):
                 "nftables.service", unit["Unit"].get(directive, "").split()
             )
 
+    def test_nftables_stop_preserves_existing_firewall_tables(self):
+        lines = (
+            (ROOT / "relay/server/nftables-maintenance.conf").read_text().splitlines()
+        )
+        self.assertEqual(
+            [line for line in lines if line.startswith("ExecStop=")],
+            ["ExecStop=", "ExecStop=/usr/bin/true"],
+        )
+
     def test_provisioning_transports_the_policy_and_activation_owner(self):
         maintainer = types.ModuleType("maintainer_config")
         maintainer.load = dict
@@ -81,6 +90,7 @@ class RelayProvisioningTests(unittest.TestCase):
                 "maintenance_state.py",
                 "maintenance_drain.py",
                 "haproxy-maintenance.conf",
+                "nftables-maintenance.conf",
             ):
                 self.assertEqual(
                     archive.extractfile(name).read(),
