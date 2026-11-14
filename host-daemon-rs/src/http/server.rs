@@ -458,6 +458,30 @@ mod tests {
         let mut state = lan.state.clone();
         state.dictation_access =
             crate::http::dictation::DictationAccess::load(&sources, Some(&router_config)).unwrap();
+        state.speech = crate::voice::speech::SpeechRelay::new(
+            OPERATOR.into(),
+            state.installation_credentials.clone(),
+            Some(router_config),
+            crate::voice::speech::SpeechClients::parse(Some("listed")).unwrap(),
+            Journal::disabled(),
+        )
+        .unwrap();
+        let mut tokens = Vec::new();
+        for id in ["listed", "excluded"] {
+            tokens.push(
+                state
+                    .installation_credentials
+                    .enroll(
+                        crate::auth::installation_credentials::Enrollment {
+                            installation_id: id.into(),
+                            label: id.into(),
+                        },
+                        OPERATOR,
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/dictation", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
@@ -478,18 +502,26 @@ mod tests {
             let refused = client.get(&url).bearer_auth("wrong").send().await.unwrap();
             assert_eq!(refused.status().as_u16(), 401);
             assert_eq!(refused.headers()[header::CACHE_CONTROL], "no-store");
-            let response = client.get(&url).bearer_auth(OPERATOR).send().await.unwrap();
-            assert_eq!(response.status().as_u16(), status);
-            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
-            let body = response.json::<Value>().await.unwrap();
-            if status == 200 {
+            for token in [OPERATOR, tokens[0].as_str(), tokens[1].as_str()] {
+                let response = client.get(&url).bearer_auth(token).send().await.unwrap();
+                let excluded = token == tokens[1];
                 assert_eq!(
-                    body,
-                    json!({"origin": "https://dictation.example", "key": key.unwrap()})
+                    response.status().as_u16(),
+                    if excluded { 403 } else { status }
                 );
-            } else {
-                assert!(body.get("key").is_none());
-                assert!(!body.to_string().contains("gateway-inference-secret"));
+                assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+                let body = response.json::<Value>().await.unwrap();
+                if excluded {
+                    assert_eq!(body, json!({"error": "notPermitted"}));
+                } else if status == 200 {
+                    assert_eq!(
+                        body,
+                        json!({"origin": "https://dictation.example", "key": key.unwrap()})
+                    );
+                } else {
+                    assert!(body.get("key").is_none());
+                    assert!(!body.to_string().contains("gateway-inference-secret"));
+                }
             }
         }
         server.abort();

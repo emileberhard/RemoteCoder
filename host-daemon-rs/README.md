@@ -738,7 +738,8 @@ SIGTERM to capture work through the existing held-turn handoff.
 Set `RC_CODEX_GATEWAY_DICTATION_ORIGIN` to your public router origin and
 `RC_CODEX_GATEWAY_DICTATION_KEY_FILE` to an absolute path containing a separate
 dictation-only router key. Keep the file owned by the gateway user with mode
-0600. The authorized `GET /dictation` reads it on every request and returns
+0600. `GET /dictation` requires gateway authorization and admission by
+`RC_CODEX_GATEWAY_SPEECH_CLIENTS`, reads it on every request and returns
 `{origin, key}` with `Cache-Control: no-store`. The gateway refuses to publish
 its own inference key. Missing configuration is 404; an unreadable, invalid or
 unsafe key file is 503. Configure the router's per-key limits before distributing

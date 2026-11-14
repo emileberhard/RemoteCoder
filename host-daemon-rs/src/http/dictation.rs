@@ -70,6 +70,11 @@ pub(in crate::http) async fn published(
 ) -> Response {
     let mut response = match authorized {
         Err(error) => error.into_response(),
+        Ok(authorized) if !state.speech.permits(&authorized.0) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "notPermitted"})),
+        )
+            .into_response(),
         Ok(_) => match state.dictation_access {
             None => (
                 StatusCode::NOT_FOUND,

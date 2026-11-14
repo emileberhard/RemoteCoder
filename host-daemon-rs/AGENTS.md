@@ -856,7 +856,8 @@ blocks startup or provider journal retirement.
 
 ## Native dictation credentials
 
-`GET /dictation` requires an authorized gateway caller and returns `{origin, key}`
+`GET /dictation` requires an authorized gateway caller admitted by the shared
+`SpeechClients` policy and returns `{origin, key}`
 with `Cache-Control: no-store` on success and failure. Configure both
 `RC_CODEX_GATEWAY_DICTATION_ORIGIN` and `RC_CODEX_GATEWAY_DICTATION_KEY_FILE`.
 The latter is a separate dictation-only router key file, read per request using

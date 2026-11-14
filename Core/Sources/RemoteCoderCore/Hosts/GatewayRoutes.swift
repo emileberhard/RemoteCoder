@@ -746,7 +746,12 @@ actor GatewayRoutes {
     private struct RouteUnavailable: LocalizedError {
         let path: String
         let status: Int?
-        var errorDescription: String? { "The gateway /\(path) read answered \(status.map { "HTTP \($0)" } ?? "without HTTP")." }
+        var errorDescription: String? {
+            if path == "dictation", status == 403 {
+                return "This gateway does not permit dictation for this installation. Ask its operator to allow speech access."
+            }
+            return "The gateway /\(path) read answered \(status.map { "HTTP \($0)" } ?? "without HTTP")."
+        }
     }
 
     private func health(over route: GatewayRoute) async throws -> GatewayLANEndpoint? {

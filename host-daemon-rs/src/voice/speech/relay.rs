@@ -281,6 +281,10 @@ impl SpeechRelay {
         })
     }
 
+    pub(crate) fn permits(&self, grant: &Grant) -> bool {
+        self.inner.clients.permits(grant)
+    }
+
     pub(crate) fn router(&self) -> Router {
         Router::new()
             .route("/speech/*path", any(handle))
