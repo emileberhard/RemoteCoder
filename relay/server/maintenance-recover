@@ -38,6 +38,10 @@ def recover_preparing():
         raise RuntimeError(
             "uncertain reboot or new-boot maintenance requires verification; keep the fence"
         )
+    if phase == "committed":
+        from maintenance_drain import fence_is_configured
+
+        fence_is_configured(time.monotonic() + 5)
     remove_fence_and_marker()
 
 
@@ -89,6 +93,13 @@ if __name__ == "__main__":
             recover()
         else:
             raise RuntimeError("usage: maintenance-recover [--watch]")
-    except (OSError, RuntimeError) as error:
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        subprocess.SubprocessError,
+    ) as error:
         print(f"relay recovery: {error}", file=sys.stderr)
         sys.exit(1)

@@ -281,6 +281,10 @@ class RelayTransaction:
             self.reopen_after_new_boot(timeout_seconds)
             return "relay admission reopened after local new-boot checks"
         if marker["phase"] in ("preparing", "committed"):
+            if marker["phase"] == "committed":
+                from maintenance_drain import fence_is_configured
+
+                fence_is_configured(time.monotonic() + min(5, timeout_seconds))
             remove_fence_and_marker()
             return "relay admission reopened after abandoned preparation"
         raise RuntimeError(
