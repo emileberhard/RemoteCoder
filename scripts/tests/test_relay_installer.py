@@ -134,7 +134,8 @@ fi
             r"""
 case "$1" in
     dgst) exec /usr/bin/openssl "$@" ;;
-    x509|pkey) printf 'synthetic' ;;
+    x509) printf 'synthetic' ;;
+    pkey) cat >/dev/null; printf 'synthetic' ;;
     *) exit 1 ;;
 esac
 """,
@@ -265,6 +266,20 @@ esac
         self.assertIn("another owner", result.stderr)
         self.assertEqual(policy.read_text(), "foreign policy")
         self.assertFalse(any(line.startswith("apt-get ") for line in calls))
+
+    def test_pending_maintenance_stops_before_apt_or_policy_changes(self):
+        directory = self.root / "varlib/remote-coder-relay"
+        directory.mkdir()
+        marker = directory / "maintenance.json"
+        for content in ('{"phase":"preparing"}', '{"phase":"committed"}', "invalid"):
+            with self.subTest(content=content):
+                marker.write_text(content)
+                result, calls = self.run_installer()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Relay maintenance is pending", result.stderr)
+                self.assertEqual(calls, [])
+                self.assertFalse((self.root / "sbin/policy-rc.d").exists())
+                self.assertEqual(marker.read_text(), content)
 
 
 if __name__ == "__main__":

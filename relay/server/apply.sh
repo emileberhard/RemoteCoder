@@ -8,6 +8,11 @@ umask 022
 install -d -m 0700 /var/lib/remote-coder-relay
 exec 9>/var/lib/remote-coder-relay/provision.lock
 flock -n 9 || { echo "Relay provisioning is already running" >&2; exit 1; }
+maintenance=/var/lib/remote-coder-relay/maintenance.json
+if [[ -e "$maintenance" || -L "$maintenance" ]]; then
+    echo "Relay maintenance is pending; recover it before provisioning" >&2
+    exit 1
+fi
 
 policy=/usr/sbin/policy-rc.d
 relay_policy=/usr/local/lib/remote-coder-relay/policy-rc.d
