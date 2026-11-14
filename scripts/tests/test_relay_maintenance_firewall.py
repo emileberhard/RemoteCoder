@@ -1,4 +1,6 @@
+import errno
 import os
+import select
 import shutil
 import socket
 import subprocess
@@ -10,6 +12,36 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SERVER = ROOT / "relay/server"
 NFT = os.environ.get("RC_RELAY_TEST_NFT", "nft")
+TC = os.environ.get("RC_RELAY_TEST_TC", "tc")
+
+
+def listener_pending(family):
+    address_family = "-4" if family == socket.AF_INET else "-6"
+    query = ["ss", "-H", "-n", "-t", address_family]
+    half_open = subprocess.run(
+        [*query, "state", "syn-recv", "( sport = :443 )"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    listening = subprocess.run(
+        [*query, "-l", "( sport = :443 )"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    if len(listening) != 1:
+        raise RuntimeError("expected exactly one relay listener for the address family")
+    return bool(half_open), int(listening[0].split()[1])
+
+
+def wait_until(predicate):
+    deadline = time.monotonic() + 4
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise TimeoutError("socket state did not arrive")
 
 
 def run_lab(parent_namespace_fd):
@@ -24,6 +56,38 @@ def run_lab(parent_namespace_fd):
     subprocess.run([NFT, "-c", "-f", str(SERVER / "nftables.conf")], check=True)
     subprocess.run([NFT, "-f", str(SERVER / "nftables.conf")], check=True)
     subprocess.run([NFT, "-c", "-f", str(SERVER / "nftables.conf")], check=True)
+    subprocess.run(
+        [TC, "qdisc", "add", "dev", "lo", "root", "netem", "delay", "500ms"],
+        check=True,
+    )
+    for family, host in [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")]:
+        with socket.socket(family) as listener, socket.socket(family) as client:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6:
+                listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            listener.bind((host, 443))
+            listener.listen(16)
+            listener.settimeout(4)
+            client.setblocking(False)
+            assert client.connect_ex((host, 443)) in (0, errno.EINPROGRESS)
+            wait_until(lambda family=family: listener_pending(family)[0])
+            subprocess.run(
+                [NFT, "-f", str(SERVER / "maintenance-firewall.nft")], check=True
+            )
+            assert listener_pending(family)[0]
+            _, writable, _ = select.select([], [client], [], 4)
+            assert (
+                writable and client.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0
+            )
+            wait_until(lambda family=family: listener_pending(family)[1] > 0)
+            with listener.accept()[0]:
+                pass
+            subprocess.run(
+                [NFT, "delete", "table", "inet", "remote_coder_relay_maintenance"],
+                check=True,
+            )
+            print(f"{host}: pending handshake and accept queue block an idle decision")
+    subprocess.run([TC, "qdisc", "del", "dev", "lo", "root"], check=True)
     listeners = []
     clients = []
     servers = []
@@ -43,6 +107,7 @@ def run_lab(parent_namespace_fd):
     try:
         for family, host in families:
             listener = socket.socket(family)
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listeners.append(listener)
             listener.settimeout(2)
             if family == socket.AF_INET6:
@@ -110,10 +175,12 @@ class RelayMaintenanceFirewallTests(unittest.TestCase):
 
     def test_fence_preserves_existing_and_queued_connections(self):
         required = os.environ.get("RC_RELAY_REQUIRE_INGRESS") == "1"
-        missing = [name for name in ("unshare", "ip", NFT) if not shutil.which(name)]
+        missing = [
+            name for name in ("unshare", "ip", "ss", NFT, TC) if not shutil.which(name)
+        ]
         if sys.platform != "linux" or missing:
             if required:
-                self.fail(f"Linux, unshare, ip and nft are required: {missing}")
+                self.fail(f"Linux, unshare, ip, ss, tc and nft are required: {missing}")
             self.skipTest("Linux network-namespace tools are unavailable")
         preflight = subprocess.run(
             ["unshare", "-Urn", "true"], capture_output=True, text=True, check=False
