@@ -1219,7 +1219,7 @@ entrypoint linked above.
     the screen still shows. An empty transcript, a failed dictation or a
     changed draft never sends. Nothing moves under the finger: the keyboard and
     the focused or folded layout stay, the action row alone becomes the
-    waveform, and a hint above the button names what lifting does. Releasing
+    waveform, whose leading hint names what lifting does. Releasing
     more than 48 points from the button, or a cancelled touch, keeps the text in
     the draft unsent. The hold is the composer's own view state; a composer
     that loses it while recording shows the ordinary recording bar. The Mac

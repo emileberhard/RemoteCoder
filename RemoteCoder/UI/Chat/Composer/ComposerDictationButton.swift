@@ -13,7 +13,7 @@ enum QuickDictationRelease: Equatable {
     var tint: Color {
         switch self {
         case .sends: .composerRecording
-        case .keepsDraft: .gray
+        case .keepsDraft: Color(white: 0.42)
         }
     }
 }
@@ -49,21 +49,6 @@ struct ComposerDictationButton: View {
     var body: some View {
         face
             .accessibilityHidden(true)
-            .overlay(alignment: .topTrailing) {
-                if let held {
-                    Text(held.hint)
-                        .scaledFont(.footnote.weight(.semibold))
-                        .contentTransition(.identity)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .appGlass(.standard, in: .capsule)
-                        .fixedSize()
-                        .alignmentGuide(.top) { $0[.bottom] + 18 }
-                        .alignmentGuide(.trailing) { $0[.trailing] - ControlMetrics.minimumTarget }
-                        .allowsHitTesting(false)
-                        .transition(reduceMotion ? .opacity : .scale(scale: 0.85, anchor: .bottomTrailing).combined(with: .opacity))
-                }
-            }
             .overlay {
                 TapHoldButton(label: isTranscribing ? "Transcribing recording" : "Start recording", value: nil,
                               hint: "Hold to dictate and send when you let go.", identifier: "composer-dictate",
@@ -88,10 +73,12 @@ struct ComposerDictationButton: View {
                 ProgressView()
                     .controlSize(.small)
             } else {
-                Image(systemName: held == nil ? "mic" : "mic.fill")
-                    .symbolRenderingMode(.monochrome)
-                    .scaledFont(.system(size: ComposerMetrics.iconSize))
-                    .foregroundStyle(held == nil ? AnyShapeStyle(.primary) : AnyShapeStyle(.white))
+                glyph
+                    .foregroundStyle(.primary)
+                    .opacity(held == nil ? 1 : 0)
+                glyph
+                    .foregroundStyle(.white)
+                    .opacity(held == nil ? 0 : 1)
             }
         }
         .scaledFrame(width: ControlMetrics.minimumTarget, height: ControlMetrics.minimumTarget)
@@ -99,6 +86,12 @@ struct ComposerDictationButton: View {
         .scaleEffect(scale)
         .opacity(isPressed && held == nil ? 0.9 : 1)
         .animation(reduceMotion ? nil : AppControlMotion.press(isPressed), value: isPressed)
+    }
+
+    private var glyph: some View {
+        Image(systemName: "mic")
+            .symbolRenderingMode(.monochrome)
+            .scaledFont(.system(size: ComposerMetrics.iconSize))
     }
 
     private func pressChanged(_ pressed: Bool) {

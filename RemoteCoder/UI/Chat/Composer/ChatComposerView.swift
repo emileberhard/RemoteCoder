@@ -686,12 +686,22 @@ struct ChatComposerView: View {
     }
 
     private var quickDictationBar: some View {
-        ComposerWaveformView(
-            isActive: true,
-            tint: .white,
-            levels: { screen.target.voice.levels() }
-        )
-        .frame(height: 26)
+        HStack(spacing: 12) {
+            if let quickDictation {
+                Text(quickDictation.hint)
+                    .scaledFont(.footnote.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .contentTransition(.identity)
+                    .layoutPriority(1)
+            }
+            ComposerWaveformView(
+                isActive: true,
+                tint: .white,
+                levels: { screen.target.voice.levels() }
+            )
+            .frame(height: 26)
+        }
         .padding(.leading, 17)
         .padding(.trailing, (ControlMetrics.minimumTarget * 2 + 14) * interfaceScale)
         .frame(maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget * interfaceScale)
