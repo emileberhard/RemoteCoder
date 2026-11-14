@@ -179,6 +179,7 @@ export class Workspace {
       (target) => this.selectTarget(target),
       () => this.disposed,
       (error) => this.report(error),
+      () => this.accountUsageStore.selectedClaudeFamilies(),
     );
     this.dispatcher = new TurnDispatcher(
       this.hosts,

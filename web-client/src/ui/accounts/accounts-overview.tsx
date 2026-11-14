@@ -1,4 +1,4 @@
-import { AlertTriangle, Circle, CircleCheck, RefreshCw } from "lucide-react";
+import { AlertTriangle, Circle, CircleCheck, RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import type { UsageAccount } from "../../workspace/account-usage-store";
 import { IconButton } from "../design-system/icon-button";
@@ -84,6 +84,16 @@ export function AccountsOverview() {
               >
                 <SelectionMark selected={claude.preference === account.id} />
                 <strong>{account.title}</strong>
+                {account.cyberVerified && (
+                  <ShieldCheck
+                    size={16}
+                    className="account-cyber"
+                    role="img"
+                    aria-label="Cyber Verification Program"
+                  >
+                    <title>Cyber Verification Program</title>
+                  </ShieldCheck>
+                )}
                 {account.id === claude.automatic && <small className="subtle">Automatic</small>}
               </button>
               <div className="account-details">

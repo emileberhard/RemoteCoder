@@ -31,6 +31,7 @@ export type UsageAccount = Readonly<{
   shared?: boolean;
   credential?: "ready" | "rejected";
   observedAt?: number;
+  cyberVerified?: boolean;
 }>;
 export type ProviderUsage = Readonly<{
   provider: Provider;
@@ -70,6 +71,8 @@ export type ClaudeUsageSample = Sample & {
   credential: "ready" | "rejected";
   availability: string;
   availableAt?: number;
+  models?: string[];
+  cyberVerified: boolean;
 };
 export type ClaudeUsageDirectory = {
   accounts: ClaudeUsageSample[];
@@ -177,6 +180,8 @@ export function parseClaudeUsageDirectory(value: unknown): ClaudeUsageDirectory 
       availableAt: optionalNumber(account.availableAt),
       observedAt: optionalNumber(account.observedAt),
       windows: windows(account.windows),
+      models: account.models == null ? undefined : array(account.models).map((model) => string(model)),
+      cyberVerified: flag(account.cyberVerified ?? false),
     };
   });
   const automatic = identifier(directory.automatic);
@@ -338,6 +343,13 @@ export class AccountUsageStore {
         : host.controller.signal,
     });
   }
+  selectedClaudeFamilies(): readonly string[] | undefined {
+    const preference = this.claude?.preference;
+    return preference
+      ? this.claude?.accounts.find((account) => account.id === preference)?.models
+      : undefined;
+  }
+
   snapshot(now: number, selectedTarget: ExecutionTarget | undefined): AccountUsageSnapshot {
     const target = JSON.stringify(selectedTarget);
     if (this.presentationCache?.now === now && this.presentationCache.target === target)
@@ -419,6 +431,7 @@ export class AccountUsageStore {
         rows: rows(sample, "claude", stale, now),
         availability: sample.availability,
         availableAt: sample.availableAt,
+        cyberVerified: sample.cyberVerified,
         notice:
           sample.credential === "rejected"
             ? "Credential rejected"

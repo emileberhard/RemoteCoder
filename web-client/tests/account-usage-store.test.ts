@@ -523,3 +523,27 @@ test("provider coverage distinguishes unread, empty, loading, and partial host f
   store.dispose();
   services.dispose();
 });
+
+test("claude accounts keep their families and Cyber Verification status", () => {
+  const account = {
+    id: "personal",
+    label: "Personal",
+    plan: "max",
+    shared: false,
+    credential: "ready",
+    availability: "available",
+    windows: [],
+  };
+  const directory = parseClaudeUsageDirectory({
+    automatic: "personal",
+    preference: "personal",
+    accounts: [
+      { ...account, models: ["mythos", "opus"], cyberVerified: true },
+      { ...account, id: "older" },
+    ],
+  });
+  expect(directory.accounts.map((sample) => [sample.models, sample.cyberVerified])).toEqual([
+    [["mythos", "opus"], true],
+    [undefined, false],
+  ]);
+});

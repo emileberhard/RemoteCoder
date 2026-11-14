@@ -1827,6 +1827,10 @@ button.primary:hover:not(:disabled) {
 .account-choice > small {
   flex: none;
 }
+.account-cyber {
+  flex: none;
+  color: var(--accent);
+}
 .account-mark {
   flex: none;
   color: var(--muted);

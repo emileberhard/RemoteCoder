@@ -32,6 +32,7 @@ export class ConversationSettingsSelection {
     private readonly selectTarget: (target: ExecutionTarget) => Promise<void>,
     private readonly isRetired: () => boolean,
     private readonly report: (error: unknown) => void,
+    private readonly claudeFamilies: () => readonly string[] | undefined,
   ) {}
   private get newChatDefaults() {
     const model = this.preferences.get("codex.newChatModel");
@@ -85,14 +86,18 @@ export class ConversationSettingsSelection {
     const provider = selected?.provider ?? conversation?.header.provider;
     const storedModel = selected?.model || conversation?.header.model;
     const model = provider === "claude" && storedModel ? canonicalModelID(storedModel) : storedModel;
-    const route =
-      conversation && provider === "codex"
-        ? catalog.find((choice) => choice.provider === "codex" && choice.id === model)
-        : undefined;
+    const route = conversation
+      ? catalog.find((choice) => choice.provider === provider && choice.id === model)
+      : undefined;
+    const families = this.claudeFamilies();
     const result: ModelChoice[] = catalog
       .filter((choice) => choice.visible)
       .filter(
-        (choice) => !route || choice.provider !== "codex" || choice.modelProvider === route.modelProvider,
+        (choice) => !route || choice.provider !== provider || choice.modelProvider === route.modelProvider,
+      )
+      .filter(
+        (choice) =>
+          !families || choice.provider !== "claude" || choice.modelProvider || families.includes(choice.id),
       )
       .map((choice) => ({
         ...choice,
