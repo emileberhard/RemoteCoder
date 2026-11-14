@@ -88,6 +88,10 @@ struct ClaudeAccount {
     available_at: Option<String>,
     usage: Option<RouterUsage>,
     resets: Option<Value>,
+    #[serde(default)]
+    models: Option<Vec<String>>,
+    #[serde(default)]
+    cyber_verified: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -175,6 +179,8 @@ struct Account {
     windows: Vec<UsageWindow>,
     observed_at: Option<f64>,
     resets: Option<crate::accounts::resets::ResetSnapshot>,
+    models: Option<Vec<String>>,
+    cyber_verified: bool,
 }
 fn map_directory(value: Value) -> Result<Directory> {
     let inventory: RouterInventory = serde_json::from_value(value)?;
@@ -233,6 +239,8 @@ fn map_directory(value: Value) -> Result<Directory> {
             windows,
             observed_at,
             resets: crate::accounts::resets::from_router(account.resets),
+            models: account.models,
+            cyber_verified: account.cyber_verified,
         });
     }
     ensure!(

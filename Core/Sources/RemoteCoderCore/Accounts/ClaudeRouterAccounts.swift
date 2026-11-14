@@ -144,6 +144,8 @@ struct ClaudeRouterAccount: Codable, Equatable, Sendable, Identifiable {
     let windows: [AccountUsageWindow]
     let observedAt: Double?
     var resets: AccountResets? = nil
+    var models: [String]? = nil
+    var cyberVerified: Bool? = nil
 
     var planTitle: String {
         let name = tier?.replacingOccurrences(of: "_", with: " ") ?? plan
@@ -203,6 +205,14 @@ struct ClaudeRouterAccountState {
     var copilot: CopilotRouterAccount? { list?.copilot }
 
     func offers(_ selection: RouterSelection) -> Bool { list?.offers(selection) ?? (selection == .claude(.automatic)) }
+
+    func offeredModels(_ options: [ModelOption], keeping selected: ModelOption?) -> [ModelOption] {
+        guard case .account(let id)? = choice, let models = accounts.first(where: { $0.id == id })?.models else { return options }
+        return options.filter {
+            $0.provider != .claude || $0.modelProvider != nil || $0.id == selected?.id
+                || models.contains(ClaudeModelCatalog.canonicalModelID($0.id))
+        }
+    }
 
     mutating func accept(_ response: ClaudeRouterAccountList) throws {
         try response.validate()

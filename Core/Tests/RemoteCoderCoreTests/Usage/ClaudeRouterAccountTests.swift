@@ -157,6 +157,27 @@ struct ClaudeRouterAccountTests {
         #expect(throws: AccountServiceError.self) { try negative.validate() }
     }
 
+    @Test func selectedAccountLimitsOnlyNativeClaudeFamilies() throws {
+        let data = Data(#"""
+        {"automatic":"one","preference":"one","accounts":[
+         {"id":"one","label":"one@example.com","plan":"max","shared":false,"credential":"ready","availability":"available","availableAt":null,"windows":[],"observedAt":null,"models":["mythos","opus"],"cyberVerified":true},
+         {"id":"two","label":"two@example.com","plan":"max","shared":false,"credential":"ready","availability":"available","availableAt":null,"windows":[],"observedAt":null}]}
+        """#.utf8)
+        var state = ClaudeRouterAccountState()
+        try state.accept(JSONDecoder().decode(ClaudeRouterAccountList.self, from: data))
+        #expect(state.accounts.map(\.cyberVerified) == [true, nil])
+        let external = ModelOption.unlisted(id: "copilot/gemini-4-argon", modelProvider: .init(id: "copilot", name: "Copilot"),
+                                            reportedEffort: nil, reportedFastMode: false, provider: .claude)
+        let codex = ModelOption.unlisted(id: "gpt-6", modelProvider: nil, reportedEffort: nil, reportedFastMode: false)
+        let sonnet = try #require(ClaudeModelCatalog.model(for: "sonnet"))
+        let options = ClaudeModelCatalog.models + [external, codex]
+        #expect(state.offeredModels(options, keeping: nil).map(\.id) == ["opus", "copilot/gemini-4-argon", "gpt-6"])
+        #expect(state.offeredModels(options, keeping: sonnet).map(\.id).contains("sonnet"))
+        try state.accept(JSONDecoder().decode(ClaudeRouterAccountList.self, from: Data(
+            String(decoding: data, as: UTF8.self).replacingOccurrences(of: #""preference":"one""#, with: #""preference":"two""#).utf8)))
+        #expect(state.offeredModels(options, keeping: nil) == options)
+    }
+
     private func list(selected: String, observed: Double, used: Double) -> ClaudeRouterAccountList {
         ClaudeRouterAccountList(automatic: selected, preference: selected, accounts: ["one", "two"].map { id in
             account(id: id, observed: observed,

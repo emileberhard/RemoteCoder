@@ -1311,8 +1311,8 @@ entrypoint linked above.
     unless the host marks them `hidden`, and hidden ones can be opted in.
     Claude Code models use the same visibility policy with all families shown
     by default; Settings → Models in Pickers → Claude Code edits their alias IDs.
-    Host-reported Claude models keep Codex-catalog visibility and are listed on
-    that same page.
+    Host-reported external Claude models keep Codex-catalog visibility and are listed on
+    that same page. Native Claude rows use alias visibility.
 - **Model defaults and restoration.**
   - `NewChatDefaults` owns independent new-chat model and reasoning policies:
     last manually selected (the default) or a fixed choice in Settings.
@@ -1345,14 +1345,17 @@ entrypoint linked above.
   only when its model catalog sets `supports_reasoning_summary_parameter: false`.
   A model absent from that catalog, such as a resumed `gpt-5.3-codex-spark`
   thread, is still sent `summary: detailed`.
-- **Claude models.** Claude offers Claude Fable, Claude Opus, Claude Sonnet and
-  Claude Haiku, passing the CLI aliases `fable`, `opus`, `sonnet` and `haiku`,
-  so versions follow the installed CLI's defaults. Saved numbered selections resolve to the same
-  family. All four stop at `max` reasoning, which is what `claude --effort`
-  accepts. Only Opus offers Fast, Claude Code's fast mode, sent as the `fast`
-  service tier like a Codex model's. Fable is the
-  initial Claude-family choice; new chats otherwise follow the configured model
-  policy.
+- **Claude models.** Native Claude families come from the host's `model/list`
+  rows with `agentProvider: claude` and no `modelProvider`, one per family the
+  router's accounts offer, passing the bare alias (`mythos`, `opus`) so versions
+  follow the router's newest model. Hosts that report none fall back to the
+  built-in Fable, Opus, Sonnet and Haiku. Numbered IDs resolve to their family
+  alias. Only Opus offers Fast, Claude Code's fast mode, sent as the `fast`
+  service tier. While a specific Claude account is selected, pickers show only
+  the native families that account lists (`models` in the router inventory,
+  `ClaudeRouterAccountState.offeredModels`); account rows mark Cyber
+  Verification Program accounts with a shield. New chats follow the configured
+  model policy.
 - **Providers.** Picking a model picks the provider for a new chat; an existing
   chat's provider comes from its thread id.
 - Deep links: `remotecoder://chat/new` starts a new chat and focuses the

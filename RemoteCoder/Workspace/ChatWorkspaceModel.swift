@@ -1646,6 +1646,10 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     func modelOptions(for screen: ChatScreenModel) -> [ModelOption] {
+        accountDirectory.router.state.offeredModels(pickerModelOptions(for: screen), keeping: screen.selectedModel)
+    }
+
+    private func pickerModelOptions(for screen: ChatScreenModel) -> [ModelOption] {
         guard screen.activeSessionID == nil, screen.shownDraftForkSource == nil else {
             return screen.selectedModel.map(screen.pickerModelOptions(for:)) ?? []
         }

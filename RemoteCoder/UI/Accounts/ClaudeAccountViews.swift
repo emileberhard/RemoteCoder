@@ -195,7 +195,7 @@ private struct ClaudeAutomaticUsageView: View {
             .accessibilityHidden(true)
             ForEach(list.accounts) { account in
                 GridRow(alignment: .firstTextBaseline) {
-                    Text(account.label)
+                    ClaudeAccountName(account: account)
                     ForEach(columns) { column in
                         value(account: account, column: column, now: now)
                     }
@@ -212,7 +212,7 @@ private struct ClaudeAutomaticUsageView: View {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(list.accounts) { account in
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(account.label).scaledFont(.subheadline.weight(.semibold))
+                    ClaudeAccountName(account: account).scaledFont(.subheadline.weight(.semibold))
                         .fixedSize(horizontal: false, vertical: true)
                     status(account: account).scaledFont(.caption)
                     ForEach(columns) { column in
@@ -314,7 +314,7 @@ struct ClaudeAccountSummaryRow: View {
                 } label: {
                     HStack(spacing: 10) {
                         RadioMark(isSelected: isSelected)
-                        Text(account.label).scaledFont(.subheadline.weight(.semibold))
+                        ClaudeAccountName(account: account).scaledFont(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                         Spacer(minLength: 0)
                         let marks = directory.state.list?.automaticMarks(for: account.id) ?? []
@@ -433,5 +433,21 @@ struct ClaudeAccountDetailView: View {
         .inlineNavigationTitle()
         .refreshable { await directory.refresh(interactive: true) }
         .task { await directory.refresh(interactive: true) }
+    }
+}
+
+private struct ClaudeAccountName: View {
+    let account: ClaudeRouterAccount
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(account.label)
+            if account.cyberVerified == true {
+                Image(systemName: "checkmark.shield.fill")
+                    .foregroundStyle(.tint)
+                    .accessibilityLabel("Cyber Verification Program")
+                    .tooltip("Cyber Verification Program")
+            }
+        }
     }
 }

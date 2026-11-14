@@ -2439,7 +2439,7 @@ and provider, not the currently selected chat.
 Settings → Models in Pickers → Codex and Claude Code store model visibility
 separately for each provider through `ModelPickerPreferences` and `ModelVisibility`.
 Existing Codex overrides keep their storage key and format. Claude families are
-shown by default and visibility is saved by alias (`fable`, `opus`, `sonnet`, `haiku`).
+reported by the host in `model/list` when it has a router, with one row per active family. Visibility is saved by the bare family alias and families are shown by default. Older gateways and hosts without a router use the built-in family fallback. External Claude-harness rows retain Codex catalog visibility. While a specific Claude account is selected, the pickers further drop native families that account does not list, keeping the current selection.
 The composer, voice picker, new-chat defaults and suggested shortcut models all
 use the visible subset. Existing conversations and explicitly configured shortcuts
 still resolve hidden models. New Claude chats use their preferred visible family,

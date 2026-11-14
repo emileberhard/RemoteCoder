@@ -58,7 +58,8 @@ private enum RouterAccountFixture {
         ].compactMap { $0 }
         return ClaudeRouterAccount(id: id, label: id, plan: "max", shared: id == "eberhard-emil", credential: .ready,
             availability: fiveHour == 100 ? .exhausted : .available,
-            availableAt: fiveHour == 100 ? now + 10_800 : nil, windows: windows, observedAt: now)
+            availableAt: fiveHour == 100 ? now + 10_800 : nil, windows: windows, observedAt: now,
+            cyberVerified: id == "emileberhard388")
     }
 
     private static func account(id: String, label: String, fiveHour: Double, weekly: Double) -> ClaudeRouterAccount {
