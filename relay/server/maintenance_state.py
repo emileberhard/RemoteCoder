@@ -60,13 +60,31 @@ def read_marker():
     marker = json.loads(MARKER.read_text(), object_pairs_hook=unique_fields)
     if (
         not isinstance(marker, dict)
+        or set(marker)
+        != {"schema", "phase", "boot_id", "operation_id", "master", "worker"}
         or type(marker.get("schema")) is not int
         or marker["schema"] != 1
     ):
         raise ValueError("unsupported marker schema")
     if marker["phase"] not in ("preparing", "committed"):
         raise ValueError("unknown maintenance phase")
-    marker["boot_id"] = str(uuid.UUID(marker["boot_id"]))
+    for name in ("boot_id", "operation_id"):
+        if not isinstance(marker[name], str):
+            raise TypeError("invalid maintenance identity")
+        marker[name] = str(uuid.UUID(marker[name]))
+    for name in ("master", "worker"):
+        identity = marker[name]
+        if (
+            not isinstance(identity, dict)
+            or set(identity) != {"pid", "start_ticks"}
+            or type(identity["pid"]) is not int
+            or identity["pid"] <= 0
+            or type(identity["start_ticks"]) is not int
+            or identity["start_ticks"] < 0
+        ):
+            raise ValueError("invalid maintenance process identity")
+    if marker["master"]["pid"] == marker["worker"]["pid"]:
+        raise ValueError("maintenance process identities are not distinct")
     return marker
 
 

@@ -420,7 +420,16 @@ esac
 
         def write_marker(phase, boot=boot_id):
             marker.write_text(
-                json.dumps({"schema": 1, "phase": phase, "boot_id": boot})
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "phase": phase,
+                        "boot_id": boot,
+                        "operation_id": "00000000-0000-4000-8000-000000000001",
+                        "master": {"pid": 101, "start_ticks": 10},
+                        "worker": {"pid": 102, "start_ticks": 11},
+                    }
+                )
             )
             marker.chmod(0o600)
 
@@ -474,6 +483,25 @@ esac
         marker.chmod(0o600)
         self.assertNotEqual(recover().returncode, 0)
         self.assertFalse((self.shared / "nft-input").exists())
+        marker.write_text(
+            json.dumps({"schema": 1, "phase": "preparing", "boot_id": boot_id})
+        )
+        self.assertNotEqual(recover().returncode, 0)
+        self.assertTrue(marker.exists())
+        self.assertFalse((self.shared / "nft-input").exists())
+        for field, value in (
+            ("operation_id", None),
+            ("master", {"pid": True, "start_ticks": 10}),
+            ("worker", {"pid": 101, "start_ticks": 11}),
+        ):
+            with self.subTest(invalid_field=field):
+                write_marker("preparing")
+                document = json.loads(marker.read_text())
+                document[field] = value
+                marker.write_text(json.dumps(document))
+                self.assertNotEqual(recover().returncode, 0)
+                self.assertTrue(marker.exists())
+                self.assertFalse((self.shared / "nft-input").exists())
         marker.write_text(
             '{"schema":1,"phase":"committed","phase":"preparing",'
             f'"boot_id":"{boot_id}"' + "}"
