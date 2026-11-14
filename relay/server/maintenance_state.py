@@ -4,9 +4,12 @@ import os
 import stat
 import subprocess
 import tempfile
+import time
 import uuid
 from contextlib import ExitStack, contextmanager
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 DIRECTORY = Path("/var/lib/remote-coder-relay")
 MARKER = DIRECTORY / "maintenance.json"
@@ -101,6 +104,11 @@ def worker_identity(pid):
         raise ValueError("invalid process stat")
     start_ticks = int(fields.split()[19])
     return {"pid": pid, "start_ticks": start_ticks}
+
+
+def _reboot_window():
+    current = datetime.now(ZoneInfo("Europe/Stockholm"))
+    return current.hour == 6 and current.minute == 33
 
 
 def _write_marker(marker):
@@ -269,6 +277,40 @@ class RelayTransaction:
                 raise RuntimeError("relay worker identity changed")
         marker["phase"] = "committed"
         _write_marker(marker)
+
+    def enqueue_reboot(self):
+        from maintenance_drain import snapshot
+
+        marker = self._preparing_marker()
+        if not self._drained:
+            raise RuntimeError("relay admission has not drained")
+        identity = {name: marker[name] for name in ("master", "worker")}
+        try:
+            if not _reboot_window():
+                raise RuntimeError("relay reboot window is not open")
+            if snapshot(identity, time.monotonic() + 10):
+                raise RuntimeError("relay has new or remaining connections")
+            if not _reboot_window():
+                raise RuntimeError("relay reboot window elapsed")
+        except BaseException:
+            self.abort()
+            raise
+        self.commit()
+        if not _reboot_window():
+            raise RuntimeError(
+                "relay reboot window elapsed after commit; keep the fence"
+            )
+        try:
+            result = subprocess.run(
+                ["/usr/bin/systemctl", "reboot"],
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError("reboot request is uncertain; keep the fence") from error
+        if result.returncode:
+            raise RuntimeError("reboot request failed or is uncertain; keep the fence")
 
     def _preparing_marker(self):
         if self._locks is None or self._operation_id is None:
