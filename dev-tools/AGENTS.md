@@ -640,3 +640,11 @@ one it fails before touching audio routes, fixtures or the gateway and prints th
 - Every phase is JSONL under `~/Library/Logs/remote-coder/voice-probes/`. SDP is
   recorded only as byte count and a short SHA-256 prefix. The media fixture is
   generated only when absent from `~/Library/Caches/RemoteCoder/realtime-voice-probe/`.
+
+## Native dictation credential probe
+
+`bun dev-tools/probes/dictation-access-isolated.mjs <candidate-binary>` starts
+one isolated gateway with synthetic router and dictation keys. It verifies
+unauthorized rejection, no-store responses, file rotation, private permissions
+and refusal to publish the gateway inference key. It sends no provider traffic
+and cleans up its gateway, native runtime and temporary state.

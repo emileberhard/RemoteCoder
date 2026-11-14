@@ -94,6 +94,36 @@ struct TranscriptionIntegrationTests {
 
 
 
+    private func realtimeFactoryFinalizesSavedAudioWithPersonalVocabulary(model: TranscriptionModel) async throws {
+        let access = try gatewayAccess()
+        let service = RemoteCoderTranscriptionService(access: access)
+        let configuration = TranscriptionConfiguration(model: model, language: .englishAndSwedish,
+            customVocabulary: ["OpenAI", "AssemblyAI", "ElevenLabs", String(repeating: "x", count: 51)] + (0..<101).map { "Term\($0)" })
+        let recordings = try TemporaryDictationRecordings()
+        defer { recordings.cleanUp() }
+        let original = try fixturePCM()
+        let realtime = try #require(try await service.makeRealtimeTranscription(configuration: configuration))
+        let pcm = try await providerPCM(original, sampleRate: realtime.session.sampleRate)
+        let dictation = RealtimeDictation(session: realtime.session)
+        do {
+            let writer = try await recordings.store.startRecording(owner: ExecutionTarget(hostID: access.host.id), sampleRate: realtime.session.sampleRate)
+            let chunkSize = realtime.session.sampleRate / 10 * 2
+            for offset in stride(from: 0, to: pcm.count, by: chunkSize) {
+                let chunk = pcm.subdata(in: offset..<min(offset + chunkSize, pcm.count))
+                writer.append(chunk)
+                dictation.append(chunk)
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            let recording = try await writer.finish()
+            let text = try await dictation.finish()
+            assertAnchors(text)
+            #expect(try await recordings.listedIDs() == [recording.id])
+        } catch {
+            await dictation.cancel()
+            throw error
+        }
+    }
+
     @Test @MainActor func azureStopToComposerLatencyWithAndWithoutArchiving() async throws {
         let access = try gatewayAccess()
         let pcm = try fixturePCM()

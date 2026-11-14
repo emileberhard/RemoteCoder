@@ -287,6 +287,7 @@ final class VoiceInputController {
                 Self.logTranscribed(stopped, route: "realtime", model: transcript.model, characters: transcript.text.count)
                 return Dictation(transcript: transcript, recordingID: stopped.recordingID, recording: stopped.audio.recording)
             } catch let error as RealtimeDictationError {
+                try await access.refreshIfUnauthorized(error)
                 let explained = access.explain(error, provider: live.provider)
                 VoiceModeDiagnostics.log("realtime transcription failed; transcribing the saved recording id=\(stopped.recordingID) error=\(explained.localizedDescription)")
                 await recordAttempt(recordingID: stopped.recordingID, audio: stopped.audio, live: stopped.live, outcome: "fallback")

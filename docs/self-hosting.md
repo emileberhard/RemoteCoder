@@ -54,8 +54,16 @@ shows the shape. Keep tokens and API keys out of distributable builds.
 - Maps/navigation stays unavailable without your own restricted Google key,
   enabled Maps/Navigation APIs and user permission. Configure the key through
   ignored runtime configuration. The restriction must match your bundle ID.
-- Speech controls depend on the gateway's reported `speechAvailable` capability.
-  A configured speech relay owns provider credentials; the app carries none.
+- Native dictation needs `RC_CODEX_GATEWAY_DICTATION_ORIGIN` and
+  `RC_CODEX_GATEWAY_DICTATION_KEY_FILE` on your gateway. The file must be an
+  owner-only 0600 regular file containing a separate dictation-only router key,
+  with per-key limits configured on your router. The authorized, uncached
+  `GET /dictation` delivers `{origin, key}`. The app stores it per host in its
+  device-only Keychain and refetches once on router 401; after initial delivery,
+  dictation reaches the public router directly without the gateway or Tailscale.
+  Provider credentials and the gateway's inference key stay on the hosts.
+  Azure uploads FLAC at stop; ElevenLabs and AssemblyAI keep their realtime
+  modes. The gateway speech relay remains for web and older native clients.
 - Automation controls select only a host reporting authoritative automation
   capability. Missing or unread capabilities remain unavailable.
 - Push/VoIP/location and Live Activities need a broker authorized for your bundle

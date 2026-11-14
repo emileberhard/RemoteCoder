@@ -27,7 +27,9 @@ impl DictationAccess {
     ) -> Result<Option<Self>> {
         let origin = sources.optional_string("RC_CODEX_GATEWAY_DICTATION_ORIGIN");
         let key_file = sources.optional_string("RC_CODEX_GATEWAY_DICTATION_KEY_FILE");
-        if origin.is_none() && key_file.is_none() {
+        if sources.raw("RC_CODEX_GATEWAY_DICTATION_ORIGIN").is_none()
+            && sources.raw("RC_CODEX_GATEWAY_DICTATION_KEY_FILE").is_none()
+        {
             return Ok(None);
         }
         let origin = reqwest::Url::parse(&origin.context("Set RC_CODEX_GATEWAY_DICTATION_ORIGIN")?)
@@ -100,6 +102,7 @@ mod tests {
     fn dictation_configuration_requires_an_origin_and_a_separate_absolute_key_file() {
         for (origin, key, valid) in [
             (None, None, true),
+            (Some(""), Some(""), false),
             (
                 Some("https://dictation.example"),
                 Some("/private/dictation.key"),

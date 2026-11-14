@@ -468,9 +468,11 @@ These hold across the app and the gateway. Each is detailed in the area files.
   enrollment transfers its exact interrupted work into the default recovery
   journal before committing adoption. Nothing waits for a turn to finish, and
   nothing substitutes a new thread or guesses an identity.
-- **Secrets stay on the hosts.** Never log or commit the gateway bearer or any
-  token. When the optional router is enabled, it owns speech and title provider
-  keys; each configured gateway holds one router key. `scripts/release-config.py` limits release bundles
+- **Provider credentials stay on the hosts.** Never log or commit the gateway bearer or any
+  token. The router owns provider credentials. Native dictation may hold one
+  dictation-only router key per host, delivered by its own authorized gateway
+  and stored in the device-only Keychain; it never receives the gateway's
+  inference key. Each configured gateway retains its own router key. `scripts/release-config.py` limits release bundles
   to public fields and development installs to public fields plus the gateway
   token.
 - **Relay maintenance has one owner.** While its durable marker exists, only

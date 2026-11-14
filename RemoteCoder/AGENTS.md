@@ -1867,32 +1867,31 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   History replay runs at utility priority, pauses for energy conservation and
   retries on foreground. The workspace owns effective Voices and replay admission.
 - Only Mine feeds the shared `VoiceCheck` with 16 kHz PCM16 from the capture
-  sink, including for 24 kHz providers. The check hands its admitted audio to
+  sink. The check hands its admitted audio to
   the label request.
-  Azure labels use the existing relay. Failure, an untrusted profile or no
-  rejected label preserves the selected provider's transcript. Filter before
-  cleanup, retain everyone's text, and carry actual model provenance through
+  Azure labels use the direct router with FLAC. Failure, an untrusted profile or
+  no rejected label preserves the selected provider's transcript. Retain everyone's
+  text and carry actual model provenance through
   `DictationTranscript`. Use existing library result kinds and parent IDs.
   My Voice shows Unavailable only after a missing/refused Azure route; a slow
   check or learning error keeps profile status and reports its own failure.
   The composer document owns persisted restore ranges; edits outside move them,
   edits replacing their text remove them, and sending clears them. Pressing
   Send accepts the text, including failed sends; native undo/redo do not carry
-  restoration data. Restore Everyone returns raw provider text, even when
-  cleanup ran on the filtered text. Saved recovery recordings keep everyone's text because
+  restoration data. Restore Everyone returns raw selected-provider text. Saved
+  recovery recordings keep everyone's text because
   they have no live watcher evidence. Voice Mode bypasses this path.
 
-- `GatewaySpeechAccess` is the app's only speech-credential path. Each chat
-  model binds it to its host, which hands SpeechKit a `.relay` at
-  `<gateway>/speech/<provider>` with the host's bearer. The app carries no
-  provider keys.
-  - `explain(_:provider:)` turns SpeechKit's `relayRejected(kind:)`, bare or
-    wrapped in `RealtimeDictationError.connectionFailed` or `.streamFailed`,
-    into an error naming the host, provider and cause. SpeechKit raises that
-    error only for the relay's rejection marker. Other failures pass through
-    unchanged.
-  - Settings cannot know which providers a gateway has configured, so a missing
-    key surfaces when speech starts, as an error naming the host and provider.
+- `GatewaySpeechAccess` is the app's only dictation-credential path. The
+  authorized, uncached `GET /dictation` supplies `{origin, key}` from the host's
+  separate dictation-only key file. `GatewayDictationCredentials` stores the pair
+  per host in the device-only Keychain, bound to that gateway connection, and
+  coalesces credential fetches. Cached access works without the gateway or
+  Tailscale. A router HTTP/WebSocket 401 refetches once; saved uploads retry once
+  with the replacement key. Other errors do not trigger credential refresh.
+  Every supported provider uses SpeechKit `.router`; no provider credential or
+  gateway inference key enters the app. The legacy `speechAvailable` capability
+  describes the gateway relay and does not gate native dictation.
 - **Shared library opt-in.** The workspace owns `SharedDictationLibrary`; the
   device-local choice is off by default. It freezes a shared chat plan and
   journals original microphone buffers before provider resampling. Connected model/language controls edit the shared profile; composer UI contains no library status. The workspace owns and drains utility-priority original sealing and result writes independently of each other and of stop-to-text delivery, which checks the account through the store's synchronous session snapshot and never waits on the store actor. Failed result writes stay queued for the next publication pass and keep their status visible. The shared
@@ -1916,7 +1915,7 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   - `RealtimeTranscription.make` owns the model-to-provider configuration and
     returns the provider-neutral `RealtimeTranscriptionSession` with its gateway
     provider. The session reports the sample rate the microphone must deliver
-    (24 kHz for OpenAI realtime, 16 kHz elsewhere), and the capture sink
+    (16 kHz for the supported realtime providers), and the capture sink
     resamples to it.
   - The writer opens, capture starts and the `RealtimeDictation` starts
     connecting, with nothing waiting on the network. Each chunk goes to the
@@ -1935,25 +1934,27 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
     start that captured nothing ends quietly and discards its empty recording.
     Any failed start keeps its recording only when it holds audio
     (`closeAfterFailedStart`).
-  - Azure Speech streams through `ProgressiveRealtimeTranscriptionSession` as a
-    progressive WAV upload that finishes on stop, with an 8 s finalization
-    allowance plus unprocessed audio. Speech sessions never wait for connectivity.
-    SpeechKit fails an upload after 8 s without progress; saved Azure audio has
-    a separate 30 s response deadline after upload. At stop and outcome changes,
-    VoiceInputController persists content-free attempt records through the existing
-    DiagnosticsOutbox, and flushes failure logs to disk. Transport metrics reach
-    that same outbox through SpeechRelayTransport.uploadLog. The stop record uses
-    the progressive session's actual body-byte count, retained after disconnect;
-    sessions without that count report unknown, never an assumed zero.
+  - Azure MAI-Transcribe-2 records locally and uploads FLAC at stop. The public
+    router origin buffers progressive uploads, so RemoteCoder does not create a
+    `ProgressiveRealtimeTranscriptionSession`. SpeechKit keeps that capability
+    for other clients. `DictationUploadAudio` owns the upload format for saved
+    Azure recordings and Only Mine's in-memory speaker request.
+    Speech sessions never wait for connectivity. SpeechKit fails an upload
+    after 8 s without progress; saved Azure audio has a separate 30 s response
+    deadline after upload. At stop and outcome changes, VoiceInputController
+    persists content-free attempt records through the existing DiagnosticsOutbox.
+    Transport metrics reach that same outbox through SpeechRelayTransport.uploadLog.
+    Sent bytes at stop stay unknown for upload at stop; outcome logging never
+    waits for the outbox flush.
 - **Saved recordings.** Every dictation is written as it is spoken to
   SpeechKit's `DictationRecordingStore` (`DictationRecordingStore.app` in
   `DictationRecordings.swift`: Application Support
   `RemoteCoder/dictation-recordings`, owner `ExecutionTarget`, at most 5 kept
   for 7 days). It is the provider recovery copy: the PCM16 chunks sent to the
-  realtime session are the chunks saved, and batch transcription uploads it as
-  WAV, or AAC above the smaller of SpeechKit's engine limit
-  (`TranscriptionEngine.maximumAudioByteCount`) and the speech relay's audio cap
-  (`GatewaySpeechAccess.maximumRelayedAudioByteCount`, under the gateway's
+  realtime session are the chunks saved. Azure uploads FLAC; other providers
+  upload WAV, or AAC above the smaller of SpeechKit's engine limit
+  (`TranscriptionEngine.maximumAudioByteCount`) and the router upload audio cap
+  (`GatewaySpeechAccess.maximumAudioByteCount`, under the router's
   64 MiB request body limit).
   - The writer owns write failures. `append` never throws; SpeechKit logs the
     first failure once and saves no later audio. `finish()` throws
@@ -1984,15 +1985,16 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
 - `RemoteCoderTranscriptionService` transcribes saved recordings with batch
   models. A streaming model selected there uses its provider's closest batch
   model. The app keeps no per-engine upload limits:
-  a saved recording is capped by SpeechKit's engine limit and the relay's audio
+  a saved recording is capped by SpeechKit's engine limit and the router upload audio
   cap.
 - `TranscriptionSettings.swift` is the catalog: `TranscriptionProvider`
-  (ElevenLabs, OpenAI, Google Gemini, AssemblyAI, Azure Speech) to
+  (ElevenLabs, AssemblyAI, Azure Speech) to
   `TranscriptionModel`, each with a `capture` mode.
   - Settings expose Provider, Model and Language. English & Swedish conditions
     automatic detection through SpeechKit, while single languages stay pinned.
-  - The legacy raw values `elevenLabsScribeV2Realtime`, `openAIGPT4oMini` and
-    `gemini35Flash` must keep decoding.
+  - Retained raw model values keep decoding. Removed OpenAI/Gemini selections
+    resolve to the available default; the dead Gemini transcript cleanup is not
+    advertised as a library capability. Existing archived results are retained.
 - `VoiceInputController` (`@Observable @MainActor`) runs permission prompts, the
   recording lifecycle, and conversion into composer text. It is the only writer
   of `isRecording` and `isTranscribing`; the view model calls its `mark…`

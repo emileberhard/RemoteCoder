@@ -1429,20 +1429,10 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     func micTapStart() {
-        guard target.directories.information?.speechAvailable != false else {
-            target.voiceError = "Speech is not configured on this gateway."
-            target.feedbackForCurrentConversation()(.error)
-            return
-        }
         dictation.beginCapture(into: currentDraft)
     }
 
     func micTapStartAsync() async {
-        guard target.directories.information?.speechAvailable != false else {
-            target.voiceError = "Speech is not configured on this gateway."
-            target.feedbackForCurrentConversation()(.error)
-            return
-        }
         let feedback = target.feedbackForCurrentConversation()
         do {
             try await target.voice.startAsync()

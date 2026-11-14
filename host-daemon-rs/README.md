@@ -732,3 +732,19 @@ settings, with a separate HOME and CODEX_HOME for a delegated identity. It rejec
 gateway bind, port, LAN/TLS, bearer, cluster-route and agent-socket configuration.
 Only the private managed app-server Unix socket remains available. Stop it through
 SIGTERM to capture work through the existing held-turn handoff.
+
+### Native dictation access
+
+Set `RC_CODEX_GATEWAY_DICTATION_ORIGIN` to your public router origin and
+`RC_CODEX_GATEWAY_DICTATION_KEY_FILE` to an absolute path containing a separate
+dictation-only router key. Keep the file owned by the gateway user with mode
+0600. The authorized `GET /dictation` reads it on every request and returns
+`{origin, key}` with `Cache-Control: no-store`. The gateway refuses to publish
+its own inference key. Missing configuration is 404; an unreadable, invalid or
+unsafe key file is 503. Configure the router's per-key limits before distributing
+the key. Rotate by replacing the file and revoking the previous key on the router;
+apps refetch once after a router 401.
+
+Native apps store the credential per host in their device-only Keychain and
+send transcription directly to the public router. Provider keys stay on the
+router. The existing speech relay remains enabled for web and older apps.

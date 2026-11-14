@@ -317,13 +317,22 @@ code or a revocation of credentials that code may already have acquired. Private
 Debug builds may retain an explicitly provisioned operator token for personal
 development. Such builds must not be distributed as public builds.
 
-Speech-provider keys never enter the app, in Debug or release. The gateway relays
-SpeechKit's provider traffic under `/speech/<provider>/…` and injects the key it
-holds; the caller's operator or installation bearer is the identity boundary, so
-revoking an installation also ends its speech relays. The gateway forwards to
-llm-router's vendor passthrough with its host router key, and llm-router owns the
-provider keys; `host-daemon-rs/README.md` (*Speech providers*) owns the vendor
-mapping.
+Provider credentials never enter the app, in Debug or release. Native dictation
+may hold one host-scoped dictation-only router key, delivered through authorized,
+uncached `GET /dictation` and stored with its origin in the device-only Keychain.
+`RC_CODEX_GATEWAY_DICTATION_ORIGIN` and `RC_CODEX_GATEWAY_DICTATION_KEY_FILE`
+are optional together. The key file is read on each request, must be an
+owner-owned 0600 regular file, and must not contain the gateway's inference key.
+The route returns 404 when unconfigured and 503 when the credential is unreadable
+or invalid. Router 401 refreshes once; cached direct traffic needs no gateway.
+The router policy owns per-key abuse limits and revocation. Revoking a gateway
+installation does not invalidate a router credential already delivered to it;
+revoke the host's dictation key to invalidate every copy.
+
+The legacy gateway relay still serves web and older native builds. It forwards
+`/speech/<provider>/…` with its host router key, and llm-router owns the provider
+keys; the caller's gateway bearer and existing speech policy remain its admission
+boundary. `host-daemon-rs/README.md` (*Speech providers*) owns that vendor mapping.
 
 `RC_CODEX_GATEWAY_SPEECH_CLIENTS` in the gateway env restricts speech to listed
 installation IDs. It is a usage and spend control, not a key-protection boundary:

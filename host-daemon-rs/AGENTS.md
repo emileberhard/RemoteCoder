@@ -854,6 +854,20 @@ blocks startup or provider journal retirement.
   with no usage yet sends nothing, and a failed replay is logged, never
   reported as zero.
 
+## Native dictation credentials
+
+`GET /dictation` requires an authorized gateway caller and returns `{origin, key}`
+with `Cache-Control: no-store` on success and failure. Configure both
+`RC_CODEX_GATEWAY_DICTATION_ORIGIN` and `RC_CODEX_GATEWAY_DICTATION_KEY_FILE`.
+The latter is a separate dictation-only router key file, read per request using
+the existing owner/0600/regular-file validation. Never serve the gateway's
+inference key: equal configured paths fail config load and equal key contents
+fail delivery. Unconfigured is 404; unreadable or invalid credentials are 503.
+No production dictation key is created by the gateway or its installer.
+The app caches this credential per host in its device-only Keychain and sends
+native dictation directly to the public router. The speech relay remains for
+web and already installed native builds.
+
 ## Speech relay (`src/voice/speech/`)
 
 - `/speech/<provider>/<upstream path>` relays SpeechKit's HTTP and WebSocket

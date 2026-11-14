@@ -7,12 +7,13 @@ The local **Use WisprClone Library** choice is off by default and is not synced.
 WisprClone is the main editor of the personal profile and dictionary. RemoteCoder's model and language controls edit that same account-bound profile when connected; local preferences apply when disconnected. The displayed model is the same resolved model the capture uses.
 
 A capture freezes the effective model, ordered languages, dictionary and cleanup
-plan with explicit `chat` context. Existing RemoteCoder model preference raw
-values remain unchanged. Shared model keys identify provider, native model and
+plan with explicit `chat` context. Retained RemoteCoder model preference raw
+values remain unchanged; removed OpenAI/Gemini selections use the available default. Shared model keys identify provider, native model and
 transport; an unsupported preference uses the local model and shows that
-resolution without changing the shared preference. The library owns cleanup,
-including distinguishing a cleaned transcript from a model answer. Shared settings
-and cleanup remain effective when the shared profile turns original archiving off.
+resolution without changing the shared preference. RemoteCoder no longer advertises cleanup because its Gemini vendor path has no
+upstream. Existing cleanup results remain readable; new captures archive the
+selected provider output and any speaker-filtered result. Shared language and
+dictionary settings remain effective when original archiving is off.
 
 `AudioRecorder` retains microphone/session/route ownership. Its capture sink
 configures the archival journal before the engine starts and appends microphone
@@ -36,15 +37,13 @@ capture without assigning an iCloud owner. Known other-account captures remain
 fenced. Settings provides an explicit current-account assignment only for
 unowned captures, with a confirmation explaining its consequence.
 
-Provider output, any speaker-filtered Azure output, and subsequent cleanup are
-separately identified immutable versions. The raw selected-provider result is
-the parent of the filtered result, and cleanup uses the delivered text as its
-parent. Each version names the model that produced its text, using the existing
+Provider output and any speaker-filtered Azure output are separately identified
+immutable versions. The raw selected-provider result is the parent of the
+filtered result. Historical cleanup versions retain their original provenance. Each version names the model that produced its text, using the existing
 result kinds. Only Mine defaults to on for MAI-Transcribe-2; other models require
 an explicit choice before a second Azure request. The workspace owns one local
 voice template independently of this library, with live learning and one replay
-of recent local originals when the library is enabled. Filtering happens before
-cleanup. Composer drafts retain everyone’s text for Restore Everyone until the
+of recent local originals when the library is enabled. Composer drafts retain everyone’s text for Restore Everyone until the
 filtered text is sent or replaced. Saved recovery recordings deliver everyone's
 text because no live watcher ran for them; retrying does not send an extra Azure
 request.
@@ -64,8 +63,8 @@ environment key so distribution signing selects Production.
 
 - Pin the released SpeechKit revision, removing any temporary local package path.
 - Run actual iOS/macOS app compilation and focused recording/capture tests.
-- Run the live production transcription factory with nonempty personal hints,
-  plus the common cleanup runner. A skipped live test does not satisfy this gate.
+- Run the direct transcription factory with nonempty synthetic hints.
+  A skipped live test does not satisfy this gate.
 - Verify App ID/container association, exact profiles and final signed entitlements.
 - With WisprClone closed on the capture device, record in RemoteCoder, publish,
   then find/play the original in WisprClone. Verify the primary service host export checksum and
@@ -197,3 +196,21 @@ and no command mode performs producer recovery or publication.
 
 Apple references: [background execution lifetime](https://developer.apple.com/documentation/uikit/extending-your-app-s-background-execution-time)
 and [CloudKit request configuration](https://developer.apple.com/documentation/cloudkit/ckdatabase/configuredwith(configuration:group:body:)-637p1).
+
+## Direct native dictation
+
+`GatewaySpeechAccess` uses a host-scoped dictation-only router key from
+`GET /dictation`, stored with its origin in the device-only Keychain. It refetches
+once on router 401 and retries saved uploads once with the replacement. Cached
+access needs neither the gateway nor Tailscale. Provider credentials remain on
+llm-router. Installation revocation does not revoke an already delivered router
+key; revoke that host's dictation key on the router to invalidate its copies.
+
+Azure MAI-Transcribe-2 uploads at stop through the public router origin;
+`DictationUploadAudio` selects lossless FLAC for both saved recordings and Only
+Mine labels. SpeechKit owns the encoder and preserves the local PCM recovery
+copy. ElevenLabs and AssemblyAI realtime modes use the router directly.
+The gateway relay remains for web and installed older builds. Weak-cellular
+upload time grows with recording size; FLAC's measured five-minute upload at
+1 Mbit/s took 44.35 seconds before device encoding. See the
+[probe evidence](https://github.com/emileberhard/tracker/issues/1053).

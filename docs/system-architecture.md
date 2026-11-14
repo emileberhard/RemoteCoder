@@ -573,13 +573,11 @@ purpose and red when it is otherwise unreachable, and Settings → Hosts names t
 route: "local network", "relay", or for the configured route "Tailscale" when
 its address is a tailnet name or address, otherwise the address itself.
 
-Speech, account requests and diagnostics uploads follow the routes too: speech
-asks `GatewayRoutes.preferredRoute()` on each access (see *Speech relay*),
-`AccountAPIClient` and the `DiagnosticsDestination` send through
-`GatewayRoutes.send`, resolving the routes from the host's live chat model; an
-account read that ran before a replaced host's model existed is repeated once
-the model is installed. A LAN route's sessions never wait for connectivity, so
-speech on a LAN that has just gone fails instead of stalling.
+Account requests and diagnostics uploads follow `GatewayRoutes.send`, as does
+initial dictation credential delivery. Native speech traffic uses the cached
+public router origin directly and does not follow gateway route changes.
+An account read that ran before a replaced host's model existed is repeated
+once the model is installed.
 Live navigation uploads from the extension and credential enrollment still use
 only the configured address.
 
@@ -2686,19 +2684,24 @@ its recent local originals can teach the profile once; replay downloads no audio
 verifies the library's account when a cold launch has not yet done so,
 and validates the account lease before applying candidates.
 
-Composer dictation (realtime and batch) and dictation cleanup use SpeechKit's own
-provider protocols, but every request goes to the chat model's gateway rather
-than to the provider. `GatewaySpeechAccess` binds a chat model to its host and
-hands SpeechKit `SpeechProviderAccess.relay` at `<gateway>/speech/<provider>`
-with that host's bearer. Each access asks the host's `GatewayRoutes` for its
-preferred route and rewrites the origin to it; off the configured route it also
-hands SpeechKit a `SpeechRelayTransport`, cached per route, that applies the
-route's session configuration (the relay's proxy, LAN's no-cellular rule) and
-checks the gateway's LAN pin. SpeechKit keeps the upstream path and query and
-swaps only the origin, so the gateway sees exactly the provider request minus
-the credential. Realtime Voice Mode is separate: its audio
-flows over WebRTC through app-server and never touches this relay.
+Native composer dictation uses SpeechKit's provider protocols directly through
+llm-router. `GatewaySpeechAccess` supplies `.router(LLMRouter(origin:key:))`
+for Azure, ElevenLabs and AssemblyAI. `GatewayDictationCredentials` owns a
+per-host device-only Keychain item, bound to the gateway connection. The initial
+read and a router 401 fetch `{origin, key}` through authorized, uncached
+`GET /dictation`; a saved upload retries once after refresh. Cached dictation
+works while the gateway or Tailscale is unavailable. The delivered key has only
+the router `dictation` operation, never inference, synthesis, Copilot or account
+access. It is separate from the gateway's router key.
 
+MAI-Transcribe-2 uploads FLAC at stop, including Only Mine's labelled request;
+`DictationUploadAudio` owns the format choice and SpeechKit owns the lossless
+encoder. ElevenLabs and AssemblyAI retain their realtime WebSockets. Dead
+OpenAI/Gemini dictation models and Gemini cleanup have been removed. Historical
+library results retain their provenance. Realtime Voice Mode remains separate.
+
+The legacy gateway speech relay is retained for the web client and already
+installed native builds. Its contracts below still apply to those callers.
 The gateway handler (`host-daemon-rs/src/voice/speech/relay.rs`) admits a request in a
 fixed order: bearer authentication, provider, installation policy, operation
 allowlist, drain state, capacity, then the provider credential. Each step has one
@@ -2734,8 +2737,9 @@ Forwarding is allowlisted in both directions: a fixed set of request and respons
 headers, no redirects, and the client's `Authorization` plus any `key` or
 `access_token` query pair dropped before the host's llm-router key is injected as a
 sensitive header. Paths are matched on raw segments, so encoded separators and
-dot segments never reach a provider. Responses stream as they arrive, which keeps
-Gemini TTS's early playback. An installation grant is rechecked every five seconds
+dot segments never reach a provider. Responses stream as they arrive. The web
+client's Gemini spoken replies still target the removed Google vendor and have
+no upstream; that web change is outside this native dictation migration. An installation grant is rechecked every five seconds
 for the life of a relay; revocation closes it as `unauthorized`. Shutdown cancels
 every relay as `draining` and waits at most three seconds, alongside the gateway
 drain. Each relay writes one `speech` journal line (see
@@ -2748,11 +2752,9 @@ mapping are in `host-daemon-rs/AGENTS.md`, *Speech relay*, and
 SpeechKit maps the marker, in relay mode only and for every provider, to
 `SpeechKitError.relayRejected(kind:)`. A realtime dictation reports it wrapped
 in `RealtimeDictationError.connectionFailed` or `.streamFailed`.
-`GatewaySpeechAccess.explain` names the host, provider and cause for that error,
-bare or wrapped, and passes every other failure through.
-A gateway without the relay answers an unmarked 404, which surfaces as SpeechKit's
-ordinary HTTP or handshake error. Because the app has no keys, it cannot tell in
-advance which providers a gateway has configured; the first use reports it.
+Installed older clients may still report those relay rejections. A gateway
+without the relay answers an unmarked 404. Current native dictation uses the
+separate direct credential path above.
 
 ## Sources of truth
 
