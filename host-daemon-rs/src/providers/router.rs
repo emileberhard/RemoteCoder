@@ -109,7 +109,7 @@ fn listener(sources: &ConfigSources, name: &str) -> Result<reqwest::Url> {
     Ok(url)
 }
 
-fn validate_origin(url: &reqwest::Url, name: &str) -> Result<()> {
+pub(crate) fn validate_origin(url: &reqwest::Url, name: &str) -> Result<()> {
     ensure!(
         matches!(url.scheme(), "http" | "https")
             && url.host_str().is_some()

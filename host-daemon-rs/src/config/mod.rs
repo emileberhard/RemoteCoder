@@ -184,6 +184,7 @@ pub(crate) struct Settings {
     pub push: crate::push::PushConfiguration,
     pub claude: ClaudeSettings,
     pub router: Option<crate::providers::router::RouterConfig>,
+    pub dictation_access: Option<crate::http::dictation::DictationAccess>,
     pub conversation_search_provider: Option<std::sync::Arc<crate::sessions::meaning::Provider>>,
     pub external_providers: Vec<crate::providers::external::ExternalProvider>,
     pub speech_clients: crate::voice::speech::SpeechClients,
@@ -290,6 +291,10 @@ impl Settings {
             push,
             claude,
             speech_clients,
+            dictation_access: crate::http::dictation::DictationAccess::load(
+                sources,
+                router.as_ref(),
+            )?,
             router,
             external_providers,
             conversation_search_provider: crate::sessions::meaning::Provider::load(sources)?,

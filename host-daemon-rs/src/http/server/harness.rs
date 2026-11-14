@@ -113,6 +113,7 @@ impl LanHarness {
                 port: address.port(),
                 spki_sha256: identity.spki_sha256.clone(),
             }),
+            dictation_access: None,
             relay_route: crate::http::relay::RelayRoute::Absent,
         };
         let shutdown = CancellationToken::new();

@@ -581,6 +581,7 @@ async fn serve_http(
         requests: RequestAdmission::default(),
         journal,
         lan_endpoint: lan.as_ref().map(|lan| lan.endpoint().clone()),
+        dictation_access: settings.dictation_access.clone(),
         relay_route,
     };
     let server_res = run_http_server(settings.bind_host.clone(), settings.port, state, lan).await;

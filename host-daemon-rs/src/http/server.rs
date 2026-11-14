@@ -72,6 +72,7 @@ pub(crate) struct HttpState {
     pub requests: RequestAdmission,
     pub journal: Journal,
     pub lan_endpoint: Option<LanEndpoint>,
+    pub dictation_access: Option<crate::http::dictation::DictationAccess>,
     pub relay_route: crate::http::relay::RelayRoute,
     pub full_disk_access: crate::platform::macos::full_disk_access::FullDiskAccessReport,
 }
@@ -255,6 +256,7 @@ fn router(state: HttpState) -> Router {
         .route("/health", get(health))
         .route("/version", get(version))
         .route("/relay", get(crate::http::relay::published))
+        .route("/dictation", get(crate::http::dictation::published))
         .route("/diagnostics", get(diagnostics))
         .route("/ws", get(ws))
         .route("/claude/accounts", get(claude_accounts::directory))
@@ -426,6 +428,71 @@ mod tests {
             assert_eq!(response.json::<Value>().await.unwrap(), body);
             server.abort();
         }
+        lan.stop().await;
+    }
+
+    #[tokio::test]
+    async fn dictation_requires_auth_never_caches_and_never_publishes_the_gateway_key() {
+        use std::os::unix::fs::PermissionsExt;
+        let lan = LanHarness::start().await;
+        let key_file = lan.directory.path().join("dictation.key");
+        let gateway_key_file = lan.directory.path().join("gateway-router.key");
+        std::fs::write(&gateway_key_file, "gateway-inference-secret").unwrap();
+        std::fs::set_permissions(&gateway_key_file, std::fs::Permissions::from_mode(0o600))
+            .unwrap();
+        let sources =
+            crate::config::ConfigSources::from_file_vars(std::collections::HashMap::from([
+                (
+                    "RC_CODEX_GATEWAY_DICTATION_ORIGIN".into(),
+                    "https://dictation.example".into(),
+                ),
+                (
+                    "RC_CODEX_GATEWAY_DICTATION_KEY_FILE".into(),
+                    key_file.display().to_string(),
+                ),
+            ]));
+        let router_config = crate::providers::router::RouterConfig::local_for_test(
+            ([127, 0, 0, 1], 1).into(),
+            gateway_key_file,
+        );
+        let mut state = lan.state.clone();
+        state.dictation_access =
+            crate::http::dictation::DictationAccess::load(&sources, Some(&router_config)).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/dictation", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(state)).await.unwrap();
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        for (key, mode, status) in [
+            (None, 0o600, 503),
+            (Some("dictation-secret"), 0o600, 200),
+            (Some("rotated-dictation-secret"), 0o600, 200),
+            (Some("gateway-inference-secret"), 0o600, 503),
+            (Some("dictation-secret"), 0o644, 503),
+        ] {
+            if let key = key {
+                std::fs::write(&key_file, key).unwrap();
+                std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(mode)).unwrap();
+            }
+            let refused = client.get(&url).bearer_auth("wrong").send().await.unwrap();
+            assert_eq!(refused.status().as_u16(), 401);
+            assert_eq!(refused.headers()[header::CACHE_CONTROL], "no-store");
+            let response = client.get(&url).bearer_auth(OPERATOR).send().await.unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let body = response.json::<Value>().await.unwrap();
+            if status == 200 {
+                assert_eq!(
+                    body,
+                    json!({"origin": "https://dictation.example", "key": key.unwrap()})
+                );
+            } else {
+                assert!(body.get("key").is_none());
+                assert!(!body.to_string().contains("gateway-inference-secret"));
+            }
+        }
+        server.abort();
         lan.stop().await;
     }
 
