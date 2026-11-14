@@ -11,6 +11,39 @@ drain = importlib.import_module("maintenance_drain")
 
 
 class RelayDrainTests(unittest.TestCase):
+    def test_candidate_waits_with_admission_open_until_idle(self):
+        clock = [0.0]
+        checks = []
+
+        def snapshot(identity, deadline):
+            checks.append((identity, deadline, clock[0]))
+            return len(checks) < 3
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with (
+            patch.object(drain.time, "monotonic", side_effect=lambda: clock[0]),
+            patch.object(drain.time, "sleep", side_effect=sleep),
+            patch.object(drain, "candidate_snapshot", side_effect=snapshot),
+        ):
+            drain.wait_for_candidate({"worker": 7}, 5)
+        self.assertEqual(checks, [({"worker": 7}, 5, n) for n in (0, 1, 2)])
+
+    def test_candidate_deadline_does_not_accept_a_late_idle_result(self):
+        clock = [0.0]
+
+        def late_snapshot(_identity, _deadline):
+            clock[0] = 4
+            return False
+
+        with (
+            patch.object(drain.time, "monotonic", side_effect=lambda: clock[0]),
+            patch.object(drain, "candidate_snapshot", side_effect=late_snapshot),
+            self.assertRaises(TimeoutError),
+        ):
+            drain.wait_for_candidate({}, 3)
+
     def test_two_clean_passes_follow_grace_and_a_busy_pass_resets_progress(self):
         clock = [0.0]
         passes = []
