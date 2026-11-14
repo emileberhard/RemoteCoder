@@ -148,6 +148,19 @@ def fence_is_configured(deadline=None):
         raise RuntimeError("relay maintenance rule changed")
 
 
+def fence_is_absent(deadline):
+    ruleset = json.loads(command([NFT, "-j", "list", "ruleset"], deadline))
+    if not isinstance(ruleset, dict) or not isinstance(ruleset.get("nftables"), list):
+        raise TypeError("invalid nftables ruleset")
+    for item in ruleset["nftables"]:
+        table = item.get("table", {})
+        if (table.get("family"), table.get("name")) == (
+            "inet",
+            "remote_coder_relay_maintenance",
+        ):
+            raise RuntimeError("relay admission is already fenced")
+
+
 def active_conntrack(ports, deadline=None):
     for family in ("ipv4", "ipv6"):
         for port in sorted(ports):
@@ -273,6 +286,37 @@ def snapshot(expected_identity, deadline):
     if haproxy_identity(deadline) != expected_identity:
         raise RuntimeError("HAProxy generation changed")
     return busy
+
+
+def candidate_snapshot(expected_identity, deadline):
+    ports = tracked_ports()
+    tracking_is_configured(deadline)
+    fence_is_absent(deadline)
+    if haproxy_identity(deadline) != expected_identity:
+        raise RuntimeError("HAProxy generation changed")
+    busy = (
+        active_conntrack(ports, deadline)
+        or listener_queues(ports)
+        or haproxy_busy(deadline)
+    )
+    if haproxy_identity(deadline) != expected_identity:
+        raise RuntimeError("HAProxy generation changed")
+    return busy
+
+
+def wait_for_candidate(expected_identity, timeout_seconds):
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("relay candidate timeout must be positive")
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        remaining_time(deadline)
+        busy = candidate_snapshot(expected_identity, deadline)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("relay idle candidate timed out")
+        if not busy:
+            return
+        time.sleep(min(1, remaining))
 
 
 def wait_for_drain(expected_identity, timeout_seconds):

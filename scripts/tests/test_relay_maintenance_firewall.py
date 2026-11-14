@@ -61,6 +61,7 @@ def run_lab(parent_namespace_fd):
     subprocess.run([NFT, "-c", "-f", str(SERVER / "nftables.conf")], check=True)
     subprocess.run([NFT, "-f", str(SERVER / "nftables.conf")], check=True)
     maintenance_drain.tracking_is_configured()
+    maintenance_drain.fence_is_absent(time.monotonic() + 5)
     subprocess.run([NFT, "add", "table", "inet", "test_notrack"], check=True)
     subprocess.run(
         [
@@ -167,6 +168,12 @@ def run_lab(parent_namespace_fd):
             [NFT, "-f", str(SERVER / "maintenance-firewall.nft")], check=True
         )
         maintenance_drain.fence_is_configured()
+        try:
+            maintenance_drain.fence_is_absent(time.monotonic() + 5)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("a fenced candidate was accepted")
         subprocess.run(
             [
                 NFT,
