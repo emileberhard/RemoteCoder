@@ -26,7 +26,9 @@ pub(super) fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
 /// Extractors that decide who is calling from the request head. Handlers list
 /// one before any body extractor, so an unauthenticated caller is refused
 /// before its body is read.
-pub(in crate::http) struct Authorized(pub(in crate::http) crate::auth::installation_credentials::Grant);
+pub(in crate::http) struct Authorized(
+    pub(in crate::http) crate::auth::installation_credentials::Grant,
+);
 
 #[axum::async_trait]
 impl FromRequestParts<HttpState> for Authorized {
