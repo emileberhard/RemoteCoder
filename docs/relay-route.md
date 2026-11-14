@@ -58,10 +58,13 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   while atomically syncing a preparing or committed marker. It waits for an idle
   candidate with admission open, fences ingress, and requires two clean drain
   checks before commit; failures reopen admission or retain the marker if that
-  fails. New-boot checks cover the boot identity, local service states, firewall,
+  fails. Its staged reboot operation rechecks drain during the 06:33 Stockholm
+  window and persists the committed phase before requesting reboot; an uncertain
+  request leaves the fence. It does not establish the Mini's reboot state.
+  New-boot checks cover the boot identity, local service states, firewall,
   listeners and HAProxy generation, while keeping the marker and fence. These
-  are staged building blocks, not complete route verification: no
-  prepare-shutdown command requests a reboot or verifies the public route yet.
+  are staged building blocks, not complete route verification: no runnable
+  prepare-shutdown owner ties them together or verifies the public route yet.
 - **HAProxy** terminates TLS 1.3 on 443 with a self-signed P-256 certificate
   whose SPKI the app pins, and passes only streams that begin with `CONNECT `.
 - **tinyproxy** requires Basic auth (it answers 407 and closes; URLSession
