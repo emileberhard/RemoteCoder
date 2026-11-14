@@ -208,6 +208,24 @@ class RelayTransaction:
         _write_marker(marker)
         self._operation_id = marker["operation_id"]
 
+    def prepare_idle(self, candidate_timeout, drain_timeout):
+        from maintenance_drain import haproxy_identity, wait_for_candidate
+
+        if self._locks is None or self._operation_id is not None:
+            raise RuntimeError("relay transaction is not ready for preparation")
+        identity = haproxy_identity()
+        wait_for_candidate(identity, candidate_timeout)
+        self.prepare(identity["master"]["pid"], identity["worker"]["pid"])
+        try:
+            marker = self._preparing_marker()
+            if any(marker[name] != identity[name] for name in ("master", "worker")):
+                raise RuntimeError("HAProxy generation changed before admission closed")
+        except BaseException:
+            self.abort()
+            raise
+        self.fence()
+        self.drain(drain_timeout)
+
     def commit(self):
         marker = self._preparing_marker()
         if not self._fenced:

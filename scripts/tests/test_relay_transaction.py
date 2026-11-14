@@ -362,6 +362,48 @@ finally:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((self.directory / "maintenance.json").exists())
 
+    def test_idle_preparation_orders_candidate_marker_fence_and_drain(self):
+        code = r"""
+import os, subprocess, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, "/tmp/fixture")
+import maintenance_drain as drain
+import maintenance_state as state
+child = subprocess.Popen(["/bin/sleep", "10"])
+identity = {"master": state.worker_identity(os.getpid()), "worker": state.worker_identity(child.pid)}
+def candidate(observed, timeout):
+    assert observed == identity and timeout == 20
+    assert not state.MARKER.exists()
+    assert not Path("/tmp/fixture/nft-calls").exists()
+def completed(observed, timeout):
+    assert observed == identity and timeout == 30
+    assert state.read_marker()["phase"] == "preparing"
+    assert (state.DIRECTORY / "maintenance.json").exists()
+    assert open("/tmp/fixture/nft-calls").read().splitlines()[-1].endswith("maintenance-firewall.nft")
+try:
+    with state.RelayTransaction() as transaction:
+        with patch.object(drain, "haproxy_identity", return_value=identity), patch.object(drain, "wait_for_candidate", side_effect=candidate), patch.object(drain, "wait_for_drain", side_effect=completed):
+            transaction.prepare_idle(20, 30)
+        assert state.read_marker()["phase"] == "preparing"
+        transaction.abort()
+        assert not state.MARKER.exists()
+        with patch.object(drain, "haproxy_identity", return_value=identity), patch.object(drain, "wait_for_candidate", side_effect=TimeoutError("busy")):
+            try:
+                transaction.prepare_idle(20, 30)
+            except TimeoutError:
+                pass
+            else:
+                raise AssertionError("busy candidate was accepted")
+        assert not state.MARKER.exists()
+finally:
+    child.terminate()
+    child.wait(timeout=5)
+"""
+        result = self.run_owner(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.directory / "maintenance.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
