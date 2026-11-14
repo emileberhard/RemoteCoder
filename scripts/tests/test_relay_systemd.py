@@ -51,6 +51,7 @@ class RelaySystemdTests(unittest.TestCase):
             )
             for name in (
                 "remote-coder-relay-maintenance-recover.service",
+                "remote-coder-relay-maintenance-recover.path",
                 "remote-coder-relay-hosts.service",
                 "remote-coder-relay-maintenance.service",
                 "remote-coder-relay-maintenance.timer",
@@ -122,6 +123,7 @@ class RelaySystemdTests(unittest.TestCase):
                 "/tmp/fixture/units/haproxy.service",
                 "/tmp/fixture/units/nftables.service",
                 "/tmp/fixture/units/remote-coder-relay-maintenance-recover.service",
+                "/tmp/fixture/units/remote-coder-relay-maintenance-recover.path",
                 "/tmp/fixture/units/remote-coder-relay-maintenance.service",
                 "/tmp/fixture/units/remote-coder-relay-maintenance.timer",
             ]

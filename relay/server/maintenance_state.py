@@ -69,7 +69,7 @@ def read_marker():
         or marker["schema"] != 1
     ):
         raise ValueError("unsupported marker schema")
-    if marker["phase"] not in ("preparing", "committed"):
+    if marker["phase"] not in ("preparing", "committed", "reboot-requesting"):
         raise ValueError("unknown maintenance phase")
     for name in ("boot_id", "operation_id"):
         if not isinstance(marker[name], str):
@@ -279,6 +279,20 @@ class RelayTransaction:
         remove_fence_and_marker()
         return identity
 
+    def reconcile_pending(self, timeout_seconds):
+        if self._locks is None or self._operation_id is not None:
+            raise RuntimeError("relay transaction is not ready for recovery")
+        marker = read_marker()
+        if marker["boot_id"] != boot_id():
+            self.reopen_after_new_boot(timeout_seconds)
+            return "relay admission reopened after local new-boot checks"
+        if marker["phase"] in ("preparing", "committed"):
+            remove_fence_and_marker()
+            return "relay admission reopened after abandoned preparation"
+        raise RuntimeError(
+            "reboot submission is uncertain on this boot; keep the fence"
+        )
+
     def commit(self):
         marker = self._preparing_marker()
         if not self._fenced:
@@ -313,6 +327,14 @@ class RelayTransaction:
             raise RuntimeError(
                 "relay reboot window elapsed after commit; keep the fence"
             )
+        marker = read_marker()
+        if (
+            marker["phase"] != "committed"
+            or marker["operation_id"] != self._operation_id
+        ):
+            raise RuntimeError("relay committed marker changed before reboot request")
+        marker["phase"] = "reboot-requesting"
+        _write_marker(marker)
         try:
             result = subprocess.run(
                 ["/usr/bin/systemctl", "reboot"],

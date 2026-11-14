@@ -34,14 +34,14 @@ def recover_preparing():
         raise RuntimeError(
             "invalid relay maintenance marker; keep the fence"
         ) from error
-    if phase != "preparing" or previous_boot != current_boot:
+    if phase not in ("preparing", "committed") or previous_boot != current_boot:
         raise RuntimeError(
-            "committed or new-boot maintenance requires verification; keep the fence"
+            "uncertain reboot or new-boot maintenance requires verification; keep the fence"
         )
     remove_fence_and_marker()
 
 
-def recover_new_boot(timeout_seconds):
+def recover_pending(timeout_seconds):
     try:
         MARKER.lstat()
     except FileNotFoundError:
@@ -49,13 +49,17 @@ def recover_new_boot(timeout_seconds):
     deadline = time.monotonic() + timeout_seconds
     last_error = "prerequisites did not become ready"
     while True:
+        try:
+            MARKER.lstat()
+        except FileNotFoundError:
+            return
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise RuntimeError(f"new-boot relay recovery timed out: {last_error}")
+            raise RuntimeError(f"relay recovery timed out: {last_error}")
         try:
             with RelayTransaction() as transaction:
-                transaction.reopen_after_new_boot(min(10, remaining))
-            print("relay admission reopened after local new-boot checks")
+                result = transaction.reconcile_pending(min(10, remaining))
+            print(result)
             return
         except (
             OSError,
@@ -67,26 +71,24 @@ def recover_new_boot(timeout_seconds):
         ) as error:
             last_error = str(error)
             print(
-                f"relay new-boot recovery: {last_error}; retrying",
+                f"relay maintenance recovery: {last_error}; retrying",
                 file=sys.stderr,
                 flush=True,
             )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise RuntimeError(
-                    f"new-boot relay recovery failed: {error}"
-                ) from error
+                raise RuntimeError(f"relay recovery failed: {error}") from error
             time.sleep(min(10, remaining))
 
 
 if __name__ == "__main__":
     try:
-        if sys.argv[1:] == ["--boot"]:
-            recover_new_boot(180)
+        if sys.argv[1:] == ["--watch"]:
+            recover_pending(180)
         elif not sys.argv[1:]:
             recover()
         else:
-            raise RuntimeError("usage: maintenance-recover [--boot]")
+            raise RuntimeError("usage: maintenance-recover [--watch]")
     except (OSError, RuntimeError) as error:
         print(f"relay recovery: {error}", file=sys.stderr)
         sys.exit(1)

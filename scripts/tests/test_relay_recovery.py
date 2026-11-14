@@ -19,6 +19,34 @@ loader.exec_module(recover)
 
 
 class RelayBootRecoveryTests(unittest.TestCase):
+    def test_marker_removed_by_active_owner_ends_retry(self):
+        clock = [0.0]
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "maintenance.json"
+            marker.touch()
+
+            class Transaction:
+                def __enter__(self):
+                    marker.unlink()
+                    raise RuntimeError("owner holds lock")
+
+                def __exit__(self, *_args):
+                    return None
+
+            with (
+                patch.object(recover, "MARKER", marker),
+                patch.object(recover, "RelayTransaction", Transaction),
+                patch.object(recover.time, "monotonic", side_effect=lambda: clock[0]),
+                patch.object(
+                    recover.time,
+                    "sleep",
+                    side_effect=lambda value: clock.__setitem__(0, clock[0] + value),
+                ),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                recover.recover_pending(180)
+            self.assertEqual(clock[0], 10)
+
     def test_retry_after_bounded_attempt_recovers_a_late_tunnel(self):
         clock = [0.0]
         attempts = []
@@ -34,7 +62,7 @@ class RelayBootRecoveryTests(unittest.TestCase):
                 def __exit__(self, *_args):
                     return None
 
-                def reopen_after_new_boot(self, _timeout):
+                def reconcile_pending(self, _timeout):
                     attempts.append(clock[0])
                     if clock[0] < 240:
                         raise RuntimeError("tunnel unavailable")
@@ -53,10 +81,10 @@ class RelayBootRecoveryTests(unittest.TestCase):
                 contextlib.redirect_stderr(io.StringIO()),
             ):
                 with self.assertRaises(RuntimeError):
-                    recover.recover_new_boot(180)
+                    recover.recover_pending(180)
                 self.assertTrue(marker.exists())
                 clock[0] += 10
-                recover.recover_new_boot(180)
+                recover.recover_pending(180)
             self.assertFalse(marker.exists())
         self.assertEqual(attempts[-1], 240)
 
@@ -71,7 +99,7 @@ class RelayBootRecoveryTests(unittest.TestCase):
             def __exit__(self, *_args):
                 return None
 
-            def reopen_after_new_boot(self, timeout):
+            def reconcile_pending(self, timeout):
                 attempts.append((clock[0], timeout))
                 if len(attempts) < 3:
                     raise RuntimeError("tunnel unavailable")
@@ -91,7 +119,7 @@ class RelayBootRecoveryTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()) as errors,
             ):
-                recover.recover_new_boot(25)
+                recover.recover_pending(25)
         self.assertEqual(attempts, [(0, 10), (10, 10), (20, 5)])
         self.assertEqual(errors.getvalue().count("tunnel unavailable; retrying"), 2)
 
@@ -105,7 +133,7 @@ class RelayBootRecoveryTests(unittest.TestCase):
             def __exit__(self, *_args):
                 return None
 
-            def reopen_after_new_boot(self, _timeout):
+            def reconcile_pending(self, _timeout):
                 raise RuntimeError("missing firewall fence")
 
         with tempfile.TemporaryDirectory() as directory:
@@ -123,7 +151,7 @@ class RelayBootRecoveryTests(unittest.TestCase):
                 contextlib.redirect_stderr(io.StringIO()),
                 self.assertRaisesRegex(RuntimeError, "missing firewall fence"),
             ):
-                recover.recover_new_boot(2)
+                recover.recover_pending(2)
             self.assertTrue(marker.exists())
 
 

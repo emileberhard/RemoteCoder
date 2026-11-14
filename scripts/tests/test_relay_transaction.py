@@ -42,7 +42,7 @@ class RelayTransactionTests(unittest.TestCase):
         systemctl.write_text(
             "#!/bin/sh\n"
             'test "$1" = reboot || exit 1\n'
-            'grep -q \'"phase":"committed"\' /var/lib/remote-coder-relay/maintenance.json || exit 1\n'
+            'grep -q \'"phase":"reboot-requesting"\' /var/lib/remote-coder-relay/maintenance.json || exit 1\n'
             'printf "%s\\n" "$1" >> /tmp/fixture/systemctl-calls\n'
             "test ! -e /tmp/fixture/fail-systemctl\n"
         )
@@ -522,6 +522,51 @@ finally:
         self.assertFalse((self.directory / "maintenance.json").exists())
         self.assertEqual((self.src / "nft-calls").read_text().splitlines(), ["-f -"])
 
+    def test_same_boot_owner_recovers_unsubmitted_but_preserves_uncertain_reboot(self):
+        code = r"""
+import os, subprocess, sys
+from unittest.mock import patch
+sys.path.insert(0, "/tmp/fixture")
+import maintenance_drain as drain
+import maintenance_state as state
+child = subprocess.Popen(["/bin/sleep", "10"])
+try:
+    for phase in ("preparing", "committed", "reboot-requesting"):
+        with state.RelayTransaction() as transaction:
+            transaction.prepare(os.getpid(), child.pid)
+            if phase != "preparing":
+                transaction.fence()
+                with patch.object(drain, "wait_for_drain"):
+                    transaction.drain(30)
+                if phase == "committed":
+                    transaction.commit()
+                else:
+                    with patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "snapshot", return_value=False):
+                        transaction.enqueue_reboot()
+        assert state.read_marker()["phase"] == phase
+        with state.RelayTransaction() as recovery:
+            if phase != "reboot-requesting":
+                assert "abandoned" in recovery.reconcile_pending(10)
+                assert not state.MARKER.exists()
+            else:
+                for _ in range(2):
+                    try:
+                        recovery.reconcile_pending(10)
+                    except RuntimeError as error:
+                        assert "uncertain" in str(error)
+                    else:
+                        raise AssertionError("uncertain reboot was reopened")
+                    assert state.read_marker()["phase"] == "reboot-requesting"
+                with patch.object(state, "boot_id", return_value="00000000-0000-4000-8000-000000000001"), patch.object(drain, "verify_local_boot_prerequisites", return_value={"worker": 7}), patch.object(drain, "fence_is_configured"):
+                    assert "new-boot" in recovery.reconcile_pending(10)
+                assert not state.MARKER.exists()
+finally:
+    child.terminate()
+    child.wait(timeout=5)
+"""
+        result = self.run_owner(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_reboot_enqueue_requires_idle_window_and_persists_uncertainty(self):
         code = r"""
 import contextlib, os, subprocess, sys
@@ -532,7 +577,7 @@ import maintenance_drain as drain
 import maintenance_state as state
 child = subprocess.Popen(["/bin/sleep", "10"])
 try:
-    for case in ("wrong_time", "busy", "elapsed_before_commit", "elapsed_after_commit", "commit_uncertain", "timeout", "failed", "success"):
+    for case in ("wrong_time", "busy", "elapsed_before_commit", "elapsed_after_commit", "commit_uncertain", "intent_before_write", "intent_after_write", "timeout", "failed", "success"):
         with state.RelayTransaction() as transaction:
             transaction.prepare(os.getpid(), child.pid)
             transaction.fence()
@@ -546,7 +591,18 @@ try:
             def uncertain_write(marker):
                 original_write(marker)
                 raise OSError("lost completion after durable write")
-            writer = patch.object(state, "_write_marker", side_effect=uncertain_write) if case == "commit_uncertain" else contextlib.nullcontext()
+            def interrupted_intent(marker):
+                if marker["phase"] == "reboot-requesting":
+                    if case == "intent_after_write":
+                        original_write(marker)
+                    raise OSError("interrupted request intent")
+                original_write(marker)
+            if case == "commit_uncertain":
+                writer = patch.object(state, "_write_marker", side_effect=uncertain_write)
+            elif case in ("intent_before_write", "intent_after_write"):
+                writer = patch.object(state, "_write_marker", side_effect=interrupted_intent)
+            else:
+                writer = contextlib.nullcontext()
             request = patch.object(state.subprocess, "run", side_effect=subprocess.TimeoutExpired("systemctl", 15)) if case == "timeout" else contextlib.nullcontext()
             with patch.object(state, "_reboot_window", side_effect=windows), patch.object(drain, "snapshot", return_value=case == "busy"), writer, request:
                 try:
@@ -560,7 +616,8 @@ try:
                 assert not state.MARKER.exists()
                 assert not Path("/tmp/fixture/systemctl-calls").exists()
             else:
-                assert state.read_marker()["phase"] == "committed"
+                expected_phase = "committed" if case in ("elapsed_after_commit", "commit_uncertain", "intent_before_write") else "reboot-requesting"
+                assert state.read_marker()["phase"] == expected_phase
                 try:
                     transaction.abort()
                 except RuntimeError:
@@ -597,7 +654,7 @@ try:
     identity = {"master": state.worker_identity(os.getpid()), "worker": state.worker_identity(child.pid)}
     with patch.object(prepare, "_reboot_window", return_value=True), patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "haproxy_identity", return_value=identity), patch.object(drain, "wait_for_candidate"), patch.object(drain, "wait_for_drain"), patch.object(drain, "snapshot", return_value=False):
         prepare.prepare()
-    assert state.read_marker()["phase"] == "committed"
+    assert state.read_marker()["phase"] == "reboot-requesting"
 finally:
     child.terminate()
     child.wait(timeout=5)
@@ -609,7 +666,7 @@ finally:
         )
         self.assertEqual(
             json.loads((self.directory / "maintenance.json").read_text())["phase"],
-            "committed",
+            "reboot-requesting",
         )
 
 

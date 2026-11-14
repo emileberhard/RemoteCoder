@@ -6,7 +6,7 @@ After=nftables.service ssh.service tinyproxy.service haproxy.service remote-code
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/lib/remote-coder-relay/maintenance-recover --boot
+ExecStart=/usr/local/lib/remote-coder-relay/maintenance-recover --watch
 TimeoutStartSec=210
 Restart=on-failure
 RestartSec=10s
