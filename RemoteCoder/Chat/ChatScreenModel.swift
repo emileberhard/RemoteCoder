@@ -1442,8 +1442,10 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         target.voice.markStopRequested()
     }
 
-    func micTapStopAsync() async {
-        await dictation.finish(feedback: target.feedbackForCurrentConversation())
+    @discardableResult
+    func micTapStopAsync() async -> Bool {
+        let receiver = await dictation.finish(feedback: target.feedbackForCurrentConversation())
+        return receiver != nil && receiver === currentDraft
     }
 
     func transcribeRecoverableDictation(_ id: UUID) {

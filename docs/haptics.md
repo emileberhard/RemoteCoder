@@ -334,6 +334,10 @@ text lands in the draft, `error` when transcription fails and `commit` when the
 recording is deleted; a tile whose recording no longer exists disappears silently.
 A stop that cancels a start before capture began plays nothing. Automatic
 dictation handoff remains silent.
+Holding the mic for quick dictation plays `toggleOn` when the hold is
+recognized, before suppression begins: it acknowledges the hold, not a working
+microphone. Moving in and out of the send zone is silent because capture
+suppresses it, and the release reuses the recording stop acknowledgement.
 `refused` is the only event that plays during capture: it uses the system error
 pattern when the user tries to switch chats while dictating. The dictation
 session therefore allows haptics during recording; every other app-owned event

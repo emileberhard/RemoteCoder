@@ -330,6 +330,26 @@ struct ChatWorkspaceModelTests {
         #expect(model.input.hasSuffix("still talking"))
     }
 
+    @Test func aFinishedDictationReportsOnlyTextThatReachedTheShownDraft() async throws {
+        let fixture = await WorkspaceFixture()
+        defer { fixture.workspace.teardown(); await fixture.cleanUp() }
+        let recordings = try TemporaryDictationRecordings()
+        defer { recordings.cleanUp() }
+        let model = try #require(fixture.workspace.selectedScreen)
+        #expect(await model.prepareDraft())
+
+        for (spoken, reachesDraft) in [("send this", true), ("  ", false)] {
+            model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget,
+                                               transcriber: StubTranscriber(text: spoken),
+                                               recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
+            model.micTapStart()
+            await model.micTapStartAsync()
+            model.micTapStopImmediate()
+            #expect(await model.micTapStopAsync() == reachesDraft)
+        }
+        #expect(model.input == "send this")
+    }
+
     @Test func returningToAHostFindsTheSameModelWithItsDraftAndDirectory() async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }

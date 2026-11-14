@@ -70,6 +70,7 @@ struct ChatComposerView: View {
     @State private var fileDestination: AttachmentDestination?
     @State private var focusAfterTakeOver = false
     @State private var isInputDropTargeted = false
+    @State private var quickDictation: QuickDictationRelease?
 
     private struct AttachmentDestination {
         let screen: ChatScreenModel
@@ -85,7 +86,6 @@ struct ChatComposerView: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.isAttachmentDropTargeted) private var isSurfaceDropTargeted
     @Environment(AppThemeStore.self) private var themeStore
-    private let recordingRed = Color(red: 0.85, green: 0.20, blue: 0.20)
 
     private enum LayoutMetrics {
         static let surfaceInset: CGFloat = 8
@@ -98,7 +98,7 @@ struct ChatComposerView: View {
     }
 
     private var presentation: Presentation {
-        if screen.target.voice.isRecording { return .recording }
+        if showsRecordingBar { return .recording }
         #if os(iOS)
         return focus.wrappedValue ? .focused : .compact
         #else
@@ -108,6 +108,14 @@ struct ChatComposerView: View {
 
     private var isCompact: Bool {
         presentation != .focused
+    }
+
+    private var showsRecordingBar: Bool {
+        screen.target.voice.isRecording && quickDictation == nil
+    }
+
+    private var isQuickDictating: Bool {
+        screen.target.voice.isRecording && quickDictation != nil
     }
 
     private var surfaceCornerRadius: CGFloat {
@@ -367,11 +375,13 @@ struct ChatComposerView: View {
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: .iconPress))
         .foregroundStyle(.primary)
+        .yieldsToQuickDictation(isQuickDictating)
     }
 
     private var trailingActions: some View {
         HStack(spacing: LayoutMetrics.actionSpacing) {
             stopButton
+                .yieldsToQuickDictation(isQuickDictating)
 
             if let onOpenVoiceMode {
                 SlideToConfirmButton(label: "Voice mode", verb: "call", symbol: "phone.fill", tint: .green,
@@ -384,12 +394,14 @@ struct ChatComposerView: View {
                 }
                 .tooltip("Voice mode")
                 .composerControlHitRegion()
+                .yieldsToQuickDictation(isQuickDictating)
             }
 
             micButton
                 .composerControlHitRegion()
             ComposerSendControl(screen: screen, send: sendMessage, queue: queueMessage)
                 .composerControlHitRegion()
+                .yieldsToQuickDictation(isQuickDictating)
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: .iconPress))
         .foregroundStyle(.primary)
@@ -592,7 +604,7 @@ struct ChatComposerView: View {
 
     private var composerBar: some View {
         Group {
-            if screen.target.voice.isRecording {
+            if showsRecordingBar {
                 recordingComposerBar
             } else {
                 textComposerBar
@@ -662,10 +674,30 @@ struct ChatComposerView: View {
                     .frame(minWidth: isCompact ? ControlMetrics.minimumTarget * interfaceScale : nil,
                            maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget * interfaceScale)
                     .accessibilityIdentifier("codex-composer-input")
+                    .yieldsToQuickDictation(isQuickDictating && isCompact)
 
                 trailingActions
             }
+            .background(alignment: .bottom) {
+                if isQuickDictating { quickDictationBar }
+            }
+            .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: isQuickDictating)
         }
+    }
+
+    private var quickDictationBar: some View {
+        ComposerWaveformView(
+            isActive: true,
+            tint: .white,
+            levels: { screen.target.voice.levels() }
+        )
+        .frame(height: 26)
+        .padding(.leading, 17)
+        .padding(.trailing, (ControlMetrics.minimumTarget * 2 + 14) * interfaceScale)
+        .frame(maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget * interfaceScale)
+        .background(quickDictation?.tint ?? .composerRecording, in: .capsule)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: quickDictation)
+        .transition(reduceMotion ? .opacity : .scale(scale: 0.4, anchor: .trailing).combined(with: .opacity))
     }
 
     @ViewBuilder
@@ -698,7 +730,7 @@ struct ChatComposerView: View {
             recordStopButton
         }
         .padding(4)
-        .background(recordingRed, in: ConcentricRectangle())
+        .background(Color.composerRecording, in: ConcentricRectangle())
     }
 
     private func focusInputFromSurfaceTap() {
@@ -731,24 +763,34 @@ struct ChatComposerView: View {
     }
 
     private var micButton: some View {
-        let isTranscribing = screen.target.voice.isTranscribing
+        ComposerDictationButton(
+            isRecording: screen.target.voice.isRecording, isTranscribing: screen.target.voice.isTranscribing,
+            release: $quickDictation, onTap: startDictation, onHoldBegan: startQuickDictation, onRelease: finishQuickDictation
+        )
+    }
 
-        return Button {
-            screen.micTapStart()
-            dismissSoftwareKeyboard()
-            Task { await screen.micTapStartAsync() }
-        } label: {
-            if isTranscribing {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaledFrame(width: ControlMetrics.minimumTarget, height: ControlMetrics.minimumTarget)
-            } else {
-                composerIcon("mic")
-            }
+    private func startDictation() {
+        screen.micTapStart()
+        dismissSoftwareKeyboard()
+        Task { await screen.micTapStartAsync() }
+    }
+
+    private func startQuickDictation() {
+        screen.micTapStart()
+        guard screen.target.voice.isRecording else { return }
+        quickDictation = .sends
+        Task { await screen.micTapStartAsync() }
+    }
+
+    private func finishQuickDictation(_ release: QuickDictationRelease) {
+        quickDictation = nil
+        guard screen.target.voice.isRecording else { return }
+        screen.micTapStopImmediate()
+        let origin = screen
+        Task { @MainActor in
+            guard await origin.micTapStopAsync(), release == .sends else { return }
+            _ = await onSend(origin)
         }
-        .disabled(isTranscribing)
-        .tooltip(isTranscribing ? "Transcribing recording" : "Dictate")
-        .accessibilityLabel(isTranscribing ? "Transcribing recording" : "Start recording")
     }
 
     private func pasteFromClipboard() {
@@ -823,6 +865,12 @@ extension View {
     /// Reserves this control's bounds from the composer's empty-space focus target.
     func composerControlHitRegion() -> some View {
         anchorPreference(key: ComposerControlBounds.self, value: .bounds) { [$0] }
+    }
+
+    fileprivate func yieldsToQuickDictation(_ yields: Bool) -> some View {
+        opacity(yields ? 0 : 1)
+            .allowsHitTesting(!yields)
+            .accessibilityHidden(yields)
     }
 }
 

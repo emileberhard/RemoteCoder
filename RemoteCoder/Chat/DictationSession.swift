@@ -37,22 +37,26 @@ final class DictationSession {
         host?.voice.markRecordingRequested()
     }
 
-    func finish(feedback: ((HapticEvent) -> Void)? = nil) async {
-        guard drafts.acceptsInput, !isRetired else { return }
-        let task = ownedTasks.start(.finish) { [weak self] in await self?.finishCapture(feedback: feedback) }
+    @discardableResult
+    func finish(feedback: ((HapticEvent) -> Void)? = nil) async -> ComposerDraft? {
+        guard drafts.acceptsInput, !isRetired else { return nil }
+        var receiver: ComposerDraft?
+        let task = ownedTasks.start(.finish) { [weak self] in receiver = await self?.finishCapture(feedback: feedback) }
         await task.value
+        return receiver
     }
 
-    private func finishCapture(feedback: ((HapticEvent) -> Void)?) async {
-        guard let voice = host?.voice else { return }
+    private func finishCapture(feedback: ((HapticEvent) -> Void)?) async -> ComposerDraft? {
+        guard let voice = host?.voice else { return nil }
         let draft = captureDraft
         captureDraft = nil
         do {
             try await voice.stopRecording(onCaptureEnded: { feedback?(.commit) })
             let dictation = try await voice.transcribe()
-            if !isRetired, let draft {
-                try await receive(dictation.transcript, recordingID: dictation.recordingID, recording: dictation.recording, into: draft)
-            }
+            guard !isRetired, let draft else { return nil }
+            try await receive(dictation.transcript, recordingID: dictation.recordingID, recording: dictation.recording, into: draft)
+            let spoke = !dictation.transcript.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return spoke && !draft.isDiscarded ? draft : nil
         } catch {
             voice.markTranscriptionEnded()
             if !(error is CancellationError) {
@@ -60,6 +64,7 @@ final class DictationSession {
                 feedback?(.error)
             }
             refreshRecoverable()
+            return nil
         }
     }
 
