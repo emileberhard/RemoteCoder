@@ -163,21 +163,29 @@ private struct ClaudeAutomaticUsageView: View {
     var body: some View {
         let columns = columns
         let now = Date.now
-        Group {
-            if dynamicTypeSize.isAccessibilitySize {
-                stacked(columns: columns, now: now)
-            } else {
-                ViewThatFits(in: .horizontal) {
-                    grid(columns: columns, now: now)
+        let exhausted = (list.models ?? []).filter { $0.automatic == nil }.sorted { $0.model < $1.model }
+        VStack(alignment: .leading, spacing: 10) {
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
                     stacked(columns: columns, now: now)
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        grid(columns: columns, now: now)
+                        stacked(columns: columns, now: now)
+                    }
                 }
+            }
+            ForEach(exhausted, id: \.model) { choice in
+                Text(exhaustionNotice(choice))
+                    .scaledFont(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func grid(columns: [Column], now: Date) -> some View {
-        Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 12) {
+        Grid(alignment: .leading, horizontalSpacing: 4, verticalSpacing: 12) {
             GridRow {
                 Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
                 ForEach(columns) { column in
@@ -229,7 +237,7 @@ private struct ClaudeAutomaticUsageView: View {
 
     private func value(account: ClaudeRouterAccount, column: Column, now: Date) -> some View {
         let window = account.windows.filter { column.includes($0) }.min { $0.remainingPercent < $1.remainingPercent }
-        let row = window.flatMap { window in account.usageRows(now: now).first { $0.id == "claude-\(account.id)-\(window.id)" } }
+        let row = window.map { account.usageRow(for: $0, now: now) }
         return Text(row.map { "\($0.remainingPercent)%" } ?? "—")
             .fontWeight(.semibold)
             .monospacedDigit()
@@ -242,10 +250,7 @@ private struct ClaudeAutomaticUsageView: View {
     private func status(account: ClaudeRouterAccount) -> some View {
         if account.availability != .available {
             if let availableAt = account.availableAt {
-                let date = Date(timeIntervalSince1970: availableAt)
-                Text(date.formatted(Calendar.autoupdatingCurrent.isDateInToday(date)
-                    ? .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)
-                    : .dateTime.month(.abbreviated).day().hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)))
+                Text(returnTime(availableAt))
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(account.availabilityText)
             } else {
@@ -263,6 +268,18 @@ private struct ClaudeAutomaticUsageView: View {
         }
     }
 
+    private func returnTime(_ timestamp: Double) -> String {
+        let date = Date(timeIntervalSince1970: timestamp)
+        return date.formatted(Calendar.autoupdatingCurrent.isDateInToday(date)
+            ? .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)
+            : .dateTime.month(.abbreviated).day().hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+    }
+
+    private func exhaustionNotice(_ choice: ClaudeModelAutomaticChoice) -> String {
+        let reason = "\(choice.title) is used up on every account"
+        return choice.availableAt.map { "\(reason) until \(returnTime($0))" } ?? reason
+    }
+
     private enum Column: Hashable, Identifiable {
         case fiveHour, weekly, model(String)
         var id: Self { self }
@@ -270,7 +287,7 @@ private struct ClaudeAutomaticUsageView: View {
             switch self {
             case .fiveHour: "5h"
             case .weekly: "Week"
-            case .model(let name): name.prefix(1).uppercased() + name.dropFirst()
+            case .model(let name): ClaudeModelCatalog.familyDisplayName(for: name)
             }
         }
         func includes(_ window: AccountUsageWindow) -> Bool {

@@ -127,8 +127,12 @@ in the popover with remaining 5-hour, Week and model-family columns. Missing
 windows show an em dash, announced as "Not reported"; low and stale values keep
 the existing usage styling. Rows stack at accessibility sizes or when the grid
 does not fit. The family's chosen account carries its name; the general account
-is marked "Others" when scoped choices exist, or "Automatic" otherwise. The
-overview uses the same routing marks. Unavailable popover rows show their return
+is marked "Others" only when a family uses another account or has no account.
+When every family uses the general account, that account is marked only
+"Automatic", just as when there are no scoped choices. The overview uses the
+same routing marks. For each family with no account, a secondary line below the
+grid or stacked rows says it is used up on every account, with its return time
+when known. These lines are sorted by model. Unavailable popover rows show their return
 time, or availability when that time is unknown. Older routers and gateways that
 omit model choices retain the single-account Automatic popover. Explicit account,
 Copilot and OpenRouter views are unchanged.

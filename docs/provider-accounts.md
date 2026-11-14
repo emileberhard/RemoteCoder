@@ -23,8 +23,11 @@ With multiple Claude accounts, its usage popover shows every account's remaining
 5-hour, weekly and model-family allowances in columns, stacking rows when space
 or text size requires it. Missing windows show an em dash ("Not reported" to
 VoiceOver). The popover and overview mark the chosen account with each family's
-name, and mark the general choice "Others" when model choices exist; otherwise
-the general choice is marked "Automatic". An unavailable account shows its return
+name, and mark the general choice "Others" only when a family uses a different
+account or has no available account. When one account serves every family, it
+is marked only "Automatic". A family with no account gets a secondary line below
+the allowances stating that it is used up on every account, including its return
+time when known. An unavailable account shows its return
 time instead of routing marks in the popover. An older router or gateway with no
 model choices keeps the single-account Automatic popover. The ring continues to
 follow the general automatic choice. Choosing an account stores RemoteCoder's router

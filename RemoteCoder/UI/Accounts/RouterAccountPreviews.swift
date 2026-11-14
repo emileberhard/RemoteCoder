@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 private enum RouterAccountFixture {
     static let now = Date.now.timeIntervalSince1970
+    enum AutomaticState { case split, unified, exhausted }
 
     static func list(route: ClaudeRoute, codexRoute: CodexRoute) -> ClaudeRouterAccountList {
         ClaudeRouterAccountList(automatic: "max", preference: route == .subscription ? "max" : nil, accounts: [
@@ -21,17 +22,26 @@ private enum RouterAccountFixture {
         return directory
     }
 
-    static func automaticDirectory() -> RouterAccountDirectory {
+    static func automaticDirectory(_ state: AutomaticState) -> RouterAccountDirectory {
         let directory = RouterAccountDirectory(storage: HostStorage(root: .temporaryDirectory.appending(path: "router-automatic-preview")),
             beginBackgroundExecution: { _ in {} }, routes: { _ in nil })
         let accounts = [
-            automaticAccount(id: "emileberhard388", fiveHour: nil, weekly: 68, fable: 100),
-            automaticAccount(id: "tent62-latch", fiveHour: 100, weekly: 15, fable: 25),
-            automaticAccount(id: "eberhard-emil", fiveHour: nil, weekly: 96, fable: 81),
+            automaticAccount(id: "emileberhard388", fiveHour: nil, weekly: 68, fable: state == .unified ? 25 : 100),
+            automaticAccount(id: "tent62-latch", fiveHour: 100, weekly: 15, fable: state == .exhausted ? 100 : 25),
+            automaticAccount(id: "eberhard-emil", fiveHour: nil, weekly: 96, fable: state == .exhausted ? 100 : 81),
         ]
+        let choice: ClaudeModelAutomaticChoice
+        switch state {
+        case .split: choice = .init(model: "fable", automatic: "eberhard-emil", availableAt: nil)
+        case .unified: choice = .init(model: "fable", automatic: "emileberhard388", availableAt: nil)
+        case .exhausted:
+            guard let date = Calendar.autoupdatingCurrent.date(bySettingHour: 16, minute: 10, second: 0,
+                of: Date(timeIntervalSince1970: now)) else { preconditionFailure("Invalid preview return time") }
+            choice = .init(model: "fable", automatic: nil, availableAt: date.timeIntervalSince1970)
+        }
         do {
             try directory.showPreview(ClaudeRouterAccountList(automatic: "emileberhard388", preference: nil,
-                accounts: accounts, models: [.init(model: "fable", automatic: "eberhard-emil", availableAt: nil)],
+                accounts: accounts, models: [choice],
                 route: .subscription))
         } catch { preconditionFailure("Invalid automatic account preview: \(error)") }
         return directory
@@ -43,7 +53,7 @@ private enum RouterAccountFixture {
                 usedPercent: $0, resetsAt: now + 10_800, model: nil) },
             AccountUsageWindow(id: "weekly", label: "Weekly", durationMinutes: 10_080,
                 usedPercent: weekly, resetsAt: now + 3 * 86_400, model: nil),
-            AccountUsageWindow(id: "fable-weekly", label: "Fable weekly", durationMinutes: 10_080,
+            AccountUsageWindow(id: "fable-weekly", label: "\(ClaudeModelCatalog.familyDisplayName(for: "fable")) weekly", durationMinutes: 10_080,
                 usedPercent: fable, resetsAt: now + 3 * 86_400, model: "fable", observedAt: now),
         ].compactMap { $0 }
         return ClaudeRouterAccount(id: id, label: id, plan: "max", shared: id == "eberhard-emil", credential: .ready,
@@ -157,22 +167,51 @@ private struct PreviewFrame<Content: View>: View {
 
 #Preview("Automatic · Light") {
     PreviewFrame {
-        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(), providerReason: nil, onShowAllAccounts: {})
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(.split), providerReason: nil, onShowAllAccounts: {})
     }
     .preferredColorScheme(.light)
 }
 
 #Preview("Automatic · Dark") {
     PreviewFrame {
-        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(), providerReason: nil, onShowAllAccounts: {})
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(.split), providerReason: nil, onShowAllAccounts: {})
     }
     .preferredColorScheme(.dark)
 }
 
 #Preview("Automatic · Accessibility") {
     PreviewFrame {
-        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(), providerReason: nil, onShowAllAccounts: {})
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(.split), providerReason: nil, onShowAllAccounts: {})
     }
     .dynamicTypeSize(.accessibility1)
 }
+
+#Preview("Automatic unified · Light") {
+    PreviewFrame {
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(.unified), providerReason: nil, onShowAllAccounts: {})
+    }
+    .preferredColorScheme(.light)
+}
+
+#Preview("Automatic unified · Dark") {
+    PreviewFrame {
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(.unified), providerReason: nil, onShowAllAccounts: {})
+    }
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Fable exhausted · Light") {
+    PreviewFrame {
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(.exhausted), providerReason: nil, onShowAllAccounts: {})
+    }
+    .preferredColorScheme(.light)
+}
+
+#Preview("Fable exhausted · Dark") {
+    PreviewFrame {
+        ClaudeUsageDetailsView(directory: RouterAccountFixture.automaticDirectory(.exhausted), providerReason: nil, onShowAllAccounts: {})
+    }
+    .preferredColorScheme(.dark)
+}
+
 #endif
