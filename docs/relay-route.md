@@ -47,9 +47,12 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   must establish tracking before admission, persist and recover its fence, account
   for queued and in-flight work, and verify boot before using it. Reloading the
   relay's base firewall replaces only its own table and preserves the fence.
-  The staged recovery command reopens only an abandoned `preparing` marker from
-  the current boot after taking the provisioning and admission locks; it leaves
-  committed, malformed and new-boot markers fenced for verification. HAProxy
+  The recovery owner reopens an abandoned `preparing` or `committed` marker on
+  the same boot only after acquiring its locks; these phases prove that no
+  reboot was submitted. Before invoking systemd it durably writes
+  `reboot-requesting`, whose same-boot outcome stays fenced and is retried until
+  a new boot or an operator resolves the uncertainty. Invalid markers stay
+  fenced. HAProxy
   startup takes the admission lock before checking the marker, so it cannot
   reapply a fence between recovery removing it and deleting the marker. The
   owner takes the provisioning lock before the admission lock when writing the
@@ -59,11 +62,11 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   The nftables service stop leaves existing rules loaded; its normal restart
   reloads the base table without removing the separate maintenance table.
   The staged transaction helper holds those locks and both Debian package locks
-  while atomically syncing a preparing or committed marker. It waits for an idle
+  while atomically syncing the maintenance marker. It waits for an idle
   candidate with admission open, fences ingress, and requires two clean drain
   checks before commit; failures reopen admission or retain the marker if that
   fails. Its staged reboot operation rechecks drain during the 06:33 Stockholm
-  window and persists the committed phase before requesting reboot; an uncertain
+  window and persists the request-intent phase before requesting reboot; an uncertain
   request leaves the fence. A staged relay-local timer invokes it at 06:33
   Stockholm time only when `/run/reboot-required` exists; it does not catch up
   after a missed window. Provisioning does not enable or start this timer: its
@@ -71,7 +74,8 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   been accepted. Provisioning stages the HAProxy startup guard without restarting
   HAProxy; that guard takes effect at the next coordinated restart. A busy or
   uncertain drain aborts and reopens admission.
-  On a new boot the staged recovery unit checks local service states, firewall,
+  A path unit starts the recovery owner whenever a marker appears. On a new boot
+  it checks local service states, firewall,
   listeners and HAProxy generation; it logs failures and systemd keeps retrying
   bounded attempts until those checks pass. It then reopens admission and removes
   the marker. The Mini must then run

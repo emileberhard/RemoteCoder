@@ -53,12 +53,21 @@ class RelayProvisioningTests(unittest.TestCase):
         self.assertTrue(expected <= set(unit["Unit"]["After"].split()))
         self.assertEqual(
             unit["Service"]["ExecStart"],
-            "/usr/local/lib/remote-coder-relay/maintenance-recover --boot",
+            "/usr/local/lib/remote-coder-relay/maintenance-recover --watch",
         )
         self.assertEqual(unit["Install"]["WantedBy"], "multi-user.target")
         self.assertEqual(unit["Unit"]["StartLimitIntervalSec"], "0")
         self.assertEqual(unit["Service"]["Restart"], "on-failure")
         self.assertEqual(unit["Service"]["RestartSec"], "10s")
+        watcher = configparser.ConfigParser(interpolation=None)
+        watcher.read(ROOT / "relay/server/remote-coder-relay-maintenance-recover.path")
+        self.assertEqual(
+            watcher["Path"]["PathExists"],
+            "/var/lib/remote-coder-relay/maintenance.json",
+        )
+        self.assertEqual(
+            watcher["Path"]["Unit"], "remote-coder-relay-maintenance-recover.service"
+        )
 
     def test_daily_maintenance_requires_reboot_and_never_catches_up(self):
         service = configparser.ConfigParser(interpolation=None)
@@ -133,6 +142,7 @@ class RelayProvisioningTests(unittest.TestCase):
                 "haproxy-maintenance.conf",
                 "nftables-maintenance.conf",
                 "remote-coder-relay-maintenance-recover.service",
+                "remote-coder-relay-maintenance-recover.path",
                 "remote-coder-relay-maintenance.service",
                 "remote-coder-relay-maintenance.timer",
             ):

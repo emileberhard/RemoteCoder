@@ -50,6 +50,7 @@ class RelayInstallerTests(unittest.TestCase):
             "haproxy-maintenance.conf",
             "nftables-maintenance.conf",
             "remote-coder-relay-maintenance-recover.service",
+            "remote-coder-relay-maintenance-recover.path",
             "remote-coder-relay-maintenance.service",
             "remote-coder-relay-maintenance.timer",
             "config-activation.sh",
@@ -239,6 +240,10 @@ esac
         self.assertTrue((self.root / "sbin/policy-rc.d").is_symlink())
         self.assertIn(
             "systemctl enable --quiet remote-coder-relay-maintenance-recover", first
+        )
+        self.assertIn(
+            "systemctl enable --quiet --now remote-coder-relay-maintenance-recover.path",
+            first,
         )
         self.assertFalse(
             any("remote-coder-relay-maintenance.timer" in line for line in first)
@@ -541,7 +546,7 @@ esac
 
         self.assertEqual(recover().returncode, 0)
         for phase, boot in (
-            ("committed", boot_id),
+            ("reboot-requesting", boot_id),
             ("preparing", "00000000-0000-0000-0000-000000000000"),
         ):
             with self.subTest(phase=phase, boot=boot):
@@ -603,6 +608,10 @@ esac
             (self.shared / "nft-input").read_text().splitlines(),
             ["destroy table inet remote_coder_relay_maintenance"] * 2,
         )
+        write_marker("committed")
+        result = recover()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":
