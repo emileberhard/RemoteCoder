@@ -33,6 +33,10 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   changed configuration or activating installed packages.
   Package installation alone does not activate new binaries or libraries; the
   future maintenance owner or an explicit supervised operation must activate them.
+  A dpkg pre-invoke guard refuses package changes while a maintenance marker
+  exists, including after its owner exits. The maintenance owner must hold the
+  package-manager locks while creating that marker; the guard alone cannot
+  exclude a transaction that has already started.
 - **Maintenance ingress.** The checked-in firewall fragment rejects TCP packets
   to port 443 classified as new while keeping tracked existing connections;
   handshakes already in progress can still complete. It is not installed or

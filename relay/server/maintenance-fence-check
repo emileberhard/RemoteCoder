@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+marker=/var/lib/remote-coder-relay/maintenance.json
+if [ -e "$marker" ] || [ -L "$marker" ]; then
+    echo "Relay maintenance is pending; recover it before changing packages or provisioning" >&2
+    exit 1
+fi

@@ -61,6 +61,11 @@ class RelayProvisioningTests(unittest.TestCase):
                 archive.extractfile("config-activation.sh").read(),
                 ACTIVATION.read_bytes(),
             )
+            for name in ("maintenance-fence-check", "dpkg-maintenance.conf"):
+                self.assertEqual(
+                    archive.extractfile(name).read(),
+                    (ROOT / "relay/server" / name).read_bytes(),
+                )
 
 
 class RelayPolicyTests(unittest.TestCase):

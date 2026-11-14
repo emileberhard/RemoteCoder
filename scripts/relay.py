@@ -140,6 +140,8 @@ def provision(_: argparse.Namespace) -> None:
             "@PERMIT_LISTEN@", " ".join(f"127.0.0.1:{entry['port']}" for entry in hosts.values())).encode(),
         "unattended-upgrades.conf": (RELAY / "server" / "unattended-upgrades.conf").read_bytes(),
         "policy-rc.d": (RELAY / "server" / "policy-rc.d").read_bytes(),
+        "maintenance-fence-check": (RELAY / "server" / "maintenance-fence-check").read_bytes(),
+        "dpkg-maintenance.conf": (RELAY / "server" / "dpkg-maintenance.conf").read_bytes(),
         "config-activation.sh": (RELAY / "server" / "config-activation.sh").read_bytes(),
         "authorized_keys": authorized_keys.encode(),
         "credential": credential.encode(),
