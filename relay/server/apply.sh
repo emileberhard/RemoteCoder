@@ -41,6 +41,7 @@ record_config_change "$src/maintenance-firewall.nft" /usr/local/lib/remote-coder
 record_config_change "$src/maintenance-startup" /usr/local/lib/remote-coder-relay/maintenance-startup haproxy
 record_config_change "$src/haproxy-maintenance.conf" /etc/systemd/system/haproxy.service.d/10-relay-maintenance.conf haproxy
 record_config_change "$src/haproxy-maintenance.conf" /etc/systemd/system/haproxy.service.d/10-relay-maintenance.conf daemon-reload
+record_config_change "$src/nftables-maintenance.conf" /etc/systemd/system/nftables.service.d/10-relay-maintenance.conf daemon-reload
 install -m 0644 "$src/maintenance-firewall.nft" /usr/local/lib/remote-coder-relay/maintenance-firewall.nft
 install -m 0755 "$src/maintenance-startup" /usr/local/lib/remote-coder-relay/maintenance-startup
 install -m 0755 "$src/maintenance-recover" /usr/local/lib/remote-coder-relay/maintenance-recover
@@ -48,6 +49,9 @@ install -m 0644 "$src/maintenance_state.py" /usr/local/lib/remote-coder-relay/ma
 install -m 0644 "$src/maintenance_drain.py" /usr/local/lib/remote-coder-relay/maintenance_drain.py
 install -d -m 0755 /etc/systemd/system/haproxy.service.d
 install -m 0644 "$src/haproxy-maintenance.conf" /etc/systemd/system/haproxy.service.d/10-relay-maintenance.conf
+install -d -m 0755 /etc/systemd/system/nftables.service.d
+install -m 0644 "$src/nftables-maintenance.conf" /etc/systemd/system/nftables.service.d/10-relay-maintenance.conf
+activate_config_change daemon-reload daemon-reload
 
 record_config_change "$src/nftables.conf" /etc/nftables.conf nftables
 install -m 0644 "$src/nftables.conf" /etc/nftables.conf

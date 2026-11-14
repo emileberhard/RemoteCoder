@@ -47,6 +47,7 @@ class RelayInstallerTests(unittest.TestCase):
             "maintenance_state.py",
             "maintenance_drain.py",
             "haproxy-maintenance.conf",
+            "nftables-maintenance.conf",
             "config-activation.sh",
             "nftables.conf",
             "haproxy.cfg",
@@ -218,6 +219,17 @@ esac
             ],
         )
         self.assertTrue((self.root / "sbin/policy-rc.d").is_symlink())
+        self.assertLess(
+            first.index("systemctl daemon-reload"),
+            first.index("systemctl start nftables"),
+        )
+        self.assertEqual(
+            (
+                self.root
+                / "etc/systemd/system/nftables.service.d/10-relay-maintenance.conf"
+            ).read_bytes(),
+            (SERVER / "nftables-maintenance.conf").read_bytes(),
+        )
         self.assertEqual(
             (
                 self.root / "etc/dpkg/dpkg.cfg.d/remote-coder-relay-maintenance"
