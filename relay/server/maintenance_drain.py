@@ -340,3 +340,26 @@ def wait_for_drain(expected_identity, timeout_seconds):
             clean_passes += 1
             if clean_passes == 2:
                 return
+
+
+def verify_local_boot_prerequisites(timeout_seconds):
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("relay health timeout must be positive")
+    deadline = time.monotonic() + timeout_seconds
+    for unit in (
+        "nftables.service",
+        "ssh.service",
+        "tinyproxy.service",
+        "haproxy.service",
+    ):
+        command(["/usr/bin/systemctl", "is-active", "--quiet", unit], deadline)
+    tracking_is_configured(deadline)
+    fence_is_configured(deadline)
+    ports = tracked_ports()
+    identity = haproxy_identity(deadline)
+    if listener_queues(ports) or haproxy_busy(deadline):
+        raise RuntimeError("relay is not locally idle after boot")
+    if haproxy_identity(deadline) != identity:
+        raise RuntimeError("HAProxy generation changed during health verification")
+    remaining_time(deadline)
+    return identity
