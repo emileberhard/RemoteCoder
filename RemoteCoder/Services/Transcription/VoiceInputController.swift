@@ -283,7 +283,7 @@ final class VoiceInputController {
                 let raw = try await live.dictation.finish()
                 let model = stopped.configuration.model.libraryID
                 let result = try await resolveVoices(DictationTranscript(text: raw, model: model), stopped: stopped)
-                let transcript = try await archiveResult(result, recordingID: stopped.recordingID, plan: stopped.archive?.plan)
+                let transcript = archiveResult(result, recordingID: stopped.recordingID, plan: stopped.archive?.plan)
                 Self.logTranscribed(stopped, route: "realtime", model: transcript.model, characters: transcript.text.count)
                 return Dictation(transcript: transcript, recordingID: stopped.recordingID, recording: stopped.audio.recording)
             } catch let error as RealtimeDictationError {
@@ -301,7 +301,7 @@ final class VoiceInputController {
         }
         let raw = try await transcribe(recording, configuration: stopped.configuration)
         let result = try await resolveVoices(raw, stopped: stopped)
-        let transcript = try await archiveResult(result, recordingID: recording.id, plan: stopped.archive?.plan)
+        let transcript = archiveResult(result, recordingID: recording.id, plan: stopped.archive?.plan)
         Self.logTranscribed(stopped, route: route, model: transcript.model, characters: transcript.text.count)
         return Dictation(transcript: transcript, recordingID: recording.id, recording: recording)
     }
@@ -362,7 +362,7 @@ final class VoiceInputController {
         do {
             let result = try await withAccount(resolved?.account) { [self] in
                 let raw = try await transcribe(recording, configuration: configuration)
-                let result = try await archiveResult(raw, recordingID: recording.id, plan: resolved?.plan)
+                let result = archiveResult(raw, recordingID: recording.id, plan: resolved?.plan)
                 VoiceModeDiagnostics.log("saved recording transcribed characters=\(result.text.count)")
                 return result
             }
@@ -518,7 +518,7 @@ final class VoiceInputController {
         return result
     }
 
-    private func archiveResult(_ transcript: DictationTranscript, recordingID: UUID, plan: DictationLibrary.DictationPlan?) async throws -> DictationTranscript {
+    private func archiveResult(_ transcript: DictationTranscript, recordingID: UUID, plan: DictationLibrary.DictationPlan?) -> DictationTranscript {
         guard let plan, let library else { return transcript }
         return library.result(transcript, recordingID: recordingID, plan: plan)
     }

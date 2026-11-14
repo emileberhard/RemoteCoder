@@ -322,7 +322,7 @@ may hold one host-scoped dictation-only router key, delivered through authorized
 uncached `GET /dictation` and stored with its origin in the device-only Keychain.
 `RC_CODEX_GATEWAY_DICTATION_ORIGIN` and `RC_CODEX_GATEWAY_DICTATION_KEY_FILE`
 are optional together. The key file is read on each request, must be an
-owner-owned 0600 regular file, and must not contain the gateway's inference key.
+0600 regular file owned by the gateway user, and must not contain the gateway's inference key.
 The route returns 404 when unconfigured and 503 when the credential is unreadable
 or invalid. Router 401 refreshes once; cached direct traffic needs no gateway.
 The router policy owns per-key abuse limits and revocation. Revoking a gateway

@@ -210,7 +210,5 @@ Azure MAI-Transcribe-2 uploads at stop through the public router origin;
 `DictationUploadAudio` selects lossless FLAC for both saved recordings and Only
 Mine labels. SpeechKit owns the encoder and preserves the local PCM recovery
 copy. ElevenLabs and AssemblyAI realtime modes use the router directly.
-The gateway relay remains for web and installed older builds. Weak-cellular
-upload time grows with recording size; FLAC's measured five-minute upload at
-1 Mbit/s took 44.35 seconds before device encoding. See the
-[probe evidence](https://github.com/emileberhard/tracker/issues/1053).
+The gateway relay remains for web and installed older builds. Upload time grows
+with the encoded recording size and the available uplink bandwidth.
