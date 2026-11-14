@@ -56,6 +56,9 @@ class RelayProvisioningTests(unittest.TestCase):
             "/usr/local/lib/remote-coder-relay/maintenance-recover --boot",
         )
         self.assertEqual(unit["Install"]["WantedBy"], "multi-user.target")
+        self.assertEqual(unit["Unit"]["StartLimitIntervalSec"], "0")
+        self.assertEqual(unit["Service"]["Restart"], "on-failure")
+        self.assertEqual(unit["Service"]["RestartSec"], "10s")
 
     def test_daily_maintenance_requires_reboot_and_never_catches_up(self):
         service = configparser.ConfigParser(interpolation=None)

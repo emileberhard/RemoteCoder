@@ -71,9 +71,10 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   been accepted. Provisioning stages the HAProxy startup guard without restarting
   HAProxy; that guard takes effect at the next coordinated restart. A busy or
   uncertain drain aborts and reopens admission.
-  On a new boot the staged recovery unit waits boundedly for local service
-  states, firewall, listeners and HAProxy generation; it reopens admission and
-  removes the marker only when those checks pass. The Mini must then run
+  On a new boot the staged recovery unit checks local service states, firewall,
+  listeners and HAProxy generation; it logs failures and systemd keeps retrying
+  bounded attempts until those checks pass. It then reopens admission and removes
+  the marker. The Mini must then run
   `just relay-probe` independently and report a failed public route as an
   outage. This probe is post-hoc; it is not part of the local boot decision.
   The post-boot Mini probe and its outage alert are not yet automated.

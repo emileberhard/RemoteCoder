@@ -66,12 +66,17 @@ def recover_new_boot(timeout_seconds):
             subprocess.SubprocessError,
         ) as error:
             last_error = str(error)
+            print(
+                f"relay new-boot recovery: {last_error}; retrying",
+                file=sys.stderr,
+                flush=True,
+            )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise RuntimeError(
                     f"new-boot relay recovery failed: {error}"
                 ) from error
-            time.sleep(min(1, remaining))
+            time.sleep(min(10, remaining))
 
 
 if __name__ == "__main__":
