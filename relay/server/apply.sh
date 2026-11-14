@@ -35,7 +35,7 @@ install -d -m 0700 "$activation_dir"
 source "$src/config-activation.sh"
 
 apt-get update -qq
-apt-get install -y -qq haproxy tinyproxy nftables unattended-upgrades >/dev/null
+apt-get install -y -qq conntrack haproxy iptables tinyproxy nftables unattended-upgrades >/dev/null
 
 record_config_change "$src/maintenance-firewall.nft" /usr/local/lib/remote-coder-relay/maintenance-firewall.nft haproxy
 record_config_change "$src/maintenance-startup" /usr/local/lib/remote-coder-relay/maintenance-startup haproxy
@@ -45,6 +45,7 @@ install -m 0644 "$src/maintenance-firewall.nft" /usr/local/lib/remote-coder-rela
 install -m 0755 "$src/maintenance-startup" /usr/local/lib/remote-coder-relay/maintenance-startup
 install -m 0755 "$src/maintenance-recover" /usr/local/lib/remote-coder-relay/maintenance-recover
 install -m 0644 "$src/maintenance_state.py" /usr/local/lib/remote-coder-relay/maintenance_state.py
+install -m 0644 "$src/maintenance_drain.py" /usr/local/lib/remote-coder-relay/maintenance_drain.py
 install -d -m 0755 /etc/systemd/system/haproxy.service.d
 install -m 0644 "$src/haproxy-maintenance.conf" /etc/systemd/system/haproxy.service.d/10-relay-maintenance.conf
 
