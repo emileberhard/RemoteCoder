@@ -36,6 +36,8 @@ class RelayInstallerTests(unittest.TestCase):
         for name in (
             "apply.sh",
             "policy-rc.d",
+            "maintenance-fence-check",
+            "dpkg-maintenance.conf",
             "config-activation.sh",
             "nftables.conf",
             "haproxy.cfg",
@@ -207,6 +209,18 @@ esac
             ],
         )
         self.assertTrue((self.root / "sbin/policy-rc.d").is_symlink())
+        self.assertEqual(
+            (
+                self.root / "etc/dpkg/dpkg.cfg.d/remote-coder-relay-maintenance"
+            ).read_text(),
+            (SERVER / "dpkg-maintenance.conf").read_text(),
+        )
+        self.assertEqual(
+            (
+                self.root / "local/lib/remote-coder-relay/maintenance-fence-check"
+            ).read_bytes(),
+            (SERVER / "maintenance-fence-check").read_bytes(),
+        )
         self.assertIn("systemctl restart haproxy", first)
         self.assertIn("systemctl restart tinyproxy", first)
         self.assertIn("systemctl reload ssh", first)
@@ -280,6 +294,39 @@ esac
                 self.assertEqual(calls, [])
                 self.assertFalse((self.root / "sbin/policy-rc.d").exists())
                 self.assertEqual(marker.read_text(), content)
+
+    def test_maintenance_guard_refuses_even_an_invalid_marker(self):
+        directory = self.root / "varlib/remote-coder-relay"
+        directory.mkdir()
+        marker = directory / "maintenance.json"
+
+        def run_guard():
+            return subprocess.run(
+                [
+                    "bwrap",
+                    "--unshare-all",
+                    "--die-with-parent",
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--bind",
+                    str(self.root / "varlib"),
+                    "/var/lib",
+                    "--",
+                    "/bin/sh",
+                    str(self.src / "maintenance-fence-check"),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(run_guard().returncode, 0)
+        marker.write_text("invalid")
+        self.assertNotEqual(run_guard().returncode, 0)
+        marker.unlink()
+        marker.symlink_to("missing")
+        self.assertNotEqual(run_guard().returncode, 0)
 
 
 if __name__ == "__main__":

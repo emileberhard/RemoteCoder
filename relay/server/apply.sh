@@ -8,11 +8,7 @@ umask 022
 install -d -m 0700 /var/lib/remote-coder-relay
 exec 9>/var/lib/remote-coder-relay/provision.lock
 flock -n 9 || { echo "Relay provisioning is already running" >&2; exit 1; }
-maintenance=/var/lib/remote-coder-relay/maintenance.json
-if [[ -e "$maintenance" || -L "$maintenance" ]]; then
-    echo "Relay maintenance is pending; recover it before provisioning" >&2
-    exit 1
-fi
+sh "$src/maintenance-fence-check"
 
 policy=/usr/sbin/policy-rc.d
 relay_policy=/usr/local/lib/remote-coder-relay/policy-rc.d
@@ -23,6 +19,11 @@ elif [[ -e "$policy" ]]; then
     exit 1
 fi
 install -d -m 0755 /usr/local/lib/remote-coder-relay
+install -m 0755 "$src/maintenance-fence-check" /usr/local/lib/remote-coder-relay/maintenance-fence-check.next
+mv -f /usr/local/lib/remote-coder-relay/maintenance-fence-check.next /usr/local/lib/remote-coder-relay/maintenance-fence-check
+install -d -m 0755 /etc/dpkg/dpkg.cfg.d
+install -m 0644 "$src/dpkg-maintenance.conf" /etc/dpkg/dpkg.cfg.d/remote-coder-relay-maintenance.next
+mv -f /etc/dpkg/dpkg.cfg.d/remote-coder-relay-maintenance.next /etc/dpkg/dpkg.cfg.d/remote-coder-relay-maintenance
 install -m 0755 "$src/policy-rc.d" "$relay_policy.next"
 mv -f "$relay_policy.next" "$relay_policy"
 if [[ ! -L "$policy" ]]; then
