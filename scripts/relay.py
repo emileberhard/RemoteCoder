@@ -151,6 +151,8 @@ def provision(_: argparse.Namespace) -> None:
         "haproxy-maintenance.conf": (RELAY / "server" / "haproxy-maintenance.conf").read_bytes(),
         "nftables-maintenance.conf": (RELAY / "server" / "nftables-maintenance.conf").read_bytes(),
         "remote-coder-relay-maintenance-recover.service": (RELAY / "server" / "remote-coder-relay-maintenance-recover.service").read_bytes(),
+        "remote-coder-relay-maintenance.service": (RELAY / "server" / "remote-coder-relay-maintenance.service").read_bytes(),
+        "remote-coder-relay-maintenance.timer": (RELAY / "server" / "remote-coder-relay-maintenance.timer").read_bytes(),
         "config-activation.sh": (RELAY / "server" / "config-activation.sh").read_bytes(),
         "authorized_keys": authorized_keys.encode(),
         "credential": credential.encode(),

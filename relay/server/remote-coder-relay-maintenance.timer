@@ -1,0 +1,11 @@
+[Unit]
+Description=Check relay reboot readiness at 06:33 Stockholm time
+
+[Timer]
+OnCalendar=*-*-* 06:33:00 Europe/Stockholm
+AccuracySec=1s
+Persistent=false
+Unit=remote-coder-relay-maintenance.service
+
+[Install]
+WantedBy=timers.target
