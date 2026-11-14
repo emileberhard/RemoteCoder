@@ -35,6 +35,9 @@ class RelayTransactionTests(unittest.TestCase):
         shutil.copyfile(
             SERVER / "maintenance_drain.py", self.src / "maintenance_drain.py"
         )
+        shutil.copyfile(
+            SERVER / "maintenance-prepare", self.src / "maintenance-prepare"
+        )
         systemctl = self.src / "systemctl"
         systemctl.write_text(
             "#!/bin/sh\n"
@@ -576,6 +579,37 @@ finally:
         self.assertEqual(
             (self.src / "systemctl-calls").read_text().splitlines(),
             ["reboot", "reboot"],
+        )
+
+    def test_prepare_entrypoint_fences_drains_and_enqueues_only_after_commit(self):
+        code = r"""
+import importlib.machinery, importlib.util, os, subprocess, sys
+from unittest.mock import patch
+sys.path.insert(0, "/tmp/fixture")
+import maintenance_drain as drain
+import maintenance_state as state
+loader = importlib.machinery.SourceFileLoader("prepare_fixture", "/tmp/fixture/maintenance-prepare")
+spec = importlib.util.spec_from_loader(loader.name, loader)
+prepare = importlib.util.module_from_spec(spec)
+loader.exec_module(prepare)
+child = subprocess.Popen(["/bin/sleep", "10"])
+try:
+    identity = {"master": state.worker_identity(os.getpid()), "worker": state.worker_identity(child.pid)}
+    with patch.object(prepare, "_reboot_window", return_value=True), patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "haproxy_identity", return_value=identity), patch.object(drain, "wait_for_candidate"), patch.object(drain, "wait_for_drain"), patch.object(drain, "snapshot", return_value=False):
+        prepare.prepare()
+    assert state.read_marker()["phase"] == "committed"
+finally:
+    child.terminate()
+    child.wait(timeout=5)
+"""
+        result = self.run_owner(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            (self.src / "systemctl-calls").read_text().splitlines(), ["reboot"]
+        )
+        self.assertEqual(
+            json.loads((self.directory / "maintenance.json").read_text())["phase"],
+            "committed",
         )
 
 

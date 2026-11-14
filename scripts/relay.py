@@ -145,6 +145,7 @@ def provision(_: argparse.Namespace) -> None:
         "maintenance-firewall.nft": (RELAY / "server" / "maintenance-firewall.nft").read_bytes(),
         "maintenance-startup": (RELAY / "server" / "maintenance-startup").read_bytes(),
         "maintenance-recover": (RELAY / "server" / "maintenance-recover").read_bytes(),
+        "maintenance-prepare": (RELAY / "server" / "maintenance-prepare").read_bytes(),
         "maintenance_state.py": (RELAY / "server" / "maintenance_state.py").read_bytes(),
         "maintenance_drain.py": (RELAY / "server" / "maintenance_drain.py").read_bytes(),
         "haproxy-maintenance.conf": (RELAY / "server" / "haproxy-maintenance.conf").read_bytes(),

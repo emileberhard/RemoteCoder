@@ -46,6 +46,7 @@ record_config_change "$src/remote-coder-relay-maintenance-recover.service" /etc/
 install -m 0644 "$src/maintenance-firewall.nft" /usr/local/lib/remote-coder-relay/maintenance-firewall.nft
 install -m 0755 "$src/maintenance-startup" /usr/local/lib/remote-coder-relay/maintenance-startup
 install -m 0755 "$src/maintenance-recover" /usr/local/lib/remote-coder-relay/maintenance-recover
+install -m 0755 "$src/maintenance-prepare" /usr/local/lib/remote-coder-relay/maintenance-prepare
 install -m 0644 "$src/maintenance_state.py" /usr/local/lib/remote-coder-relay/maintenance_state.py
 install -m 0644 "$src/maintenance_drain.py" /usr/local/lib/remote-coder-relay/maintenance_drain.py
 install -d -m 0755 /etc/systemd/system/haproxy.service.d
