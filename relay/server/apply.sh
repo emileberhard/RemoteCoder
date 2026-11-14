@@ -37,9 +37,6 @@ source "$src/config-activation.sh"
 apt-get update -qq
 apt-get install -y -qq conntrack haproxy iptables tinyproxy nftables unattended-upgrades >/dev/null
 
-record_config_change "$src/maintenance-firewall.nft" /usr/local/lib/remote-coder-relay/maintenance-firewall.nft haproxy
-record_config_change "$src/maintenance-startup" /usr/local/lib/remote-coder-relay/maintenance-startup haproxy
-record_config_change "$src/haproxy-maintenance.conf" /etc/systemd/system/haproxy.service.d/10-relay-maintenance.conf haproxy
 record_config_change "$src/haproxy-maintenance.conf" /etc/systemd/system/haproxy.service.d/10-relay-maintenance.conf daemon-reload
 record_config_change "$src/nftables-maintenance.conf" /etc/systemd/system/nftables.service.d/10-relay-maintenance.conf daemon-reload
 record_config_change "$src/remote-coder-relay-maintenance-recover.service" /etc/systemd/system/remote-coder-relay-maintenance-recover.service daemon-reload
@@ -60,7 +57,6 @@ install -m 0644 "$src/remote-coder-relay-maintenance.service" /etc/systemd/syste
 install -m 0644 "$src/remote-coder-relay-maintenance.timer" /etc/systemd/system/remote-coder-relay-maintenance.timer
 activate_config_change daemon-reload daemon-reload
 systemctl enable --quiet remote-coder-relay-maintenance-recover
-systemctl enable --quiet --now remote-coder-relay-maintenance.timer
 
 record_config_change "$src/nftables.conf" /etc/nftables.conf nftables
 install -m 0644 "$src/nftables.conf" /etc/nftables.conf
