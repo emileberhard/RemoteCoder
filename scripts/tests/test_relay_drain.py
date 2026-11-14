@@ -2,15 +2,29 @@ import importlib
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 SERVER = Path(__file__).resolve().parents[2] / "relay/server"
 sys.path.insert(0, str(SERVER))
 drain = importlib.import_module("maintenance_drain")
+state = importlib.import_module("maintenance_state")
 
 
 class RelayDrainTests(unittest.TestCase):
+    def test_reboot_window_uses_stockholm_time_in_winter_and_summer(self):
+        stockholm = ZoneInfo("Europe/Stockholm")
+        with patch.object(state, "datetime") as clock:
+            for month in (1, 7):
+                for minute, expected in ((32, False), (33, True), (34, False)):
+                    clock.now.return_value = datetime(
+                        2026, month, 14, 6, minute, tzinfo=stockholm
+                    )
+                    self.assertEqual(state._reboot_window(), expected)
+                    clock.now.assert_called_with(stockholm)
+
     def test_local_boot_health_requires_services_fence_and_all_listeners(self):
         units = []
         identity = {"worker": {"pid": 7}}

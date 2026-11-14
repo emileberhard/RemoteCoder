@@ -35,6 +35,15 @@ class RelayTransactionTests(unittest.TestCase):
         shutil.copyfile(
             SERVER / "maintenance_drain.py", self.src / "maintenance_drain.py"
         )
+        systemctl = self.src / "systemctl"
+        systemctl.write_text(
+            "#!/bin/sh\n"
+            'test "$1" = reboot || exit 1\n'
+            'grep -q \'"phase":"committed"\' /var/lib/remote-coder-relay/maintenance.json || exit 1\n'
+            'printf "%s\\n" "$1" >> /tmp/fixture/systemctl-calls\n'
+            "test ! -e /tmp/fixture/fail-systemctl\n"
+        )
+        systemctl.chmod(0o755)
         self.sbin = self.root / "sbin"
         self.sbin.mkdir()
         nft = self.sbin / "nft"
@@ -56,8 +65,24 @@ class RelayTransactionTests(unittest.TestCase):
                 "0",
                 "--die-with-parent",
                 "--ro-bind",
-                "/",
-                "/",
+                "/usr",
+                "/usr",
+                "--symlink",
+                "usr/bin",
+                "/bin",
+                "--symlink",
+                "usr/sbin",
+                "/sbin",
+                "--symlink",
+                "usr/lib",
+                "/lib",
+                "--symlink",
+                "usr/lib64",
+                "/lib64",
+                "--dir",
+                "/etc",
+                "--dir",
+                "/var",
                 "--tmpfs",
                 "/tmp",
                 "--bind",
@@ -69,6 +94,9 @@ class RelayTransactionTests(unittest.TestCase):
                 "--bind",
                 str(self.sbin),
                 "/usr/sbin",
+                "--ro-bind",
+                str(self.src / "systemctl"),
+                "/usr/bin/systemctl",
                 "--proc",
                 "/proc",
                 "--",
@@ -443,6 +471,65 @@ finally:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((self.directory / "maintenance.json").exists())
         self.assertFalse((self.src / "nft-calls").exists())
+
+    def test_reboot_enqueue_requires_idle_window_and_persists_uncertainty(self):
+        code = r"""
+import contextlib, os, subprocess, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, "/tmp/fixture")
+import maintenance_drain as drain
+import maintenance_state as state
+child = subprocess.Popen(["/bin/sleep", "10"])
+try:
+    for case in ("wrong_time", "busy", "elapsed_before_commit", "elapsed_after_commit", "commit_uncertain", "timeout", "failed", "success"):
+        with state.RelayTransaction() as transaction:
+            transaction.prepare(os.getpid(), child.pid)
+            transaction.fence()
+            with patch.object(drain, "wait_for_drain"):
+                transaction.drain(30)
+            failure = Path("/tmp/fixture/fail-systemctl")
+            if case == "failed":
+                failure.touch()
+            windows = {"wrong_time": [False], "elapsed_before_commit": [True, False], "elapsed_after_commit": [True, True, False]}.get(case, [True, True, True])
+            original_write = state._write_marker
+            def uncertain_write(marker):
+                original_write(marker)
+                raise OSError("lost completion after durable write")
+            writer = patch.object(state, "_write_marker", side_effect=uncertain_write) if case == "commit_uncertain" else contextlib.nullcontext()
+            request = patch.object(state.subprocess, "run", side_effect=subprocess.TimeoutExpired("systemctl", 15)) if case == "timeout" else contextlib.nullcontext()
+            with patch.object(state, "_reboot_window", side_effect=windows), patch.object(drain, "snapshot", return_value=case == "busy"), writer, request:
+                try:
+                    transaction.enqueue_reboot()
+                except (RuntimeError, OSError):
+                    if case == "success":
+                        raise
+                else:
+                    assert case == "success"
+            if case in ("wrong_time", "busy", "elapsed_before_commit"):
+                assert not state.MARKER.exists()
+                assert not Path("/tmp/fixture/systemctl-calls").exists()
+            else:
+                assert state.read_marker()["phase"] == "committed"
+                try:
+                    transaction.abort()
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("committed admission reopened")
+                failure.unlink(missing_ok=True)
+        if state.MARKER.exists():
+            state.MARKER.unlink()
+finally:
+    child.terminate()
+    child.wait(timeout=5)
+"""
+        result = self.run_owner(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            (self.src / "systemctl-calls").read_text().splitlines(),
+            ["reboot", "reboot"],
+        )
 
 
 if __name__ == "__main__":
