@@ -323,6 +323,45 @@ finally:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((self.directory / "maintenance.json").exists())
 
+    def test_ambiguous_fence_failure_reopens_or_keeps_the_marker(self):
+        code = r"""
+import os, subprocess, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, "/tmp/fixture")
+import maintenance_state as state
+child = subprocess.Popen(["/bin/sleep", "10"])
+original_run = subprocess.run
+def interrupted(command, **kwargs):
+    if command[-1] == str(state.FIREWALL):
+        raise subprocess.TimeoutExpired(command, 10)
+    return original_run(command, **kwargs)
+try:
+    with state.RelayTransaction() as transaction:
+        for reopening_fails in (False, True):
+            transaction.prepare(os.getpid(), child.pid)
+            failure = Path("/tmp/fixture/fail-nft")
+            if reopening_fails:
+                failure.touch()
+            with patch.object(state.subprocess, "run", side_effect=interrupted):
+                try:
+                    transaction.fence()
+                except (subprocess.TimeoutExpired, RuntimeError):
+                    pass
+                else:
+                    raise AssertionError("an uncertain fence was accepted")
+            assert state.MARKER.exists() == reopening_fails
+            if reopening_fails:
+                failure.unlink()
+                transaction.abort()
+finally:
+    child.terminate()
+    child.wait(timeout=5)
+"""
+        result = self.run_owner(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.directory / "maintenance.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
