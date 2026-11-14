@@ -68,9 +68,10 @@ struct ComposerDictationButton: View {
                               hint: "Double-tap and hold to dictate, then lift to send.", identifier: "composer-dictate",
                               accessibilityActions: [], onPress: pressChanged, onContactEnded: {},
                               onTap: onTap, onHold: holdChanged)
+                    .disabled(phase?.isHeld == false)
             }
             .animation(reduceMotion ? .smooth(duration: 0.15) : .spring(duration: 0.3, bounce: 0.2), value: phase)
-            .disabled(isTranscribing || phase?.isHeld == false)
+            .disabled(isTranscribing && phase == nil)
             .tooltip(isTranscribing ? "Transcribing recording" : "Dictate")
     }
 

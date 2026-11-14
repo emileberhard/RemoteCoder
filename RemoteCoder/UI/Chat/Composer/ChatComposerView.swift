@@ -708,7 +708,10 @@ struct ChatComposerView: View {
             }
             if let phase {
                 quickDictationStatus(phase)
-                    .transition(.opacity)
+                    .zIndex(1)
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(reduceMotion ? nil : .smooth(duration: 0.2).delay(0.1)),
+                        removal: .opacity.animation(reduceMotion ? nil : .easeOut(duration: 0.08))))
             }
         }
         .frame(maxWidth: .infinity)
