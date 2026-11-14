@@ -2673,9 +2673,9 @@ profile status. Saved recovery recordings skip Only Mine because they have no
 live watcher evidence. Failure or a missed delivery budget keeps the selected provider's text. User cancellation cancels both requests.
 
 `DictationTranscript` carries delivered and everyone's text, filter outcome and
-actual model provenance. Filtering precedes shared cleanup. The library stores
-the original provider output, any filtered Azure output as a child version, and
-cleanup as a further child, using existing result kinds. The local composer
+actual model provenance. The library stores the original provider output and
+any filtered Azure output as a child version using existing result kinds.
+Historical cleanup versions remain readable. The local composer
 persists everyone's text and tracked insertion ranges with its draft. Restore
 Everyone replaces those dictation ranges without another transcription;
 unrelated edits move ranges, replacing their text removes them, and sending

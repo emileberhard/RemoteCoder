@@ -93,7 +93,7 @@ struct DictationVoiceTests {
         #expect(voices.status(for: hostID) == .learning)
         voices.failed(SpeechKitError.invalidResponse, stage: .learning)
         #expect(voices.status(for: hostID) == .learning)
-        voices.failed(SpeechKitError.relayRejected(kind: "credentialsUnavailable"), stage: .filter, hostID: hostID)
+        voices.failed(SpeechKitError.httpFailure(statusCode: 403, body: ""), stage: .filter, hostID: hostID)
         #expect(voices.status(for: hostID) == .unavailable)
         #expect(voices.status(for: UUID()) == .learning)
         #expect(voices.status(for: nil) == .learning)
@@ -222,7 +222,7 @@ struct DictationVoiceTests {
             requested.continuation.yield(())
             requested.continuation.finish()
             if slow { try await Task.sleep(for: .seconds(30)) }
-            throw SpeechKitError.relayRejected(kind: "operationNotAllowed")
+            throw SpeechKitError.httpFailure(statusCode: 403, body: "")
         }
         for await _ in requested.stream { break }
         let original = DictationTranscript(text: "Every selected word.", model: "selected/model")
@@ -379,7 +379,7 @@ private final class InjectedVoiceTranscriber: TranscriptionService {
         requested.continuation.yield(())
         requested.continuation.finish()
         uploadFinished(.milliseconds(10))
-        if refused { throw SpeechKitError.relayRejected(kind: "credentialsUnavailable") }
+        if refused { throw SpeechKitError.httpFailure(statusCode: 403, body: "") }
         if labelledDelay > .zero { try await Task.sleep(for: labelledDelay) }
         return phrases
     }
