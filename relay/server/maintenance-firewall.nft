@@ -1,0 +1,6 @@
+table inet remote_coder_relay_maintenance {
+    chain input {
+        type filter hook input priority -1; policy accept;
+        tcp dport 443 ct state new reject with tcp reset
+    }
+}
