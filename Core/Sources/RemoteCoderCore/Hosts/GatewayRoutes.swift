@@ -826,3 +826,15 @@ actor GatewayRoutes {
         }
     }
 }
+
+extension GatewayRoutes {
+    func dictationCredential() async throws -> DictationRouterCredential {
+        guard let url = host.gatewayHTTPBaseURL()?.appending(path: "dictation") else {
+            throw GatewayClient.ClientError.invalidURL
+        }
+        let data = try await send(readRequest(url), traffic: .read) { request, session in
+            try await Self.requireOK(session.data(for: request), path: "dictation")
+        }
+        return try JSONDecoder().decode(DictationRouterCredential.self, from: data)
+    }
+}

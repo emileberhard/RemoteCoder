@@ -23,7 +23,7 @@ struct RemoteCoderTranscriptionService: TranscriptionService {
             case .emptyResponse:
                 return "Transcription returned no text."
             case .audioTooLarge:
-                return "The recording exceeds the speech relay audio limit."
+                return "The recording exceeds the dictation audio limit."
             }
         }
     }
@@ -35,104 +35,73 @@ struct RemoteCoderTranscriptionService: TranscriptionService {
 
     @concurrent
     func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
-        let engine = try await batchEngine(for: configuration.model)
-        let audio = try await recording.transcriptionAudio(
-            maximumByteCount: min(engine.maximumAudioByteCount, GatewaySpeechAccess.maximumRelayedAudioByteCount)
-        )
-        return DictationTranscript(text: try await transcribe(audio, with: engine, configuration: configuration), model: configuration.model.batchLibraryID)
+        do {
+            return try await access.perform { providerAccess in
+                let engine = try batchEngine(for: configuration.model, access: providerAccess)
+                let audio = try await DictationUploadAudio.recording(recording,
+                    model: configuration.model, maximumByteCount: min(engine.maximumAudioByteCount, GatewaySpeechAccess.maximumAudioByteCount))
+                return DictationTranscript(text: try await transcribe(audio, with: engine, configuration: configuration), model: configuration.model.batchLibraryID)
+            }
+        } catch {
+            throw access.explain(error, provider: configuration.model.provider.gatewayProvider)
+        }
     }
 
     @concurrent func speakerPhrases(_ pcm16: Data, configuration: TranscriptionConfiguration,
         uploadFinished: @escaping @Sendable (Duration) -> Void) async throws -> [SpeakerPhrase] {
-        guard pcm16.count <= GatewaySpeechAccess.maximumRelayedAudioByteCount else { throw ServiceError.audioTooLarge }
-        let audio = try TranscriptionAudio(data: PCM16WAVFile.data(pcmData: pcm16, sampleRate: 16_000),
-            fileName: "dictation.wav", mimeType: "audio/wav", fileExtension: "wav")
-        let provider = AzureSpeechTranscriptionProvider(configuration: try await AzureSpeechConfiguration.make(model: DictationVoicePolicy.labelledModel.provider, access: access))
-        return try await provider.transcribeSpeakers(.init(audio: audio, languageHints: configuration.languageHints,
-            customVocabulary: configuration.customVocabulary), uploadFinished: uploadFinished)
+        let audio = try DictationUploadAudio.speakers(pcm16)
+        guard audio.data.count <= GatewaySpeechAccess.maximumAudioByteCount else { throw ServiceError.audioTooLarge }
+        return try await access.perform { providerAccess in
+            let provider = AzureSpeechTranscriptionProvider(configuration: try AzureSpeechConfiguration.make(access: providerAccess))
+            return try await provider.transcribeSpeakers(.init(audio: audio, languageHints: configuration.languageHints,
+                customVocabulary: configuration.customVocabulary), uploadFinished: uploadFinished)
+        }
     }
 
     private func transcribe(_ audio: TranscriptionAudio, with engine: TranscriptionEngine,
                             configuration: TranscriptionConfiguration) async throws -> String {
-        let result: TranscriptionResult
-        do {
-            result = try await engine.transcribe(
-                TranscriptionRequest(
-                    audio: audio,
-                    languageHints: configuration.languageHints,
-                    customVocabulary: configuration.customVocabulary,
-                    instructions: nil
-                )
-            )
-        } catch {
-            throw access.explain(error, provider: configuration.model.provider.gatewayProvider)
-        }
+        let result = try await engine.transcribe(
+            TranscriptionRequest(audio: audio, languageHints: configuration.languageHints,
+                customVocabulary: configuration.customVocabulary, instructions: nil)
+        )
         guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ServiceError.emptyResponse }
         return result.text
     }
 
     /// Streaming models transcribe while recording; a saved dictation goes to
     /// the same provider's closest batch model instead.
-    private func batchEngine(for model: TranscriptionModel) async throws -> TranscriptionEngine {
+    private func batchEngine(for model: TranscriptionModel, access: SpeechProviderAccess) throws -> TranscriptionEngine {
         switch model {
         case .elevenLabsScribeV2Realtime, .elevenLabsScribeV2:
-            let configuration = ElevenLabsProviderConfiguration(access: try await access.access(to: .elevenLabs))
+            let configuration = ElevenLabsProviderConfiguration(access: access)
             return TranscriptionEngine(provider: ElevenLabsTranscriptionProvider(configuration: configuration))
-        case .openAIGPT4oMini, .openAIGPT4oMiniTranscribeRealtime:
-            return try await openAIEngine(model: "gpt-4o-mini-transcribe-2025-12-15")
-        case .openAIGPT4oTranscribe, .openAIGPT4oTranscribeRealtime:
-            return try await openAIEngine(model: "gpt-4o-transcribe")
-        case .openAIWhisper1, .openAIRealtimeWhisper:
-            return try await openAIEngine(model: "whisper-1")
-        case .gemini35Flash:
-            let configuration = try GeminiProviderConfiguration(
-                access: try await access.access(to: .gemini),
-                model: "gemini-3.5-flash"
-            )
-            return TranscriptionEngine(provider: GeminiTranscriptionProvider(configuration: configuration))
-        case .gemini35TranscribeSmart, .gemini35TranscribeLiveSmart:
-            return try await geminiTranscribeEngine(mode: .smart)
-        case .gemini35TranscribeVerbatim, .gemini35TranscribeLiveVerbatim:
-            return try await geminiTranscribeEngine(mode: .verbatim)
         case .assemblyAIUniversal35Pro, .assemblyAIUniversal35ProRealtime:
-            let configuration = try AssemblyAIProviderConfiguration(
-                access: try await access.access(to: .assemblyAI),
-                pollInterval: .seconds(1)
-            )
+            let configuration = try AssemblyAIProviderConfiguration(access: access, pollInterval: .seconds(1))
             return TranscriptionEngine(provider: AssemblyAITranscriptionProvider(configuration: configuration))
         case .azureMAITranscribe2:
-            return try await azureEngine(model: .maiTranscribe2)
+            return TranscriptionEngine(provider: AzureSpeechTranscriptionProvider(configuration: try AzureSpeechConfiguration.make(access: access)))
         }
-    }
-
-    private func openAIEngine(model: String) async throws -> TranscriptionEngine {
-        let configuration = try OpenAIProviderConfiguration(access: try await access.access(to: .openAI), model: model)
-        return TranscriptionEngine(provider: OpenAITranscriptionProvider(configuration: configuration))
-    }
-
-    private func geminiTranscribeEngine(mode: GeminiTranscriptionMode) async throws -> TranscriptionEngine {
-        let configuration = try GeminiTranscribeProviderConfiguration(access: try await access.access(to: .gemini), mode: mode)
-        return TranscriptionEngine(provider: GeminiTranscribeProvider(configuration: configuration))
-    }
-
-    /// Azure only accepts WAV/MP3/FLAC files. Saved dictations reach it as
-    /// WAV; one above the upload cap, which SpeechKit exports as AAC, is
-    /// rejected by the provider.
-    private func azureEngine(model: AzureSpeechModel) async throws -> TranscriptionEngine {
-        TranscriptionEngine(
-            provider: AzureSpeechTranscriptionProvider(
-                configuration: try await AzureSpeechConfiguration.make(model: model, access: access)
-            )
-        )
     }
 }
 
 enum AzureSpeechConfiguration {
-    static func make(model: AzureSpeechModel, access: GatewaySpeechAccess) async throws -> AzureSpeechProviderConfiguration {
-        try AzureSpeechProviderConfiguration(
-            access: try await access.access(to: .azure),
-            model: model,
-            modelOptions: .init(transcribeStyle: .clean)
-        )
+    static func make(access: SpeechProviderAccess) throws -> AzureSpeechProviderConfiguration {
+        try AzureSpeechProviderConfiguration(access: access, model: .maiTranscribe2,
+            modelOptions: .init(transcribeStyle: .clean))
+    }
+}
+
+enum DictationUploadAudio {
+    static func recording(_ recording: DictationRecording<ExecutionTarget>, model: TranscriptionModel,
+                          maximumByteCount: Int) async throws -> TranscriptionAudio {
+        if model.provider == .azureSpeech {
+            return try await recording.flacAudio(maximumByteCount: maximumByteCount)
+        }
+        return try await recording.transcriptionAudio(maximumByteCount: maximumByteCount)
+    }
+
+    static func speakers(_ pcm16: Data) throws -> TranscriptionAudio {
+        try TranscriptionAudio(data: PCM16FLACFile.data(pcmData: pcm16, sampleRate: 16_000),
+            fileName: "dictation.flac", mimeType: "audio/flac", fileExtension: "flac")
     }
 }

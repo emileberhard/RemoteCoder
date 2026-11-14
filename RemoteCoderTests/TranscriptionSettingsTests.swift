@@ -13,31 +13,16 @@ struct TranscriptionSettingsTests {
         #expect(TranscriptionSettings.model(defaults: defaults) == .elevenLabsScribeV2Realtime)
     }
 
-    @Test func sharedVerbatimPreferencesRemainEffectiveWhenArchivingIsOff() throws {
-        let smart = TranscriptionModel.gemini35TranscribeLiveSmart
-        let verbatim = TranscriptionModel.gemini35TranscribeLiveVerbatim
-        #expect(verbatim.libraryID == "google/gemini-3.5-transcribe-live/realtime?mode=verbatim")
-        let profile = DictationProfile(archiveEnabled: false, preferredModel: verbatim.libraryID,
-            languages: ["de", "sv"], dictionary: ["RemoteCoder"], cleanupEnabled: true,
-            outputLanguage: nil, thinkingLevel: "minimal")
-        let plan = DictationPlan(unverifiedProfile: profile, context: .chat,
-            capabilities: try DictationCapabilities(models: [smart.libraryID, verbatim.libraryID],
-                fallbackModel: smart.libraryID, supportsCleanup: true,
-                modelOptions: [smart.libraryID: smart.libraryOptions, verbatim.libraryID: verbatim.libraryOptions]))
-        let configuration = try TranscriptionConfiguration(plan: plan,
-            local: TranscriptionConfiguration(model: smart, language: .english))
-        #expect(configuration.model == verbatim)
-        #expect(configuration.languageHints == ["de", "sv"])
-        #expect(configuration.customVocabulary == ["RemoteCoder"])
-        #expect(!plan.archiveEnabled)
-        #expect(plan.cleanupEnabled)
-    }
-
-    @Test func selectionsSavedBeforeTheProviderPickerStillResolve() {
-        // These raw values were persisted by earlier builds and must keep decoding.
+    @Test func removedProviderSelectionsUseTheAvailableDefault() throws {
+        let suiteName = "TranscriptionSettingsTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        for selection in ["openAIGPT4oMini", "gemini35Flash"] {
+            defaults.set(selection, forKey: "transcription.model")
+            #expect(TranscriptionSettings.model(defaults: defaults) == .elevenLabsScribeV2Realtime)
+        }
         #expect(TranscriptionModel(rawValue: "elevenLabsScribeV2Realtime") == .elevenLabsScribeV2Realtime)
-        #expect(TranscriptionModel(rawValue: "openAIGPT4oMini") == .openAIGPT4oMini)
-        #expect(TranscriptionModel(rawValue: "gemini35Flash") == .gemini35Flash)
+        #expect(TranscriptionModel.azureMAITranscribe2.capture == .batch)
     }
 
     @Test @MainActor func choosingAProviderMovesTheModelIntoIt() {
@@ -45,8 +30,8 @@ struct TranscriptionSettingsTests {
         let original = store.model
         defer { store.model = original }
 
-        store.model = .openAIGPT4oTranscribe
-        #expect(store.provider == .openAI)
+        store.model = .elevenLabsScribeV2
+        #expect(store.provider == .elevenLabs)
 
         store.provider = .assemblyAI
         #expect(store.model == TranscriptionProvider.assemblyAI.models.first)
@@ -72,7 +57,7 @@ struct RealtimeTranscriptionTests {
         for model in TranscriptionModel.allCases {
             guard case .streaming = model.capture else { continue }
             let transcription = try await RealtimeTranscription.make(configuration: TranscriptionConfiguration(model: model, language: .english), access: .fixture)
-            #expect(transcription.session.sampleRate == (model.provider == .openAI ? 24_000 : 16_000), "\(model)")
+            #expect(transcription.session.sampleRate == 16_000, "\(model)")
         }
     }
 }

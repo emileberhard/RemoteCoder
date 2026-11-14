@@ -112,7 +112,7 @@ struct DictationVoiceTests {
         let hostID = UUID()
         let controller = VoiceInputController(access: .fixture, owner: ExecutionTarget(hostID: hostID),
             transcriber: transcriber, recorder: VoiceFixtureRecorder(pcm: fixture.mix), recordings: recordings.store,
-            voices: voices, configuration: { .init(model: .openAIGPT4oMini, language: .english, voiceChoice: .onlyMine) })
+            voices: voices, configuration: { .init(model: .elevenLabsScribeV2, language: .english, voiceChoice: .onlyMine) })
         controller.markRecordingRequested()
         try await controller.startAsync()
         try await controller.stopRecording()
@@ -134,11 +134,11 @@ struct DictationVoiceTests {
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         #expect(TranscriptionConfiguration(model: .azureMAITranscribe2, language: .automatic).voices == .onlyMine)
-        #expect(TranscriptionConfiguration(model: .openAIGPT4oTranscribeRealtime, language: .automatic).voices == .everyone)
+        #expect(TranscriptionConfiguration(model: .elevenLabsScribeV2Realtime, language: .automatic).voices == .everyone)
         #expect(TranscriptionSettings.voiceChoice(defaults: defaults) == nil)
         TranscriptionSettings.setVoices(.onlyMine, defaults: defaults)
         #expect(TranscriptionSettings.voiceChoice(defaults: defaults) == .onlyMine)
-        #expect(TranscriptionConfiguration(model: .openAIGPT4oTranscribeRealtime, language: .automatic,
+        #expect(TranscriptionConfiguration(model: .elevenLabsScribeV2Realtime, language: .automatic,
             voiceChoice: TranscriptionSettings.voiceChoice(defaults: defaults)).voices == .onlyMine)
     }
 
@@ -155,13 +155,13 @@ struct DictationVoiceTests {
         let transcriber = InjectedVoiceTranscriber(phrases: fixture.phrases, refused: false, waitsForRequest: false)
         let controller = VoiceInputController(access: .fixture, owner: ExecutionTarget(hostID: UUID()),
             transcriber: transcriber, recorder: VoiceFixtureRecorder(pcm: fixture.owner), recordings: recordings.store,
-            voices: voices, configuration: { .init(model: .openAIGPT4oMini, language: .english, voiceChoice: .onlyMine) })
+            voices: voices, configuration: { .init(model: .elevenLabsScribeV2, language: .english, voiceChoice: .onlyMine) })
         controller.markRecordingRequested()
         try await controller.startAsync()
         try await controller.stopRecording()
         let result = try await controller.transcribe()
         #expect(result.transcript.text == "Selected provider text.")
-        #expect(result.transcript.model == TranscriptionModel.openAIGPT4oMini.batchLibraryID)
+        #expect(result.transcript.model == TranscriptionModel.elevenLabsScribeV2.batchLibraryID)
         #expect(transcriber.requestCount.withLock { $0 } == 0)
         #expect(try await recordings.listedIDs() == [result.recordingID])
     }
@@ -190,7 +190,7 @@ struct DictationVoiceTests {
     }
 
     @Test(arguments: [(TranscriptionModel.azureMAITranscribe2.libraryID, 1), (TranscriptionModel.azureMAITranscribe2.batchLibraryID, 1),
-                      (TranscriptionModel.openAIGPT4oMini.batchLibraryID, 0)])
+                      (TranscriptionModel.elevenLabsScribeV2.batchLibraryID, 0)])
     func onlyTheLabelledModelsLineBreakRequestsLabels(model: String, requests: Int) async throws {
         let fixture = try await VoiceFixture(trusted: true)
         defer { fixture.cleanUp() }
@@ -267,7 +267,7 @@ struct DictationVoiceTests {
         let transcriber = InjectedVoiceTranscriber(phrases: fixture.phrases, refused: false, waitsForRequest: true, labelledDelay: .seconds(30))
         let controller = VoiceInputController(access: .fixture, owner: ExecutionTarget(hostID: UUID()),
             transcriber: transcriber, recorder: VoiceFixtureRecorder(pcm: fixture.mix), recordings: recordings.store,
-            voices: voices, configuration: { .init(model: .openAIGPT4oMini, language: .english, voiceChoice: .onlyMine) })
+            voices: voices, configuration: { .init(model: .elevenLabsScribeV2, language: .english, voiceChoice: .onlyMine) })
         controller.markRecordingRequested()
         try await controller.startAsync()
         try await controller.stopRecording()

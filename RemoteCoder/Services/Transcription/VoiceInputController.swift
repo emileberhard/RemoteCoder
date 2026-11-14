@@ -519,7 +519,7 @@ final class VoiceInputController {
 
     private func archiveResult(_ transcript: DictationTranscript, recordingID: UUID, plan: DictationLibrary.DictationPlan?) async throws -> DictationTranscript {
         guard let plan, let library else { return transcript }
-        return try await library.result(transcript, recordingID: recordingID, plan: plan, access: access)
+        return library.result(transcript, recordingID: recordingID, plan: plan)
     }
 
     private static func finish(_ writer: DictationRecordingWriter<ExecutionTarget>) async -> SavedAudio {

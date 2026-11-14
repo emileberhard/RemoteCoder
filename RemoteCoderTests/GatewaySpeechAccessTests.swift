@@ -1,105 +1,103 @@
 import Foundation
+import Security
 import SpeechKit
 import Testing
 @testable import RemoteCoder
 
 struct GatewaySpeechAccessTests {
-    private let host = GatewayHostConfiguration(
-        id: UUID(), name: "Mac Mini", hostname: "mini.example", port: 8787, authToken: "rc1.phone.secret"
-    )
+    private let host = GatewayHostConfiguration(id: UUID(), name: "Test", hostname: "offline.invalid", port: 443, authToken: "gateway-secret")
 
-    @Test func providersRelayThroughTheHostWithItsCredential() async throws {
-        guard case .relay(let relay) = try await GatewaySpeechAccess(host: host, routes: .isolated(host)).access(to: .assemblyAI) else {
-            Issue.record("AssemblyAI must relay through the gateway")
+    @Test(arguments: GatewaySpeechProvider.allCases)
+    func everySupportedProviderUsesTheDirectRouter(provider: GatewaySpeechProvider) async throws {
+        let remote = DictationAccessSource()
+        let access = access(remote: remote)
+        guard case .router(let router) = try await access.access(to: provider) else {
+            Issue.record("Dictation must use the router directly")
             return
         }
-        #expect(relay.baseURL.absoluteString == "https://mini.example:8787/speech/assemblyai")
-        #expect(relay.bearerToken == "rc1.phone.secret")
-        #expect(relay.transport != nil)
-
-        var trusted = host
-        trusted.transport = .trustedNetwork
-        guard case .relay(let azure) = try await GatewaySpeechAccess(host: trusted, routes: .isolated(trusted)).access(to: .azure) else {
-            Issue.record("Azure must relay through the gateway")
-            return
-        }
-        #expect(azure.baseURL.absoluteString == "http://mini.example:8787/speech/azure")
+        #expect(router.origin.absoluteString == "https://dictation.example")
+        #expect(router.key == "dictation-key-1")
     }
 
-    @Test func speechFollowsTheRelayTheGatewayConnectedOver() async throws {
-        let directory = URL.temporaryDirectory.appending(path: "speech-routes-\(UUID())")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let endpoint = try GatewayLANEndpoint(host: "mini.local", port: 8789, spkiSHA256: Data(repeating: 1, count: 32))
-        let relay = try GatewayRelayEndpoint(proxyHost: "relay.invalid", proxyPort: 443, proxySPKISHA256: Data(repeating: 2, count: 32),
-                                             targetHost: "mini.relay.invalid", targetPort: 20001, username: "relay", password: "secret")
-        let learned = { (key: String, value: Data) throws -> Data in
-            try JSONSerialization.data(withJSONObject: ["learnedFrom": host.connectionSummary,
-                                                        key: JSONSerialization.jsonObject(with: value)])
-        }
-        try learned("endpoint", JSONEncoder().encode(endpoint)).write(to: directory.appending(path: "lan-endpoint.json"))
-        let storage = MemoryGatewayCredentials()
-        try storage.write(learned("relay", JSONEncoder().encode(relay)))
-        let routes = GatewayRoutes(host: host, directory: directory, relayStorage: storage, policy: .production, observeLocalNetwork: { _ in })
-        let access = GatewaySpeechAccess(host: host, routes: routes)
-
-        guard case .relay(let configured) = try await access.access(to: .openAI) else { Issue.record("OpenAI must relay"); return }
-        #expect(configured.baseURL.absoluteString == "https://mini.example:8787/speech/openai")
-        #expect(configured.transport != nil)
-
-        await routes.connected(over: .relay(relay), startedAt: .now, afterFailing: [])
-        guard case .relay(let relayed) = try await access.access(to: .openAI),
-              case .relay(let again) = try await access.access(to: .gemini) else { Issue.record("Speech must relay"); return }
-        #expect(relayed.baseURL.absoluteString == "https://mini.relay.invalid:20001/speech/openai")
-        #expect(again.baseURL.absoluteString == "https://mini.relay.invalid:20001/speech/gemini")
-        #expect(relayed.transport != nil)
-        #expect(relayed.transport == again.transport)
-        await routes.retire()
-    }
-
-    @Test func relayRejectionsNameTheHostProviderAndCause() {
-        let access = GatewaySpeechAccess(host: host, routes: .isolated(host))
-        let cases: [(String, GatewaySpeechProvider, String)] = [
-            ("credentialsUnavailable", .gemini,
-             "Gemini through Mac Mini (mini.example:8787) failed: the gateway cannot read its llm-router key."),
-            ("notPermitted", .openAI,
-             "OpenAI through Mac Mini (mini.example:8787) failed: this device is not in the gateway's RC_CODEX_GATEWAY_SPEECH_CLIENTS."),
-            ("unauthorized", .elevenLabs,
-             "ElevenLabs through Mac Mini (mini.example:8787) failed: the gateway rejected this device's credential."),
-            ("quotaExhausted", .assemblyAI,
-             "AssemblyAI through Mac Mini (mini.example:8787) failed: the gateway refused the request (quotaExhausted)."),
-        ]
-        for (kind, provider, message) in cases {
-            let rejection = SpeechKitError.relayRejected(kind: kind)
-            let reported: [any Error] = [
-                rejection,
-                RealtimeDictationError.connectionFailed(rejection),
-                RealtimeDictationError.streamFailed(rejection),
-            ]
-            for error in reported {
-                #expect(access.explain(error, provider: provider).localizedDescription == message)
+    @Test(arguments: [401, 403])
+    func onlyUnauthorizedResponsesRefetchAndRetry(status: Int) async throws {
+        let remote = DictationAccessSource()
+        let access = access(remote: remote)
+        let attempt = DictationAccessAttempt()
+        do {
+            let key = try await access.perform { providerAccess in
+                guard case .router(let router) = providerAccess else { throw URLError(.badURL) }
+                if await attempt.next() == 1 { throw SpeechKitError.httpFailure(statusCode: status, body: "") }
+                return router.key
             }
+            #expect(status == 401)
+            #expect(key == "dictation-key-2")
+        } catch {
+            #expect(status == 403)
         }
+        #expect(await remote.count == (status == 401 ? 2 : 1))
     }
 
-    @Test func unmarkedFailuresPassThroughUnchanged() {
-        let access = GatewaySpeechAccess(host: host, routes: .isolated(host))
-        let unmarked: [any Error] = [
-            SpeechKitError.httpFailure(
-                statusCode: 503,
-                body: #"{"remoteCoderSpeechError":{"kind":"credentialsUnavailable"}}"#
-            ),
-            SpeechKitError.httpFailure(statusCode: 404, body: ""),
-            SpeechKitError.webSocketHandshakeFailed(statusCode: 401),
-            SpeechKitError.webSocketHandshakeFailed(statusCode: 404),
-            SpeechKitError.webSocketClosed(code: 4403, reason: "notPermitted"),
-            SpeechKitError.webSocketClosed(code: 1008, reason: "invalid model"),
-            RealtimeDictationError.streamFailed(SpeechKitError.webSocketClosed(code: 1008, reason: "invalid model")),
-            RealtimeDictationError.finalizationTimedOut,
-            CancellationError(),
-        ]
-        for error in unmarked {
-            #expect(!(access.explain(error, provider: .openAI) is GatewaySpeechFailure))
+    @Test func repeatedUnauthorizedResponsesStopAfterOneRefresh() async throws {
+        let remote = DictationAccessSource()
+        let access = access(remote: remote)
+        let attempt = DictationAccessAttempt()
+        await #expect(throws: SpeechKitError.self) {
+            try await access.perform { _ in
+                _ = await attempt.next()
+                throw SpeechKitError.httpFailure(statusCode: 401, body: "")
+            } as Void
         }
+        #expect(await attempt.count == 2)
+        #expect(await remote.count == 2)
     }
+
+    @Test func webSocketAuthenticationRefusalRefreshesTheCredentialForSavedAudio() async throws {
+        let remote = DictationAccessSource()
+        let access = access(remote: remote)
+        _ = try await access.access(to: .elevenLabs)
+        try await access.refreshIfUnauthorized(RealtimeDictationError.connectionFailed(SpeechKitError.webSocketHandshakeFailed(statusCode: 401)))
+        #expect(await remote.count == 2)
+    }
+
+    @Test func dictationKeychainItemsAreDeviceOnlyAndSeparatedByHost() throws {
+        let other = UUID()
+        let first = KeychainGatewayCredentials(scope: .dictation(hostID: host.id))
+        let second = KeychainGatewayCredentials(scope: .dictation(hostID: other))
+        let account = "dictation-router-v1.\(host.id.uuidString)"
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "emileberhard.RemoteCoder.gateway-configuration",
+            kSecAttrAccount as String: account, kSecUseDataProtectionKeychain as String: true]
+        defer { SecItemDelete(query as CFDictionary) }
+        let data = Data("synthetic-dictation-key".utf8)
+        try first.write(data)
+        #expect(try first.read() == data)
+        #expect(try second.read() == nil)
+        var attributesQuery = query
+        attributesQuery[kSecReturnAttributes as String] = true
+        var result: CFTypeRef?
+        #expect(SecItemCopyMatching(attributesQuery as CFDictionary, &result) == errSecSuccess)
+        let attributes = try #require(result as? [String: Any])
+        #expect(attributes[kSecAttrAccessible as String] as? String == kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
+        #expect(attributes[kSecAttrSynchronizable as String] as? Bool != true)
+    }
+
+    private func access(remote: DictationAccessSource) -> GatewaySpeechAccess {
+        GatewaySpeechAccess(host: host, credentials: GatewayDictationCredentials(host: host,
+            storage: MemoryGatewayCredentials(), fetch: { try await remote.fetch() }))
+    }
+}
+
+private actor DictationAccessSource {
+    private(set) var count = 0
+    func fetch() throws -> DictationRouterCredential {
+        count += 1
+        guard let origin = URL(string: "https://dictation.example") else { throw URLError(.badURL) }
+        return try DictationRouterCredential(origin: origin, key: "dictation-key-\(count)")
+    }
+}
+
+private actor DictationAccessAttempt {
+    private(set) var count = 0
+    func next() -> Int { count += 1; return count }
 }

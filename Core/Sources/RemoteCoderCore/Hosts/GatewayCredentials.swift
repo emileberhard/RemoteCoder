@@ -14,6 +14,7 @@ struct KeychainGatewayCredentials: GatewayCredentialStorage {
         case device
         case iCloud
         case relayRoute(hostID: UUID)
+        case dictation(hostID: UUID)
     }
 
     private static let logger = AppLogger(category: "GatewayCredentials")
@@ -31,6 +32,8 @@ struct KeychainGatewayCredentials: GatewayCredentialStorage {
             query[kSecAttrSynchronizable as String] = true
         case .relayRoute(let hostID):
             query[kSecAttrAccount as String] = "relay-route-v1.\(hostID.uuidString)"
+        case .dictation(let hostID):
+            query[kSecAttrAccount as String] = "dictation-router-v1.\(hostID.uuidString)"
         }
         return query
     }

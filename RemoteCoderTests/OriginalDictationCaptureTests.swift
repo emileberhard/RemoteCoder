@@ -63,7 +63,7 @@ struct OriginalDictationCaptureTests {
         library.isEnabled = true
         library.cancelPublication()
         defer { library.cancelPublication(); await library.finishArchiving() }
-        let capture = try #require(try await library.prepare(configuration: .init(model: .openAIGPT4oMini, language: .english)))
+        let capture = try #require(try await library.prepare(configuration: .init(model: .elevenLabsScribeV2, language: .english)))
         library.isEnabled = false
         let session = DictationVoiceSession(state: .active(fixture.check))
         let requested = AsyncStream<Void>.makeStream()
@@ -77,7 +77,7 @@ struct OriginalDictationCaptureTests {
         let original = DictationTranscript(text: "Every selected-provider word.", model: "openai/selected")
         let filtered = try await session.resolve(original)
         #expect(filtered.transcript.removedVoices)
-        let delivered = try await library.result(filtered.transcript, recordingID: capture.id, plan: capture.plan, access: .fixture)
+        let delivered = library.result(filtered.transcript, recordingID: capture.id, plan: capture.plan)
         #expect(delivered.text == "Only my words.")
         await library.finishArchiving()
         let versions = try archivedResults(in: directory, capture: capture.id)

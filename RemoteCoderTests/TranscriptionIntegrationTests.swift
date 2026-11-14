@@ -9,7 +9,7 @@ import Testing
 
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["RUN_REMOTE_CODER_TRANSCRIPTION_INTEGRATION_TESTS"] == "1"), .timeLimit(.minutes(5)))
 struct TranscriptionIntegrationTests {
-    @Test func azureLabelledChecksUseTheRelayAndMeasureUploadCompletionAndAddedWait() async throws {
+    @Test func azureLabelledChecksUseTheRouterAndMeasureUploadCompletionAndAddedWait() async throws {
         let access = try gatewayAccess()
         let service = RemoteCoderTranscriptionService(access: access)
         let configuration = TranscriptionConfiguration(model: .azureMAITranscribe2, language: .english,
@@ -63,7 +63,7 @@ struct TranscriptionIntegrationTests {
             #expect(result.transcript.model == configuration.model.batchLibraryID)
             let upload = result.upload.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
             let completion = (try? result.check?.get())?.labelledReplyTime.map { String(Int($0 / .milliseconds(1))) } ?? "unknown"
-            print("Azure relay voice check path=\(result.transcript.outcome?.path.rawValue ?? "unknown") failure=\(failure.withLock { $0 }) audio_ms=\(pcm.count * 1000 / 32_000) upload_ms=\(upload) completion_ms=\(completion) added_wait_ms=\(Int(result.wait / .milliseconds(1)))")
+            print("Azure direct voice check path=\(result.transcript.outcome?.path.rawValue ?? "unknown") failure=\(failure.withLock { $0 }) audio_ms=\(pcm.count * 1000 / 32_000) upload_ms=\(upload) completion_ms=\(completion) added_wait_ms=\(Int(result.wait / .milliseconds(1)))")
             await check.cancel()
         }
     }
@@ -75,7 +75,7 @@ struct TranscriptionIntegrationTests {
         let writer = try await recordings.store.startRecording(owner: ExecutionTarget(hostID: access.host.id), sampleRate: 16_000)
         writer.append(try fixturePCM())
         let recording = try await writer.finish()
-        let configuration = TranscriptionConfiguration(model: .openAIGPT4oMini, language: .english,
+        let configuration = TranscriptionConfiguration(model: .azureMAITranscribe2, language: .english,
                                                        customVocabulary: ["OpenAI", "AssemblyAI", "ElevenLabs"])
         let text = try await RemoteCoderTranscriptionService(access: access).transcribe(recording, configuration: configuration)
         assertAnchors(text.text)
@@ -86,64 +86,13 @@ struct TranscriptionIntegrationTests {
         try await realtimeFactoryFinalizesSavedAudioWithPersonalVocabulary(model: .elevenLabsScribeV2Realtime)
     }
 
-    @Test func openAIFactoryFinalizesSavedAudioWithPersonalVocabulary() async throws {
-        try await realtimeFactoryFinalizesSavedAudioWithPersonalVocabulary(model: .openAIGPT4oTranscribeRealtime)
-    }
 
-    @Test func geminiFactoryFinalizesSavedAudioWithPersonalVocabulary() async throws {
-        try await realtimeFactoryFinalizesSavedAudioWithPersonalVocabulary(model: .gemini35TranscribeLiveSmart)
-    }
 
     @Test func assemblyAIFactoryFinalizesSavedAudioWithPersonalVocabulary() async throws {
         try await realtimeFactoryFinalizesSavedAudioWithPersonalVocabulary(model: .assemblyAIUniversal35ProRealtime)
     }
 
-    @Test func azureFactoryFinalizesSavedAudioWithPersonalVocabulary() async throws {
-        try await realtimeFactoryFinalizesSavedAudioWithPersonalVocabulary(model: .azureMAITranscribe2)
-    }
 
-    private func realtimeFactoryFinalizesSavedAudioWithPersonalVocabulary(model: TranscriptionModel) async throws {
-        let access = try gatewayAccess()
-        let service = RemoteCoderTranscriptionService(access: access)
-        let configuration = TranscriptionConfiguration(model: model, language: .englishAndSwedish,
-            customVocabulary: ["OpenAI", "AssemblyAI", "ElevenLabs", String(repeating: "x", count: 51)] + (0..<101).map { "Term\($0)" })
-        let recordings = try TemporaryDictationRecordings()
-        defer { recordings.cleanUp() }
-        let original = try fixturePCM()
-        let realtime = try #require(try await service.makeRealtimeTranscription(configuration: configuration))
-        let pcm = try await providerPCM(original, sampleRate: realtime.session.sampleRate)
-        let dictation = RealtimeDictation(session: realtime.session)
-        do {
-            let writer = try await recordings.store.startRecording(owner: ExecutionTarget(hostID: access.host.id), sampleRate: realtime.session.sampleRate)
-            let chunkSize = realtime.session.sampleRate / 10 * 2
-            for offset in stride(from: 0, to: pcm.count, by: chunkSize) {
-                let chunk = pcm.subdata(in: offset..<min(offset + chunkSize, pcm.count))
-                writer.append(chunk)
-                dictation.append(chunk)
-                try await Task.sleep(for: .milliseconds(100))
-            }
-            let recording = try await writer.finish()
-            let text = try await dictation.finish()
-            assertAnchors(text)
-            #expect(try await recordings.listedIDs() == [recording.id])
-        } catch {
-            await dictation.cancel()
-            throw error
-        }
-    }
-
-    @Test func commonCleanupUsesChatContextAndPreservesDictionaryTerms() async throws {
-        let access = try gatewayAccess()
-        let profile = DictationProfile(archiveEnabled: true, preferredModel: "fixture", languages: ["en", "sv"],
-            dictionary: ["OpenAI", "AssemblyAI", "ElevenLabs"], cleanupEnabled: true,
-            outputLanguage: nil, thinkingLevel: "minimal")
-        let plan = DictationPlan(unverifiedProfile: profile, context: .chat,
-            capabilities: try DictationCapabilities(models: ["fixture"], fallbackModel: "fixture", supportsCleanup: true))
-        let result = try await DictationCleanup.clean(text: "Um, send a message to OpenAI about AssemblyAI and ElevenLabs.",
-            plan: plan, access: try await access.access(to: .gemini))
-        assertAnchors(result.text)
-        #expect(result.kind == .cleanup)
-    }
 
     @Test @MainActor func azureStopToComposerLatencyWithAndWithoutArchiving() async throws {
         let access = try gatewayAccess()

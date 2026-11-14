@@ -11,8 +11,6 @@ enum DictationVoiceSelection: String, CaseIterable, Identifiable, Sendable {
 
 enum TranscriptionProvider: String, CaseIterable, Identifiable, Sendable {
     case elevenLabs
-    case openAI
-    case gemini
     case assemblyAI
     case azureSpeech
 
@@ -21,8 +19,6 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable, Sendable {
     var name: String {
         switch self {
         case .elevenLabs: "ElevenLabs"
-        case .openAI: "OpenAI"
-        case .gemini: "Google Gemini"
         case .assemblyAI: "AssemblyAI"
         case .azureSpeech: "Azure Speech"
         }
@@ -35,8 +31,6 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable, Sendable {
     var gatewayProvider: GatewaySpeechProvider {
         switch self {
         case .elevenLabs: .elevenLabs
-        case .openAI: .openAI
-        case .gemini: .gemini
         case .assemblyAI: .assemblyAI
         case .azureSpeech: .azure
         }
@@ -44,7 +38,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// How dictation audio reaches the model.
-enum TranscriptionCapture: Sendable {
+enum TranscriptionCapture: Sendable, Equatable {
     /// The finished recording is uploaded once the user stops.
     case batch
     /// PCM16 mono audio streams to the provider while recording, at the sample
@@ -55,21 +49,9 @@ enum TranscriptionCapture: Sendable {
 }
 
 enum TranscriptionModel: String, CaseIterable, Identifiable, Sendable {
-    // Raw values persist in UserDefaults; the three that predate the provider
-    // picker keep their original names so saved selections survive.
+    // Raw values persist in UserDefaults; retained models keep their original names.
     case elevenLabsScribeV2Realtime
     case elevenLabsScribeV2
-    case openAIGPT4oMini
-    case openAIGPT4oTranscribe
-    case openAIWhisper1
-    case openAIRealtimeWhisper
-    case openAIGPT4oTranscribeRealtime
-    case openAIGPT4oMiniTranscribeRealtime
-    case gemini35Flash
-    case gemini35TranscribeSmart
-    case gemini35TranscribeVerbatim
-    case gemini35TranscribeLiveSmart
-    case gemini35TranscribeLiveVerbatim
     case assemblyAIUniversal35Pro
     case assemblyAIUniversal35ProRealtime
     case azureMAITranscribe2
@@ -80,12 +62,6 @@ enum TranscriptionModel: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .elevenLabsScribeV2Realtime, .elevenLabsScribeV2:
             .elevenLabs
-        case .openAIGPT4oMini, .openAIGPT4oTranscribe, .openAIWhisper1,
-             .openAIRealtimeWhisper, .openAIGPT4oTranscribeRealtime, .openAIGPT4oMiniTranscribeRealtime:
-            .openAI
-        case .gemini35Flash, .gemini35TranscribeSmart, .gemini35TranscribeVerbatim,
-             .gemini35TranscribeLiveSmart, .gemini35TranscribeLiveVerbatim:
-            .gemini
         case .assemblyAIUniversal35Pro, .assemblyAIUniversal35ProRealtime:
             .assemblyAI
         case .azureMAITranscribe2:
@@ -97,17 +73,6 @@ enum TranscriptionModel: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .elevenLabsScribeV2Realtime: "Scribe v2 Realtime"
         case .elevenLabsScribeV2: "Scribe v2"
-        case .openAIGPT4oMini: "GPT-4o Mini Transcribe"
-        case .openAIGPT4oTranscribe: "GPT-4o Transcribe"
-        case .openAIWhisper1: "Whisper"
-        case .openAIRealtimeWhisper: "GPT Realtime Whisper"
-        case .openAIGPT4oTranscribeRealtime: "GPT-4o Transcribe Realtime"
-        case .openAIGPT4oMiniTranscribeRealtime: "GPT-4o Mini Transcribe Realtime"
-        case .gemini35Flash: "Gemini 3.5 Flash"
-        case .gemini35TranscribeSmart: "Gemini 3.5 Transcribe (Smart)"
-        case .gemini35TranscribeVerbatim: "Gemini 3.5 Transcribe (Verbatim)"
-        case .gemini35TranscribeLiveSmart: "Gemini 3.5 Transcribe Live (Smart)"
-        case .gemini35TranscribeLiveVerbatim: "Gemini 3.5 Transcribe Live (Verbatim)"
         case .assemblyAIUniversal35Pro: "Universal-3.5 Pro"
         case .assemblyAIUniversal35ProRealtime: "Universal-3.5 Pro Realtime"
         case .azureMAITranscribe2: "MAI-Transcribe-2"
@@ -118,20 +83,8 @@ enum TranscriptionModel: String, CaseIterable, Identifiable, Sendable {
 
     var capture: TranscriptionCapture {
         switch self {
-        case .elevenLabsScribeV2Realtime,
-             .openAIRealtimeWhisper, .openAIGPT4oTranscribeRealtime, .openAIGPT4oMiniTranscribeRealtime,
-             .gemini35TranscribeLiveSmart, .gemini35TranscribeLiveVerbatim,
-             .assemblyAIUniversal35ProRealtime:
-            .streaming
-        case .azureMAITranscribe2:
-            // Azure uploads the recording progressively while it records, so a
-            // stop waits only for the transcription.
-            .streaming
-        case .elevenLabsScribeV2,
-             .openAIGPT4oMini, .openAIGPT4oTranscribe, .openAIWhisper1,
-             .gemini35Flash, .gemini35TranscribeSmart, .gemini35TranscribeVerbatim,
-             .assemblyAIUniversal35Pro:
-            .batch
+        case .elevenLabsScribeV2Realtime, .assemblyAIUniversal35ProRealtime: .streaming
+        case .elevenLabsScribeV2, .assemblyAIUniversal35Pro, .azureMAITranscribe2: .batch
         }
     }
 }

@@ -71,7 +71,7 @@ final class SharedDictationLibrary {
         let plan: DictationPlan
         var account: DictationAccountSession?
         let capabilities = try DictationCapabilities(models: Set(TranscriptionModel.allCases.map(\.libraryID)),
-            fallbackModel: configuration.model.libraryID, supportsCleanup: true,
+            fallbackModel: configuration.model.libraryID, supportsCleanup: false,
             modelOptions: Dictionary(uniqueKeysWithValues: TranscriptionModel.allCases.map { ($0.libraryID, $0.libraryOptions) }))
         do {
             switch await store.profileState() {
@@ -280,25 +280,15 @@ final class SharedDictationLibrary {
         return (capture.plan, account)
     }
 
-    func result(_ transcript: DictationTranscript, recordingID: UUID, plan: DictationPlan, access: GatewaySpeechAccess) async throws -> DictationTranscript {
+    func result(_ transcript: DictationTranscript, recordingID: UUID, plan: DictationPlan) -> DictationTranscript {
         let raw = DictationResultVersion(id: UUID(), captureID: recordingID, createdAt: .now,
             kind: .providerOutput, text: transcript.everyone, model: transcript.everyoneModel, contextWasUsed: false, parentResultID: nil, plan: plan)
         archive(raw)
-        let source: DictationResultVersion
         if transcript.removedVoices {
-            source = DictationResultVersion(id: UUID(), captureID: recordingID, createdAt: .now,
-                kind: .providerOutput, text: transcript.text, model: transcript.model, contextWasUsed: false, parentResultID: raw.id, plan: plan)
-            archive(source)
-        } else { source = raw }
-        guard plan.cleanupEnabled else { return transcript }
-        let cleaned = try await DictationCleanup.clean(text: transcript.text, plan: plan, access: try await access.access(to: .gemini))
-        if cleaned.kind != .providerOutput {
             archive(DictationResultVersion(id: UUID(), captureID: recordingID, createdAt: .now,
-                kind: cleaned.kind, text: cleaned.text, model: cleaned.model, contextWasUsed: cleaned.contextWasUsed, parentResultID: source.id, plan: plan))
+                kind: .providerOutput, text: transcript.text, model: transcript.model, contextWasUsed: false, parentResultID: raw.id, plan: plan))
         }
-        return DictationTranscript(text: cleaned.text, everyone: transcript.everyone,
-            model: cleaned.kind == .providerOutput ? transcript.model : cleaned.model,
-            everyoneModel: transcript.everyoneModel, outcome: transcript.outcome)
+        return transcript
     }
 
     func publish() async {
@@ -506,27 +496,14 @@ extension TranscriptionModel {
         switch self {
         case .elevenLabsScribeV2Realtime: "elevenlabs/scribe_v2_realtime/realtime"
         case .elevenLabsScribeV2: "elevenlabs/scribe_v2/batch"
-        case .openAIGPT4oMini: "openai/gpt-4o-mini-transcribe-2025-12-15/batch"
-        case .openAIGPT4oTranscribe: "openai/gpt-4o-transcribe/batch"
-        case .openAIWhisper1: "openai/whisper-1/batch"
-        case .openAIRealtimeWhisper: "openai/gpt-realtime-whisper/realtime"
-        case .openAIGPT4oTranscribeRealtime: "openai/gpt-4o-transcribe/realtime"
-        case .openAIGPT4oMiniTranscribeRealtime: "openai/gpt-4o-mini-transcribe/realtime"
-        case .gemini35Flash: "google/gemini-3.5-flash/batch"
-        case .gemini35TranscribeSmart: "google/gemini-3.5-transcribe/batch"
-        case .gemini35TranscribeVerbatim: "google/gemini-3.5-transcribe/batch?mode=verbatim"
-        case .gemini35TranscribeLiveSmart: "google/gemini-3.5-transcribe-live/realtime"
-        case .gemini35TranscribeLiveVerbatim: "google/gemini-3.5-transcribe-live/realtime?mode=verbatim"
         case .assemblyAIUniversal35Pro: "assemblyai/universal-3-5-pro+universal-2/batch"
         case .assemblyAIUniversal35ProRealtime: "assemblyai/universal-3-5-pro/realtime"
-        case .azureMAITranscribe2: "azure/MAI-Transcribe-2/progressive"
+        case .azureMAITranscribe2: "azure/MAI-Transcribe-2/batch"
         }
     }
 
     var libraryOptions: [String: String] {
         switch self {
-        case .gemini35TranscribeSmart, .gemini35TranscribeLiveSmart: ["mode": "smart"]
-        case .gemini35TranscribeVerbatim, .gemini35TranscribeLiveVerbatim: ["mode": "verbatim"]
         case .azureMAITranscribe2: ["transcribeStyle": "clean"]
         default: [:]
         }
@@ -535,11 +512,6 @@ extension TranscriptionModel {
     var batchLibraryID: String {
         switch self {
         case .elevenLabsScribeV2Realtime: TranscriptionModel.elevenLabsScribeV2.libraryID
-        case .openAIRealtimeWhisper: TranscriptionModel.openAIWhisper1.libraryID
-        case .openAIGPT4oTranscribeRealtime: TranscriptionModel.openAIGPT4oTranscribe.libraryID
-        case .openAIGPT4oMiniTranscribeRealtime: TranscriptionModel.openAIGPT4oMini.libraryID
-        case .gemini35TranscribeLiveSmart: TranscriptionModel.gemini35TranscribeSmart.libraryID
-        case .gemini35TranscribeLiveVerbatim: TranscriptionModel.gemini35TranscribeVerbatim.libraryID
         case .assemblyAIUniversal35ProRealtime: TranscriptionModel.assemblyAIUniversal35Pro.libraryID
         case .azureMAITranscribe2: "azure/MAI-Transcribe-2/batch"
         default: libraryID

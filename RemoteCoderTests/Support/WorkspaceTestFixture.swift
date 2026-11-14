@@ -230,7 +230,10 @@ extension GatewaySpeechAccess {
     static let fixture = {
         let host = GatewayHostConfiguration(
             id: UUID(), name: "Speech test", hostname: "speech.example", port: 8787, authToken: "speech-test-token")
-        return GatewaySpeechAccess(host: host, routes: .isolated(host))
+        return GatewaySpeechAccess(host: host, credentials: GatewayDictationCredentials(host: host,
+            storage: MemoryGatewayCredentials(), fetch: {
+                try DictationRouterCredential(origin: try #require(URL(string: "https://dictation.example")), key: "synthetic-dictation-key")
+            }))
     }()
 }
 

@@ -22,12 +22,12 @@ final class DictationFixtureBackground: BackgroundExecution {
     @Test func sealingAndResultsKeepOneBackgroundHoldAndDoNotRefreshTheProfile() async throws {
         let fixture = try await fixture()
         defer { fixture.cleanUp() }
-        let capture = try #require(try await fixture.library.prepare(configuration: .init(model: .openAIGPT4oMini, language: .english)))
+        let capture = try #require(try await fixture.library.prepare(configuration: .init(model: .elevenLabsScribeV2, language: .english)))
         try appendAudio(to: capture)
         await fixture.cloud.holdNextCreate()
         fixture.library.finish(capture)
         await fixture.cloud.waitUntilHeld()
-        _ = try await fixture.library.result(DictationTranscript(text: "Synthetic result", model: "synthetic"), recordingID: capture.id, plan: capture.plan, access: .fixture)
+        _ = fixture.library.result(DictationTranscript(text: "Synthetic result", model: "synthetic"), recordingID: capture.id, plan: capture.plan)
         await fixture.library.finishArchiving()
         #expect(fixture.background.holds == 1)
         #expect(fixture.background.releases == 0)
@@ -43,7 +43,7 @@ final class DictationFixtureBackground: BackgroundExecution {
     @Test func expirationCancelsTheCurrentPassWithoutReplacingTheStatusWithAFailure() async throws {
         let fixture = try await fixture()
         defer { fixture.cleanUp() }
-        let capture = try #require(try await fixture.library.prepare(configuration: .init(model: .openAIGPT4oMini, language: .english)))
+        let capture = try #require(try await fixture.library.prepare(configuration: .init(model: .elevenLabsScribeV2, language: .english)))
         try appendAudio(to: capture)
         await fixture.cloud.holdNextCreate()
         fixture.library.finish(capture)
@@ -76,7 +76,7 @@ final class DictationFixtureBackground: BackgroundExecution {
             _ = try await writer.finish()
         }
         defer { fixture.cleanUp() }
-        let capture = try #require(try await fixture.library.prepare(configuration: .init(model: .openAIGPT4oMini, language: .english)))
+        let capture = try #require(try await fixture.library.prepare(configuration: .init(model: .elevenLabsScribeV2, language: .english)))
         try appendAudio(to: capture)
         fixture.library.finish(capture)
         await gate.waitUntilStarted()
@@ -92,7 +92,7 @@ final class DictationFixtureBackground: BackgroundExecution {
     @Test func anEmptyDictationLeavesTheStatusAlone() async throws {
         let fixture = try await fixture()
         defer { fixture.cleanUp() }
-        let capture = try #require(try await fixture.library.prepare(configuration: .init(model: .openAIGPT4oMini, language: .english)))
+        let capture = try #require(try await fixture.library.prepare(configuration: .init(model: .elevenLabsScribeV2, language: .english)))
         let status = fixture.library.status
         fixture.library.finish(capture)
         await fixture.library.finishArchiving()
@@ -120,7 +120,7 @@ final class DictationFixtureBackground: BackgroundExecution {
         try await history.validate()
     }
 
-    private static let profile = DictationProfile(archiveEnabled: true, preferredModel: TranscriptionModel.openAIGPT4oMini.libraryID, languages: ["en"], dictionary: [], cleanupEnabled: false, outputLanguage: nil, thinkingLevel: "minimal")
+    private static let profile = DictationProfile(archiveEnabled: true, preferredModel: TranscriptionModel.elevenLabsScribeV2.libraryID, languages: ["en"], dictionary: [], cleanupEnabled: false, outputLanguage: nil, thinkingLevel: "minimal")
 
     @MainActor private struct Fixture {
         let root: URL

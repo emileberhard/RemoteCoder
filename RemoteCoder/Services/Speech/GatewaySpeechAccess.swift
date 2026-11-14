@@ -1,20 +1,14 @@
 import Foundation
-import Security
 import SpeechKit
-import Synchronization
 
-enum GatewaySpeechProvider: String, Sendable {
-    case openAI = "openai"
+enum GatewaySpeechProvider: String, CaseIterable, Sendable {
     case elevenLabs = "elevenlabs"
-    case gemini
     case assemblyAI = "assemblyai"
     case azure
 
     var name: String {
         switch self {
-        case .openAI: "OpenAI"
         case .elevenLabs: "ElevenLabs"
-        case .gemini: "Gemini"
         case .assemblyAI: "AssemblyAI"
         case .azure: "Azure Speech"
         }
@@ -22,116 +16,68 @@ enum GatewaySpeechProvider: String, Sendable {
 }
 
 struct GatewaySpeechFailure: LocalizedError, Equatable {
+    let status: Int
     let message: String
     var errorDescription: String? { message }
 }
 
 struct GatewaySpeechAccess: Sendable {
-    static let maximumRelayedAudioByteCount = 60_000_000
+    static let maximumAudioByteCount = 60_000_000
 
     let host: GatewayHostConfiguration
-    private let transports: RouteTransports
+    let credentials: GatewayDictationCredentials
 
     init(host: GatewayHostConfiguration, routes: GatewayRoutes) {
-        self.host = host
-        transports = RouteTransports(routes: routes)
-    }
-
-    func access(to provider: GatewaySpeechProvider) async throws -> SpeechProviderAccess {
-        let route = await transports.routes.preferredRoute()
-        guard let base = host.gatewayHTTPBaseURL().flatMap(route.url(replacingAddressOf:)) else {
-            throw GatewaySpeechFailure(message: "\(host.errorLabel) has an invalid gateway address.")
-        }
-        return .relay(try SpeechRelay(
-            baseURL: base.appending(path: "speech").appending(path: provider.rawValue),
-            bearerToken: host.authToken,
-            transport: transports.transport(for: route)
+        self.init(host: host, credentials: GatewayDictationCredentials(
+            host: host, storage: KeychainGatewayCredentials(scope: .dictation(hostID: host.id)),
+            fetch: { try await routes.dictationCredential() }
         ))
     }
 
+    init(host: GatewayHostConfiguration, credentials: GatewayDictationCredentials) {
+        self.host = host
+        self.credentials = credentials
+    }
+
+    func access(to provider: GatewaySpeechProvider) async throws -> SpeechProviderAccess {
+        let credential = try await credentials.current()
+        return .router(try LLMRouter(origin: credential.origin, key: credential.key))
+    }
+
+    func perform<Value: Sendable>(
+        _ operation: @Sendable (SpeechProviderAccess) async throws -> Value
+    ) async throws -> Value {
+        let credential = try await credentials.current()
+        do { return try await operation(.router(LLMRouter(origin: credential.origin, key: credential.key))) }
+        catch {
+            guard Self.isUnauthorized(error), !Task.isCancelled else { throw error }
+            let replacement = try await credentials.refresh(rejecting: credential.key)
+            return try await operation(.router(LLMRouter(origin: replacement.origin, key: replacement.key)))
+        }
+    }
+
+    func refreshIfUnauthorized(_ error: any Error) async throws {
+        guard Self.isUnauthorized(error) else { return }
+        let credential = try await credentials.current()
+        _ = try await credentials.refresh(rejecting: credential.key)
+    }
+
     func explain(_ error: any Error, provider: GatewaySpeechProvider) -> any Error {
-        guard case .relayRejected(let kind) = Self.transportCause(of: error) as? SpeechKitError else { return error }
-        let detail = GatewaySpeechRejection(rawValue: kind)?.detail(provider: provider)
-            ?? "the gateway refused the request (\(kind))."
-        return GatewaySpeechFailure(message: "\(provider.name) through \(host.errorLabel) failed: \(detail)")
+        guard case .httpFailure(let status, _) = Self.transportCause(of: error) as? SpeechKitError else { return error }
+        return GatewaySpeechFailure(status: status, message: "\(provider.name) dictation failed (HTTP \(status)).")
+    }
+
+    private static func isUnauthorized(_ error: any Error) -> Bool {
+        if case .httpFailure(let status, _) = transportCause(of: error) as? SpeechKitError { return status == 401 }
+        if case .webSocketHandshakeFailed(let status) = transportCause(of: error) as? SpeechKitError { return status == 401 }
+        let error = transportCause(of: error) as NSError
+        return error.domain == NSURLErrorDomain && error.code == NSURLErrorUserAuthenticationRequired
     }
 
     private static func transportCause(of error: any Error) -> any Error {
         switch error as? RealtimeDictationError {
         case .connectionFailed(let cause), .streamFailed(let cause): cause
         default: error
-        }
-    }
-
-    private final class RouteTransports: Sendable {
-        let routes: GatewayRoutes
-        private let latest = Mutex<(route: GatewayRoute, transport: SpeechRelayTransport)?>(nil)
-
-        init(routes: GatewayRoutes) {
-            self.routes = routes
-        }
-
-        func transport(for route: GatewayRoute) -> SpeechRelayTransport? {
-            return latest.withLock { latest in
-                if let latest, latest.route == route { return latest.transport }
-                let transport = SpeechRelayTransport(
-                    configure: {
-                        route.configure($0)
-                        $0.waitsForConnectivity = false
-                    },
-                    acceptsServerTrust: { [routes] in
-                        route == .configured ? SecTrustEvaluateWithError($0, nil) : routes.acceptsServerTrust($0)
-                    },
-                    uploadLog: { message in
-                        VoiceModeDiagnostics.log(message)
-                        Task { await DiagnosticsOutbox.shared.persistPending() }
-                    }
-                )
-                latest = (route, transport)
-                return transport
-            }
-        }
-    }
-}
-
-enum GatewaySpeechRejection: String {
-    case unauthorized
-    case unavailable
-    case authenticationUnavailable
-    case notPermitted
-    case operationNotAllowed
-    case capacity
-    case draining
-    case credentialsUnavailable
-    case requestTooLarge
-    case clientStalled
-    case upstreamUnreachable
-    case upstreamRejected
-    case upstreamFailed
-
-    var refusesRoute: Bool {
-        switch self {
-        case .unavailable, .unauthorized, .authenticationUnavailable, .notPermitted,
-             .operationNotAllowed, .credentialsUnavailable, .upstreamRejected: true
-        case .capacity, .draining, .requestTooLarge, .clientStalled, .upstreamUnreachable, .upstreamFailed: false
-        }
-    }
-
-    func detail(provider: GatewaySpeechProvider) -> String {
-        switch self {
-        case .unavailable: "speech is not configured on this gateway."
-        case .unauthorized: "the gateway rejected this device's credential."
-        case .authenticationUnavailable: "the gateway cannot read its installation credentials."
-        case .notPermitted: "this device is not in the gateway's RC_CODEX_GATEWAY_SPEECH_CLIENTS."
-        case .operationNotAllowed: "the gateway does not relay this request; update the gateway."
-        case .capacity: "the gateway is already relaying its maximum number of speech sessions."
-        case .draining: "the gateway is restarting."
-        case .credentialsUnavailable: "the gateway cannot read its llm-router key."
-        case .requestTooLarge: "the recording exceeds the gateway's 64 MiB limit."
-        case .clientStalled: "the recording stopped reaching the gateway for 30 seconds."
-        case .upstreamUnreachable: "the gateway could not reach \(provider.name)."
-        case .upstreamRejected: "llm-router or \(provider.name) rejected the gateway's connection."
-        case .upstreamFailed: "the gateway's connection to \(provider.name) failed."
         }
     }
 }
