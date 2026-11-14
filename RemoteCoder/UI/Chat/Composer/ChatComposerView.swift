@@ -70,7 +70,8 @@ struct ChatComposerView: View {
     @State private var fileDestination: AttachmentDestination?
     @State private var focusAfterTakeOver = false
     @State private var isInputDropTargeted = false
-    @State private var quickDictation: QuickDictationRelease?
+    @State private var quickDictation: QuickDictationPhase?
+    @State private var quickDictationBegan = ContinuousClock.now
 
     private struct AttachmentDestination {
         let screen: ChatScreenModel
@@ -114,8 +115,14 @@ struct ChatComposerView: View {
         screen.target.voice.isRecording && quickDictation == nil
     }
 
+    private var quickDictationPhase: QuickDictationPhase? {
+        guard case .held(let release) = quickDictation else { return quickDictation }
+        guard screen.target.voice.isRecording else { return nil }
+        return .held(release == .sends && screen.canSendDictation ? .sends : .edits)
+    }
+
     private var isQuickDictating: Bool {
-        screen.target.voice.isRecording && quickDictation != nil
+        quickDictationPhase != nil
     }
 
     private var surfaceCornerRadius: CGFloat {
@@ -679,35 +686,60 @@ struct ChatComposerView: View {
                 trailingActions
             }
             .background(alignment: .bottom) {
-                if isQuickDictating { quickDictationBar }
+                quickDictationBar
             }
             .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: isQuickDictating)
+            .task(id: quickDictation) {
+                guard quickDictation == .unsent else { return }
+                try? await Task.sleep(for: .seconds(1.2))
+                if !Task.isCancelled, quickDictation == .unsent { quickDictation = nil }
+            }
         }
     }
 
     private var quickDictationBar: some View {
-        HStack(spacing: 12) {
-            if let quickDictation {
-                Text(quickDictation.hint)
-                    .scaledFont(.footnote.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .contentTransition(.identity)
-                    .layoutPriority(1)
+        let phase = quickDictationPhase
+        return ZStack {
+            if let phase {
+                Capsule()
+                    .fill(phase.tint)
+                    .transition(reduceMotion ? AnyTransition.opacity : AnyTransition(GrowsFromTrailingInset(
+                        inset: ControlMetrics.minimumTarget * 1.5 * interfaceScale + LayoutMetrics.actionSpacing)))
             }
-            ComposerWaveformView(
-                isActive: true,
-                tint: .white,
-                levels: { screen.target.voice.levels() }
-            )
-            .frame(height: 26)
+            if let phase {
+                quickDictationStatus(phase)
+                    .transition(.opacity)
+            }
         }
+        .frame(maxWidth: .infinity)
+        .frame(height: ControlMetrics.minimumTarget * interfaceScale)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: phase)
+    }
+
+    private func quickDictationStatus(_ phase: QuickDictationPhase) -> some View {
+        HStack(spacing: 12) {
+            ViewThatFits(in: .horizontal) {
+                Text(phase.hint)
+                Text(phase.shortHint)
+            }
+            .scaledFont(.footnote.weight(.semibold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .contentTransition(.identity)
+            .layoutPriority(1)
+            if phase.isHeld, !dynamicTypeSize.isAccessibilitySize {
+                ComposerWaveformView(
+                    isActive: true,
+                    tint: .white,
+                    levels: { screen.target.voice.levels() }
+                )
+                .frame(height: 26)
+                .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 17)
         .padding(.trailing, (ControlMetrics.minimumTarget * 2 + 14) * interfaceScale)
-        .frame(maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget * interfaceScale)
-        .background(quickDictation?.tint ?? .composerRecording, in: .capsule)
-        .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: quickDictation)
-        .transition(reduceMotion ? .opacity : .scale(scale: 0.4, anchor: .trailing).combined(with: .opacity))
     }
 
     @ViewBuilder
@@ -774,8 +806,9 @@ struct ChatComposerView: View {
 
     private var micButton: some View {
         ComposerDictationButton(
-            isRecording: screen.target.voice.isRecording, isTranscribing: screen.target.voice.isTranscribing,
-            release: $quickDictation, onTap: startDictation, onHoldBegan: startQuickDictation, onRelease: finishQuickDictation
+            isTranscribing: screen.target.voice.isTranscribing, phase: quickDictationPhase,
+            onTap: startDictation, onHoldBegan: startQuickDictation,
+            onHoldMoved: moveQuickDictation, onRelease: finishQuickDictation
         )
     }
 
@@ -788,18 +821,43 @@ struct ChatComposerView: View {
     private func startQuickDictation() {
         screen.micTapStart()
         guard screen.target.voice.isRecording else { return }
-        quickDictation = .sends
+        quickDictation = .held(.sends)
+        quickDictationBegan = .now
         Task { await screen.micTapStartAsync() }
     }
 
+    private func moveQuickDictation(_ release: QuickDictationRelease) {
+        guard case .held(let current) = quickDictation, current != release else { return }
+        quickDictation = .held(release)
+    }
+
     private func finishQuickDictation(_ release: QuickDictationRelease) {
-        quickDictation = nil
-        guard screen.target.voice.isRecording else { return }
-        screen.micTapStopImmediate()
+        guard case .held = quickDictation else { return }
+        let voice = screen.target.voice
+        guard voice.isRecording else {
+            quickDictation = nil
+            return
+        }
+        if release == .sends, voice.recordingStartTime == nil || ContinuousClock.now - quickDictationBegan < .milliseconds(300) {
+            quickDictation = nil
+            dismissSoftwareKeyboard()
+            return
+        }
         let origin = screen
+        origin.micTapStopImmediate()
+        guard release == .sends, origin.canSendDictation else {
+            quickDictation = nil
+            Task { await origin.micTapStopAsync() }
+            return
+        }
+        quickDictation = .sending
         Task { @MainActor in
-            guard await origin.micTapStopAsync(), release == .sends else { return }
-            _ = await onSend(origin)
+            if await origin.finishHeldDictation() == .readyToSend, await onSend(origin) {
+                quickDictation = nil
+            } else {
+                quickDictation = .unsent
+                origin.target.feedbackForCurrentConversation()(.warning)
+            }
         }
     }
 
@@ -1178,6 +1236,23 @@ struct ComposerDraftFailureNotice: View {
         .padding(.horizontal, 12)
         .accessibilityIdentifier("composer-draft-error")
     }
+}
+
+private struct GrowsFromTrailingInset: Transition {
+    let inset: CGFloat
+
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        let scale: CGFloat = phase.isIdentity ? 1 : 0.4
+        content
+            .visualEffect { [inset] view, proxy in
+                view.scaleEffect(scale, anchor: UnitPoint(x: 1 - inset / max(proxy.size.width, 1), y: 0.5))
+            }
+            .opacity(phase.isIdentity ? 1 : 0)
+    }
+}
+
+extension Color {
+    static let composerRecording = Color(red: 0.85, green: 0.20, blue: 0.20)
 }
 
 private struct ComposerSends: Equatable {

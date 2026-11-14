@@ -1,33 +1,49 @@
 import SwiftUI
 
 enum QuickDictationRelease: Equatable {
-    case sends, keepsDraft
+    case sends, edits
+}
+
+enum QuickDictationPhase: Equatable {
+    case held(QuickDictationRelease)
+    case sending, unsent
+
+    var isHeld: Bool {
+        if case .held = self { true } else { false }
+    }
 
     var hint: LocalizedStringKey {
         switch self {
-        case .sends: "Release to send"
-        case .keepsDraft: "Release to keep draft"
+        case .held(.sends): "Release to send"
+        case .held(.edits): "Release to edit"
+        case .sending: "Sending…"
+        case .unsent: "Not sent"
+        }
+    }
+
+    var shortHint: LocalizedStringKey {
+        switch self {
+        case .held(.sends): "Send"
+        case .held(.edits): "Edit"
+        case .sending: "Sending…"
+        case .unsent: "Not sent"
         }
     }
 
     var tint: Color {
         switch self {
-        case .sends: .composerRecording
-        case .keepsDraft: Color(white: 0.42)
+        case .held(.sends), .sending: .composerRecording
+        case .held(.edits), .unsent: Color(white: 0.42)
         }
     }
 }
 
-extension Color {
-    static let composerRecording = Color(red: 0.85, green: 0.20, blue: 0.20)
-}
-
 struct ComposerDictationButton: View {
-    let isRecording: Bool
     let isTranscribing: Bool
-    @Binding var release: QuickDictationRelease?
+    let phase: QuickDictationPhase?
     let onTap: () -> Void
     let onHoldBegan: () -> Void
+    let onHoldMoved: (QuickDictationRelease) -> Void
     let onRelease: (QuickDictationRelease) -> Void
 
     @State private var isPressed = false
@@ -36,13 +52,11 @@ struct ComposerDictationButton: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.isEnabled) private var isEnabled
 
-    private static var sendReach: CGFloat { 48 }
-
-    private var held: QuickDictationRelease? { isRecording ? release : nil }
+    private static let sendReach: CGFloat = 48
 
     private var scale: CGFloat {
         guard !reduceMotion else { return 1 }
-        if held != nil { return 1.3 }
+        if phase?.isHeld == true { return 1.3 }
         return isPressed ? 0.96 : 1
     }
 
@@ -51,40 +65,40 @@ struct ComposerDictationButton: View {
             .accessibilityHidden(true)
             .overlay {
                 TapHoldButton(label: isTranscribing ? "Transcribing recording" : "Start recording", value: nil,
-                              hint: "Hold to dictate and send when you let go.", identifier: "composer-dictate",
+                              hint: "Double-tap and hold to dictate, then lift to send.", identifier: "composer-dictate",
                               accessibilityActions: [], onPress: pressChanged, onContactEnded: {},
                               onTap: onTap, onHold: holdChanged)
             }
-            .zIndex(held == nil ? 0 : 1)
-            .animation(reduceMotion ? .smooth(duration: 0.15) : .spring(duration: 0.3, bounce: 0.2), value: held)
-            .disabled(isTranscribing)
+            .animation(reduceMotion ? .smooth(duration: 0.15) : .spring(duration: 0.3, bounce: 0.2), value: phase)
+            .disabled(isTranscribing || phase?.isHeld == false)
             .tooltip(isTranscribing ? "Transcribing recording" : "Dictate")
     }
 
     private var face: some View {
         ZStack {
-            if let held {
+            if let phase {
                 Circle()
-                    .fill(held.tint)
+                    .fill(phase.tint)
                     .strokeBorder(.white.opacity(0.35), lineWidth: 0.8)
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
             }
             if isTranscribing {
                 ProgressView()
                     .controlSize(.small)
+                    .tint(phase == nil ? nil : .white)
             } else {
                 glyph
                     .foregroundStyle(.primary)
-                    .opacity(held == nil ? 1 : 0)
+                    .opacity(phase == nil ? 1 : 0)
                 glyph
                     .foregroundStyle(.white)
-                    .opacity(held == nil ? 0 : 1)
+                    .opacity(phase == nil ? 0 : 1)
             }
         }
         .scaledFrame(width: ControlMetrics.minimumTarget, height: ControlMetrics.minimumTarget)
         .contentShape(.rect)
         .scaleEffect(scale)
-        .opacity(isPressed && held == nil ? 0.9 : 1)
+        .opacity(isPressed && phase == nil ? 0.9 : 1)
         .animation(reduceMotion ? nil : AppControlMotion.press(isPressed), value: isPressed)
     }
 
@@ -99,6 +113,10 @@ struct ComposerDictationButton: View {
         if pressed, isEnabled, scenePhase == .active { HapticService.shared.play(.iconPress) }
     }
 
+    private func release(at location: CGPoint) -> QuickDictationRelease {
+        sendZone.contains(location) ? .sends : .edits
+    }
+
     private func holdChanged(_ phase: TapHoldPhase, _ location: CGPoint, _ source: CGRect) {
         switch phase {
         case .began:
@@ -107,13 +125,11 @@ struct ComposerDictationButton: View {
             HapticService.shared.play(.toggleOn)
             onHoldBegan()
         case .changed:
-            guard release != nil else { return }
-            let next: QuickDictationRelease = sendZone.contains(location) ? .sends : .keepsDraft
-            if release != next { release = next }
+            onHoldMoved(release(at: location))
         case .ended:
-            if let release { onRelease(release) }
+            onRelease(release(at: location))
         case .cancelled:
-            if release != nil { onRelease(.keepsDraft) }
+            onRelease(.edits)
         }
     }
 }

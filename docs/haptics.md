@@ -336,8 +336,10 @@ A stop that cancels a start before capture began plays nothing. Automatic
 dictation handoff remains silent.
 Holding the mic for quick dictation plays `toggleOn` when the hold is
 recognized, before suppression begins: it acknowledges the hold, not a working
-microphone. Moving in and out of the send zone is silent because capture
-suppresses it, and the release reuses the recording stop acknowledgement.
+microphone. Moving in and out of the send zone is silent, because a haptic
+there would reach the microphone. The release reuses the recording stop
+acknowledgement, the send that follows plays its ordinary `commit`, and a
+release that promised a send but could not deliver plays `warning`.
 `refused` is the only event that plays during capture: it uses the system error
 pattern when the user tries to switch chats while dictating. The dictation
 session therefore allows haptics during recording; every other app-owned event

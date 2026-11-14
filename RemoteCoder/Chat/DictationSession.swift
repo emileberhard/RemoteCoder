@@ -9,6 +9,11 @@ protocol DictationHost: AnyObject {
     func dictationFailed(_ message: String)
 }
 
+enum DictationArrival {
+    case spoken(into: ComposerDraft)
+    case nothing
+}
+
 @MainActor
 @Observable
 final class DictationSession {
@@ -38,25 +43,27 @@ final class DictationSession {
     }
 
     @discardableResult
-    func finish(feedback: ((HapticEvent) -> Void)? = nil) async -> ComposerDraft? {
-        guard drafts.acceptsInput, !isRetired else { return nil }
-        var receiver: ComposerDraft?
-        let task = ownedTasks.start(.finish) { [weak self] in receiver = await self?.finishCapture(feedback: feedback) }
+    func finish(feedback: ((HapticEvent) -> Void)? = nil) async -> DictationArrival {
+        guard drafts.acceptsInput, !isRetired else { return .nothing }
+        var arrival = DictationArrival.nothing
+        let task = ownedTasks.start(.finish) { [weak self] in
+            if let self { arrival = await self.finishCapture(feedback: feedback) }
+        }
         await task.value
-        return receiver
+        return arrival
     }
 
-    private func finishCapture(feedback: ((HapticEvent) -> Void)?) async -> ComposerDraft? {
-        guard let voice = host?.voice else { return nil }
+    private func finishCapture(feedback: ((HapticEvent) -> Void)?) async -> DictationArrival {
+        guard let voice = host?.voice else { return .nothing }
         let draft = captureDraft
         captureDraft = nil
         do {
             try await voice.stopRecording(onCaptureEnded: { feedback?(.commit) })
             let dictation = try await voice.transcribe()
-            guard !isRetired, let draft else { return nil }
+            guard !isRetired, let draft else { return .nothing }
             try await receive(dictation.transcript, recordingID: dictation.recordingID, recording: dictation.recording, into: draft)
             let spoke = !dictation.transcript.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            return spoke && !draft.isDiscarded ? draft : nil
+            return spoke && !draft.isDiscarded ? .spoken(into: draft) : .nothing
         } catch {
             voice.markTranscriptionEnded()
             if !(error is CancellationError) {
@@ -64,7 +71,7 @@ final class DictationSession {
                 feedback?(.error)
             }
             refreshRecoverable()
-            return nil
+            return .nothing
         }
     }
 

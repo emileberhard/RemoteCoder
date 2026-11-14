@@ -1212,18 +1212,16 @@ entrypoint linked above.
     `ComposerWaveformRenderer` owns the bounded reusable bar layers and Core
     Animation scroll. Do not add a clock, a display-rate timeline or rebuild
     settled bar geometry per sample.
-  - Holding the mic button is quick dictation. `ComposerDictationButton` owns
-    the touch through `TapHoldButton`: a tap dictates as before, and a hold
-    starts the same capture and sends on release, through the ordinary send
-    path and only when `micTapStopAsync` reports that text reached the draft
-    the screen still shows. An empty transcript, a failed dictation or a
-    changed draft never sends. Nothing moves under the finger: the keyboard and
-    the focused or folded layout stay, the action row alone becomes the
-    waveform, whose leading hint names what lifting does. Releasing
-    more than 48 points from the button, or a cancelled touch, keeps the text in
-    the draft unsent. The hold is the composer's own view state; a composer
-    that loses it while recording shows the ordinary recording bar. The Mac
-    has no hold.
+  - Holding the mic button is quick dictation; a tap dictates as before.
+    Lifting sends only through the ordinary send path, and only when
+    `finishHeldDictation` reports that spoken text reached the draft the
+    screen still shows and nothing else sent the composer or started a
+    capture meanwhile. A release that cannot send says so: a blocked send, a
+    dragged-away finger or a cancelled touch leaves the text in the draft,
+    and a send that fails after the release shows "Not sent". A release
+    before capture is live continues as ordinary dictation. Nothing moves
+    under the finger: the keyboard and the focused or folded layout stay. The
+    hold is the composer's own view state. The Mac has no hold.
   - Stop and Voice Mode go through `SlideToConfirmButton`. On iOS a tap never
     acts. Touch-down reveals the "Swipe up to …" guide track, the thumb follows
     the finger, and lifting or cancelling the touch collapses it at once; no

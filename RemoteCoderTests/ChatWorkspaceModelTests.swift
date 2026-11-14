@@ -1,4 +1,5 @@
 import Foundation
+import SpeechKit
 import Testing
 @testable import RemoteCoder
 
@@ -330,7 +331,7 @@ struct ChatWorkspaceModelTests {
         #expect(model.input.hasSuffix("still talking"))
     }
 
-    @Test func aFinishedDictationReportsOnlyTextThatReachedTheShownDraft() async throws {
+    @Test func aHeldDictationIsReadyToSendOnlyWhenSpokenTextReachedTheDraft() async throws {
         let fixture = await WorkspaceFixture()
         defer { fixture.workspace.teardown(); await fixture.cleanUp() }
         let recordings = try TemporaryDictationRecordings()
@@ -338,16 +339,62 @@ struct ChatWorkspaceModelTests {
         let model = try #require(fixture.workspace.selectedScreen)
         #expect(await model.prepareDraft())
 
-        for (spoken, reachesDraft) in [("send this", true), ("  ", false)] {
+        for (spoken, outcome) in [("send this", HeldDictationOutcome.readyToSend), ("  ", .unsent)] {
             model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget,
                                                transcriber: StubTranscriber(text: spoken),
                                                recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
             model.micTapStart()
             await model.micTapStartAsync()
             model.micTapStopImmediate()
-            #expect(await model.micTapStopAsync() == reachesDraft)
+            #expect(await model.finishHeldDictation() == outcome)
         }
         #expect(model.input == "send this")
+    }
+
+    @Test func aHeldDictationStaysUnsentAfterTheScreenMovedToAnotherDraft() async throws {
+        let fixture = await WorkspaceFixture()
+        defer { fixture.workspace.teardown(); await fixture.cleanUp() }
+        let recordings = try TemporaryDictationRecordings()
+        defer { recordings.cleanUp() }
+        let model = try #require(fixture.workspace.selectedScreen)
+        #expect(await model.prepareDraft())
+        model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget,
+                                           transcriber: StubTranscriber(text: "for the first chat"),
+                                           recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
+        model.micTapStart()
+        await model.micTapStartAsync()
+        model.micTapStopImmediate()
+
+        model.startNewConversation()
+        #expect(await model.prepareDraft())
+
+        #expect(await model.finishHeldDictation() == .unsent)
+        #expect(model.input.isEmpty)
+    }
+
+    @Test func aHeldDictationStaysUnsentWhenTheComposerWasSentBeforeItsTextArrived() async throws {
+        let fixture = await WorkspaceFixture()
+        await fixture.restoreCachedModels()
+        defer { fixture.workspace.teardown(); await fixture.cleanUp() }
+        let recordings = try TemporaryDictationRecordings()
+        defer { recordings.cleanUp() }
+        let model = try #require(fixture.workspace.selectedScreen)
+        #expect(await model.prepareDraft())
+        model.input = "Typed before the hold"
+        let transcription = HeldTranscription()
+        model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget,
+                                           transcriber: HeldTranscriber(text: "spoken later", transcription: transcription),
+                                           recorder: StubVoiceRecorder(), recordings: recordings.store, voices: recordings.voiceProfiles)
+        model.micTapStart()
+        await model.micTapStartAsync()
+        model.micTapStopImmediate()
+        let finishing = Task { await model.finishHeldDictation() }
+        await transcription.waitUntilHeld()
+
+        #expect(await model.send())
+        await transcription.release()
+
+        #expect(await finishing.value == .unsent)
     }
 
     @Test func returningToAHostFindsTheSameModelWithItsDraftAndDirectory() async throws {
@@ -760,5 +807,46 @@ struct ChatWorkspaceModelTests {
         #expect(!mini.isVisible)
         #expect(book.isVisible)
         #expect(workspace.keyWindow === first)
+    }
+}
+
+private actor HeldTranscription {
+    private var held: CheckedContinuation<Void, Never>?
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func hold() async {
+        await withCheckedContinuation { continuation in
+            held = continuation
+            waiter?.resume()
+            waiter = nil
+        }
+    }
+
+    func waitUntilHeld() async {
+        if held != nil { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+
+    func release() {
+        held?.resume()
+        held = nil
+    }
+}
+
+private struct HeldTranscriber: TranscriptionService {
+    let text: String
+    let transcription: HeldTranscription
+
+    @concurrent func speakerPhrases(_ pcm16: Data, configuration: TranscriptionConfiguration,
+        uploadFinished: @escaping @Sendable (Duration) -> Void) async throws -> [SpeakerPhrase] {
+        throw SpeechKitError.invalidRequest("No speaker request expected")
+    }
+
+    func makeRealtimeTranscription(configuration: TranscriptionConfiguration) async throws -> RealtimeTranscription? { nil }
+
+    @concurrent
+    func transcribe(_ recording: DictationRecording<ExecutionTarget>, configuration: TranscriptionConfiguration) async throws -> DictationTranscript {
+        await transcription.hold()
+        return DictationTranscript(text: text, model: configuration.model.batchLibraryID)
     }
 }

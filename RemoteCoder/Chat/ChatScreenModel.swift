@@ -4,6 +4,10 @@ import OSLog
 import PhotosUI
 import SwiftUI
 
+enum HeldDictationOutcome {
+    case readyToSend, unsent
+}
+
 @MainActor
 @Observable
 final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
@@ -654,9 +658,20 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             input: input, hasAttachments: !composerAttachments.isEmpty,
             isPreparingAttachments: isStagingFiles,
             isWorking: isCurrentConversationBusy, canSteer: canSteerCurrentConversation,
-            isBlocked: !areConversationSettingsReady || currentConversationDispatchBlock != nil
-                || hasUnfinishedFileUploads || selectedModel == nil
+            isBlocked: isSendBlocked
         )
+    }
+
+    private var isSendBlocked: Bool {
+        !areConversationSettingsReady || currentConversationDispatchBlock != nil
+            || hasUnfinishedFileUploads || selectedModel == nil
+    }
+
+    var canSendDictation: Bool {
+        guard target.acceptsWork, acceptsConversationInput, compaction?.blocksSending != true,
+              composerDocument?.isComposing != true, !isStagingFiles else { return false }
+        return ComposerSendState(hasContent: true, isWorking: isCurrentConversationBusy,
+                                 canSteer: canSteerCurrentConversation, isBlocked: isSendBlocked).canSend
     }
 
     var hasDispatchableCurrentMessage: Bool {
@@ -1442,10 +1457,15 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         target.voice.markStopRequested()
     }
 
-    @discardableResult
-    func micTapStopAsync() async -> Bool {
-        let receiver = await dictation.finish(feedback: target.feedbackForCurrentConversation())
-        return receiver != nil && receiver === currentDraft
+    func micTapStopAsync() async {
+        await dictation.finish(feedback: target.feedbackForCurrentConversation())
+    }
+
+    func finishHeldDictation() async -> HeldDictationOutcome {
+        let sends = composerSends
+        guard case .spoken(let draft) = await dictation.finish(feedback: target.feedbackForCurrentConversation()),
+              draft === currentDraft, sends == composerSends, !target.voice.isRecording else { return .unsent }
+        return .readyToSend
     }
 
     func transcribeRecoverableDictation(_ id: UUID) {
