@@ -55,9 +55,13 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   future owner must take the provisioning lock before the admission lock when
   writing the marker or changing its fence, and must verify the new boot.
   The staged transaction helper holds those locks and both Debian package locks
-  while atomically syncing a preparing or committed marker. Committing it is
-  safe only after admission and drain are proved; no prepare-shutdown command
-  wires that proof or requests a reboot yet.
+  while atomically syncing a preparing or committed marker. It waits for an idle
+  candidate with admission open, fences ingress, and requires two clean drain
+  checks before commit; failures reopen admission or retain the marker if that
+  fails. New-boot checks cover the boot identity, local service states, firewall,
+  listeners and HAProxy generation, while keeping the marker and fence. These
+  are staged building blocks, not complete route verification: no
+  prepare-shutdown command requests a reboot or verifies the public route yet.
 - **HAProxy** terminates TLS 1.3 on 443 with a self-signed P-256 certificate
   whose SPKI the app pins, and passes only streams that begin with `CONNECT `.
 - **tinyproxy** requires Basic auth (it answers 407 and closes; URLSession
