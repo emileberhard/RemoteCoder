@@ -11,14 +11,15 @@ struct TargetModelCatalog {
     }
 
     func options(for provider: AgentProvider) -> [ModelOption] {
-        let gateway = service.catalog?.visibleOptions(preferences.codexModelVisibility).filter { $0.provider == provider } ?? []
+        let gateway = service.catalog?.visibleOptions(preferences.codexModelVisibility).filter { $0.provider == provider && (provider != .claude || $0.modelProvider != nil) } ?? []
         return provider == .claude
-            ? ClaudeModelCatalog.models.filter { preferences.claudeModelVisibility.isVisible(id: $0.id) } + gateway
+            ? ClaudeModelCatalog.families(in: service.catalog).filter { preferences.claudeModelVisibility.isVisible(id: $0.id) } + gateway
             : gateway
     }
 
     func isVisible(_ model: ModelOption, using visibility: ModelVisibility) -> Bool {
-        if let entry = service.catalog?.entry(for: model.id), entry.option.provider == model.provider {
+        if let entry = service.catalog?.entry(for: model.id), entry.option.provider == model.provider,
+           model.provider != .claude || model.modelProvider != nil {
             return visibility.isVisible(entry)
         }
         return model.provider == .claude && visibility.isVisible(id: ClaudeModelCatalog.canonicalModelID(model.id))
@@ -71,12 +72,12 @@ struct TargetModelCatalog {
     }
 
     func provider(forModelID id: String) -> AgentProvider {
-        service.catalog?.entry(for: id)?.option.provider ?? AgentProvider.provider(forModelID: id)
+        service.catalog?.entry(for: id)?.option.provider ?? service.catalog?.entry(for: ClaudeModelCatalog.canonicalModelID(id))?.option.provider ?? AgentProvider.provider(forModelID: id)
     }
 
     func configured(id: String) -> NewChatModelLookup {
         if let option = service.catalog?.entry(for: id)?.option { return .available(option) }
-        if let option = ClaudeModelCatalog.model(for: id) { return .available(option) }
+        if let option = ClaudeModelCatalog.model(for: id, in: service.catalog) { return .available(option) }
         return service.catalog == nil ? .listNotLoaded : .notOffered
     }
 
@@ -94,7 +95,7 @@ struct TargetModelCatalog {
             }
         }
         if provider == .claude, modelProvider?.externalID == nil,
-           let option = ClaudeModelCatalog.model(for: id) { return option }
+           let option = ClaudeModelCatalog.model(for: id, in: service.catalog) { return option }
         return .unlisted(id: id, modelProvider: modelProvider?.modelProvider,
                          reportedEffort: effort.flatMap(ReasoningEffort.init(rawValue:)), reportedFastMode: fastMode, provider: provider)
     }

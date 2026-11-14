@@ -1,33 +1,37 @@
 import SwiftUI
 
 struct ClaudeModelsSettingsRow: View {
-    let hostEntries: [CodexModelCatalog.Entry]
+    let catalog: CodexModelCatalog?
+    private var hostEntries: [CodexModelCatalog.Entry] { catalog?.entries.filter { $0.option.provider == .claude && $0.option.modelProvider != nil } ?? [] }
+    private var families: [ModelOption] { ClaudeModelCatalog.families(in: catalog) }
     let preferences: ModelPickerPreferences
 
     private var shownCount: Int {
-        ClaudeModelCatalog.models.filter { preferences.claudeModelVisibility.isVisible(id: $0.id) }.count
+        families.filter { preferences.claudeModelVisibility.isVisible(id: $0.id) }.count
             + hostEntries.filter(preferences.codexModelVisibility.isVisible).count
     }
 
     var body: some View {
         NavigationLink {
-            ClaudeModelsSettingsPage(hostEntries: hostEntries, preferences: preferences)
+            ClaudeModelsSettingsPage(catalog: catalog, preferences: preferences)
         } label: {
             ProviderSettingsLabel(provider: .claude,
-                                  value: "\(shownCount) of \(ClaudeModelCatalog.models.count + hostEntries.count)")
+                                  value: "\(shownCount) of \(families.count + hostEntries.count)")
         }
         .accessibilityIdentifier("claude-models-settings")
     }
 }
 
 private struct ClaudeModelsSettingsPage: View {
-    let hostEntries: [CodexModelCatalog.Entry]
+    let catalog: CodexModelCatalog?
+    private var hostEntries: [CodexModelCatalog.Entry] { catalog?.entries.filter { $0.option.provider == .claude && $0.option.modelProvider != nil } ?? [] }
+    private var families: [ModelOption] { ClaudeModelCatalog.families(in: catalog) }
     let preferences: ModelPickerPreferences
 
     var body: some View {
         SettingsPage(title: "Claude Code") {
             Section {
-                ForEach(ClaudeModelCatalog.models) { model in
+                ForEach(families) { model in
                     Toggle(model.displayName, isOn: Binding(
                         get: { preferences.claudeModelVisibility.isVisible(id: model.id) },
                         set: { preferences.setClaudeModelVisible($0, id: model.id) }
@@ -41,7 +45,7 @@ private struct ClaudeModelsSettingsPage: View {
             }
             HostModelsSection(entries: hostEntries, header: "From the Host",
                               footer: "Models the host runs in Claude Code through other providers.", preferences: preferences)
-            ReasoningLevelsSection(provider: .claude, models: ClaudeModelCatalog.models + hostEntries.map(\.option),
+            ReasoningLevelsSection(provider: .claude, models: families + hostEntries.map(\.option),
                                    preferences: preferences)
         }
     }

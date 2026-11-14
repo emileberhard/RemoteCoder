@@ -69,8 +69,7 @@ struct ModelsInPickersSection: View {
     var body: some View {
         Section("Models in Pickers") {
             CodexModelsSettingsRow(catalog: workspace.codexModelCatalog, preferences: workspace.modelPickerPreferences)
-            ClaudeModelsSettingsRow(hostEntries: workspace.codexModelCatalog.source?.service.catalog?.entries
-                                        .filter { $0.option.provider == .claude } ?? [],
+            ClaudeModelsSettingsRow(catalog: workspace.codexModelCatalog.source?.service.catalog,
                                     preferences: workspace.modelPickerPreferences)
         }
     }

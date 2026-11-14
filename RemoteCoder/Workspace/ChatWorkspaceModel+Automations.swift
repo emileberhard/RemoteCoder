@@ -30,11 +30,10 @@ extension ChatWorkspaceModel {
 
     func automationModels(host: String, provider: String) -> [ModelOption] {
         guard let host = automationExecutionHost(host), let provider = AgentProvider(rawValue: provider) else { return [] }
-        if provider == .claude { return ClaudeModelCatalog.models }
         guard let target = model(for: host.id) else { return [] }
         switch provider {
-        case .codex: return target.codexModels.catalog?.entries.map(\.option) ?? []
-        case .claude: return ClaudeModelCatalog.models
+        case .codex: return target.codexModels.catalog?.entries.map(\.option).filter { $0.provider == .codex } ?? []
+        case .claude: return ClaudeModelCatalog.families(in: target.codexModels.catalog)
         }
     }
 

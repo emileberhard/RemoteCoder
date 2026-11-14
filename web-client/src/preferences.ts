@@ -210,7 +210,7 @@ function visibility(raw: string) {
   );
 }
 export function canonicalModelID(id: string) {
-  return ["fable", "opus", "sonnet", "haiku"].find((family) => id.startsWith(`claude-${family}-`)) ?? id;
+  return /^claude-([a-z]+)-/.exec(id)?.[1] ?? id;
 }
 export function reasoningEffort(value: string): Effort | "" | undefined {
   const trimmed = value.trim();

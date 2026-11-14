@@ -75,7 +75,7 @@ enum NewChatModelLookup: Equatable {
 
 enum NewChatModelResolution {
     static func provider(preferredID: String?, providers: Set<AgentProvider>, catalog: CodexModelCatalog? = nil) -> AgentProvider? {
-        let preferred = preferredID.map { catalog?.entry(for: $0)?.option.provider ?? AgentProvider.provider(forModelID: $0) } ?? .codex
+        let preferred = preferredID.map { catalog?.entry(for: $0)?.option.provider ?? catalog?.entry(for: ClaudeModelCatalog.canonicalModelID($0))?.option.provider ?? AgentProvider.provider(forModelID: $0) } ?? .codex
         return providers.contains(preferred) ? preferred : AgentProvider.allCases.first(where: providers.contains)
     }
 
@@ -86,11 +86,11 @@ enum NewChatModelResolution {
         claudeVisibility: ModelVisibility,
         providers: Set<AgentProvider>
     ) -> ModelOption? {
-        let preferredClaude = preferredID.flatMap(ClaudeModelCatalog.model(for:))
+        let preferredClaude = preferredID.flatMap { ClaudeModelCatalog.model(for: $0, in: codex) }
         switch provider(preferredID: preferredID, providers: providers, catalog: codex) {
         case .claude:
-            let visible = ClaudeModelCatalog.models.filter { claudeVisibility.isVisible(id: $0.id) }
-            let external = codex?.entries.filter { $0.option.provider == .claude && codexVisibility.isVisible($0) } ?? []
+            let visible = ClaudeModelCatalog.families(in: codex).filter { claudeVisibility.isVisible(id: $0.id) }
+            let external = codex?.entries.filter { $0.option.provider == .claude && $0.option.modelProvider != nil && codexVisibility.isVisible($0) } ?? []
             return external.first { $0.id == preferredID }?.option
                 ?? visible.first { $0.id == preferredClaude?.id } ?? visible.first ?? external.first?.option
         case .codex:

@@ -4,6 +4,7 @@ import OSLog
 @MainActor
 protocol TurnDispatchHost: AnyObject {
     var isRetired: Bool { get }
+    var dispatchModelCatalog: CodexModelCatalog? { get }
     func feedbackForCurrentConversation() -> (HapticEvent) -> Void
     func presentFailure(_ message: String, conversationID: UUID)
     func turnsChanged(_ change: TurnRegistryChange)
@@ -18,6 +19,10 @@ protocol TurnDispatchHost: AnyObject {
     func queueSupport(threadID: String) async -> Bool?
 }
 
+extension TurnDispatchHost {
+    var dispatchModelCatalog: CodexModelCatalog? { nil }
+}
+
 @MainActor
 final class TurnDispatcher {
     struct Settings {
@@ -28,7 +33,7 @@ final class TurnDispatcher {
         let workingDirectory: String?
         let selectionRevision: UInt64
 
-        func admitted(to thread: CodexAppServerV2.Thread) -> Self {
+        func admitted(to thread: CodexAppServerV2.Thread, catalog: CodexModelCatalog? = nil) -> Self {
             let provider = AgentProvider.provider(forThreadID: thread.id)
             let modelProvider = ThreadModelProvider(thread.modelProvider, threadID: thread.id)
             let id = thread.model ?? model.id
@@ -38,7 +43,7 @@ final class TurnDispatcher {
             let fastMode = thread.extra?.fastModeSelection
             let resolved: ModelOption
             if changedRoute {
-                resolved = (provider == .claude && modelProvider?.externalID == nil ? ClaudeModelCatalog.model(for: id) : nil)
+                resolved = (provider == .claude && modelProvider?.externalID == nil ? ClaudeModelCatalog.model(for: id, in: catalog) : nil)
                     ?? .unlisted(id: id, modelProvider: modelProvider?.modelProvider,
                         reportedEffort: effort, reportedFastMode: fastMode == true, provider: provider)
             } else {
@@ -510,7 +515,7 @@ final class TurnDispatcher {
                         effort: settings.reasoning.effort?.rawValue
                     )
                 }
-                let settings = target == .start ? settings.admitted(to: thread) : settings
+                let settings = target == .start ? settings.admitted(to: thread, catalog: host.dispatchModelCatalog) : settings
                 let threadID = thread.id
                 guard !isClosed else { return }
                 await drafts.bind(submission.draft, to: threadID)

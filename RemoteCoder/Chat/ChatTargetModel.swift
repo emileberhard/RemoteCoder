@@ -38,6 +38,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     let fileOpener: HostFileOpener
     var target: ExecutionTarget { ExecutionTarget(hostID: hostID) }
     var hostID: UUID { host.id }
+    var dispatchModelCatalog: CodexModelCatalog? { codexModels.catalog }
     /// Follows a settings rename without retiring the connection.
     private(set) var hostDisplayName: String
 

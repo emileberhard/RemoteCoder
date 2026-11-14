@@ -322,6 +322,42 @@ test("replicas merge independently per key and propagate native changes across e
   expect(mini.document.entries["appearance.selectedThemeID"]?.value).toBe("paperLight");
 });
 
+test("host Claude families replace the fallback and use alias visibility", async () => {
+  const { workspace, gateway } = setup();
+  gateway.readModels = async () => ({
+    data: [
+      model("gpt-6.1-sol"),
+      { ...model("mythos"), agentProvider: "claude", serviceTiers: [], additionalSpeedTiers: [] },
+      { ...model("opus"), agentProvider: "claude", serviceTiers: [], additionalSpeedTiers: ["fast"] },
+      {
+        ...model("relay/other"),
+        agentProvider: "claude",
+        modelProvider: "relay",
+        modelProviderName: "Relay",
+      },
+    ],
+    nextCursor: null,
+  });
+  gateway.document = {
+    entries: {
+      "claude.modelVisibility": entry("-mythos"),
+      "codex.defaultModelID": entry("claude-mythos-5-2"),
+    },
+  };
+  await workspace.refreshHost("mini");
+  const models = workspace.modelVisibilityChoices();
+  expect(models.filter((choice) => choice.provider === "claude").map((choice) => choice.id)).toEqual([
+    "mythos",
+    "opus",
+    "relay/other",
+  ]);
+  expect(models.find((choice) => choice.id === "mythos")?.visible).toBe(false);
+  expect(models.find((choice) => choice.id === "opus")?.fast).toBe(true);
+  expect(workspace.draft).toMatchObject({ provider: "claude", model: "opus" });
+  workspace.setModelVisible("claude", "mythos", true);
+  expect(workspace.modelVisibilityChoices().find((choice) => choice.id === "mythos")?.visible).toBe(true);
+});
+
 test("visibility keeps native upstream defaults, explicit overrides, and the active hidden model", async () => {
   const { workspace, gateway } = setup();
   gateway.document = {

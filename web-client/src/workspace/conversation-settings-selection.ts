@@ -1,7 +1,6 @@
 import { type ExecutionTarget, sameBinding } from "../execution-context";
 import { canonicalModelID, clampedEffort, reasoningEffort } from "../preferences";
 import { type Address, addressKey, object, type Provider } from "../protocol/boundary";
-import claudeCatalog from "../protocol/claude-models.json";
 import nativeModelDefaults from "../protocol/native-model-defaults.json";
 import { blank, type ComposerDraftStore, type Draft } from "./composer-draft-store";
 import type { Conversation } from "./conversation-session";
@@ -58,7 +57,8 @@ export class ConversationSettingsSelection {
       return;
     const defaults = this.newChatDefaults;
     const preferred = defaults.model ? canonicalModelID(defaults.model) : undefined;
-    const provider = claudeCatalog.some((choice) => choice.id === preferred) ? "claude" : "codex";
+    const provider =
+      this.modelVisibilityChoices().find((choice) => choice.id === preferred)?.provider ?? "codex";
     const visible = this.modelVisibilityChoices().filter(
       (choice) => choice.visible && choice.provider === provider,
     );
@@ -126,7 +126,11 @@ export class ConversationSettingsSelection {
     const catalog = host?.choices.status === "ready" ? host.choices.value : [];
     return catalog.map((choice) => ({
       ...choice,
-      visible: this.preferences.modelVisible(choice.provider, choice.id, !choice.hiddenUpstream),
+      visible: this.preferences.modelVisible(
+        choice.modelProvider ? "codex" : choice.provider,
+        choice.id,
+        !choice.hiddenUpstream,
+      ),
     }));
   }
   setModelVisible(provider: Provider, id: string, visible: boolean) {
@@ -136,7 +140,12 @@ export class ConversationSettingsSelection {
       (choice) => choice.provider === provider && choice.id === canonical,
     );
     if (!entry) throw new Error("The model catalog has no matching visibility setting");
-    this.preferences.setModelVisible(provider, canonical, visible, !entry.hiddenUpstream);
+    this.preferences.setModelVisible(
+      entry.modelProvider ? "codex" : provider,
+      canonical,
+      visible,
+      !entry.hiddenUpstream,
+    );
   }
   async chooseModel(choice: ModelChoice | undefined) {
     if (!choice || this.isRetired()) return;

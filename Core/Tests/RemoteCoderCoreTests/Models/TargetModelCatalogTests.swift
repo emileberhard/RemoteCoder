@@ -16,6 +16,31 @@ struct TargetModelCatalogTests {
         #expect(!catalog.options(for: .claude).isEmpty)
     }
 
+    @Test func hostClaudeFamiliesReplaceFallbackAndKeepAliasVisibility() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "TargetModelCatalogTests.\(UUID())"))
+        var mythos = CodexModelFixtures.wireModel("mythos", name: "Claude Mythos", efforts: ["low", "high"])
+        mythos["agentProvider"] = "claude"
+        var external = CodexModelFixtures.wireModel("relay/other", name: "Other", efforts: ["high"])
+        external["agentProvider"] = "claude"
+        external["modelProvider"] = "relay"
+        external["modelProviderName"] = "Relay"
+        let models = try CodexModelFixtures.models(CodexModelFixtures.wireModels() + [mythos, external])
+        let service = CodexModelCatalogService(directory: .temporaryDirectory.appending(path: UUID().uuidString)) { _ in
+            CodexAppServerV2.ModelListResponse(data: models, nextCursor: nil)
+        }
+        await service.refresh()
+        let preferences = ModelPickerPreferences(defaults: defaults)
+        let catalog = TargetModelCatalog(service: service, preferences: preferences, defaults: defaults)
+        NewChatDefaults.recordModelSelection("claude-mythos-5-2", defaults: defaults)
+        #expect(catalog.options(for: .claude).map(\.id) == ["mythos", "relay/other"])
+        #expect(catalog.newChatDefault(for: nil, health: nil).model?.id == "mythos")
+        #expect(catalog.provider(forModelID: "claude-mythos-5-2") == .claude)
+        #expect(catalog.configured(id: "claude-mythos-5-2").model?.id == "mythos")
+        preferences.setClaudeModelVisible(false, id: "mythos")
+        #expect(catalog.options(for: .claude).map(\.id) == ["relay/other"])
+        #expect(catalog.option(id: "mythos", threadID: "claude_existing", modelProvider: nil, effort: nil, fastMode: false)?.isListed == true)
+    }
+
     @Test func anExistingConversationOffersOnlyModelsOfItsModelProvider() async throws {
         let defaults = try #require(UserDefaults(suiteName: "TargetModelCatalogTests.\(UUID())"))
         var relay = CodexModelFixtures.wireModel("relay/model-a", name: "Model A", efforts: ["low", "medium", "high"])

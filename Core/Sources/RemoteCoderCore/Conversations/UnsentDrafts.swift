@@ -110,7 +110,7 @@ struct UnsentDraftRow: Identifiable, Equatable, Sendable {
                         condensedPaths.condensedPath($0, remoteHomePath: input.remoteHomePath)
                     } ?? "",
                     hostName: input.hostName, showsHostLabel: showsHostLabels,
-                    provider: draft.setup?.modelID.map { input.modelProviders[$0] ?? AgentProvider.provider(forModelID: $0) },
+                    provider: draft.setup?.modelID.map { input.modelProviders[$0] ?? input.modelProviders[ClaudeModelCatalog.canonicalModelID($0)] ?? AgentProvider.provider(forModelID: $0) },
                     modifiedAt: draft.modifiedAt,
                     ageLabel: draft.modifiedAt.map { ConversationSidebarDate.age(of: $0, now: now) },
                     isSelected: address == selected)

@@ -4,6 +4,12 @@ Every compatibility path that remains in the tree, with its owner, the reason
 it exists, and the condition that removes it. A path that is not listed here
 must not exist; a new one is added here in the commit that introduces it.
 
+## Claude family catalog fallback
+
+| Path | Owner | Reason | Removal condition |
+|---|---|---|---|
+| Built-in Claude families when the host reports no native Claude rows | `ClaudeModelCatalog.families` and the web client catalog | Older gateways and hosts without a router cannot report account-specific families | No supported gateway lacks native Claude rows: every rollback target reports them and Claude requires a router |
+
 ## App: state written by earlier builds
 
 Removal package A2.5 (decision D4) deletes this whole group, and its tests, once

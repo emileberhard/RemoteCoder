@@ -78,6 +78,9 @@ function external(model: Model): model is ExternalModel {
   const route = model as Partial<ExternalModel>;
   return typeof route.modelProvider === "string" && typeof route.modelProviderName === "string";
 }
+function runsOnClaude(model: Model) {
+  return (model as Model & { agentProvider?: string }).agentProvider === "claude";
+}
 export class HostServices {
   private readonly versions: HostVersions;
   readonly accountUsage: AccountUsageStore;
@@ -439,19 +442,18 @@ export class HostServices {
                 name: external(model)
                   ? `${model.displayName} · ${model.modelProviderName}`
                   : model.displayName,
-                provider: "codex" as const,
+                provider: runsOnClaude(model) ? ("claude" as const) : ("codex" as const),
                 modelProvider: external(model) ? model.modelProvider : undefined,
                 efforts: model.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
                 defaultEffort: model.defaultReasoningEffort,
                 hiddenUpstream: model.hidden,
                 upstreamDefault: model.isDefault,
                 fast:
-                  model.serviceTiers?.some((tier) => tier.id === "fast") ??
-                  model.additionalSpeedTiers?.includes("fast") ??
-                  false,
+                  (model.serviceTiers?.some((tier) => tier.id === "fast") ?? false) ||
+                  (model.additionalSpeedTiers?.includes("fast") ?? false),
                 images: model.inputModalities?.includes("image") ?? false,
               })),
-            ...claudeCatalog,
+            ...(catalog.some((model) => runsOnClaude(model) && !external(model)) ? [] : claudeCatalog),
           ] as ModelChoice[],
         };
       } catch (error) {

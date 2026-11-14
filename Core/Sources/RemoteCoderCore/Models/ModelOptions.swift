@@ -165,16 +165,24 @@ enum ClaudeModelCatalog {
         models.first(where: { $0.id == canonicalModelID(id) })
     }
 
+    static func families(in catalog: CodexModelCatalog?) -> [ModelOption] {
+        let options: [ModelOption] = catalog?.entries.map(\.option) ?? []
+        let native = options.filter { option in option.provider == .claude && option.modelProvider == nil }
+        return native.isEmpty ? models : native
+    }
+
+    static func model(for id: String, in catalog: CodexModelCatalog?) -> ModelOption? {
+        families(in: catalog).first { $0.id == canonicalModelID(id) }
+    }
+
     // Saved defaults and session metadata from the numbered picker follow the
     // same family now. Remove these mappings once those persisted IDs retire.
     static func canonicalModelID(_ id: String) -> String {
-        switch id {
-        case let value where value.hasPrefix("claude-fable-"): fableModelID
-        case let value where value.hasPrefix("claude-opus-"): opusModelID
-        case let value where value.hasPrefix("claude-sonnet-"): sonnetModelID
-        case let value where value.hasPrefix("claude-haiku-"): haikuModelID
-        default: id
-        }
+        guard id.hasPrefix("claude-") else { return id }
+        let parts = id.dropFirst("claude-".count).split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count > 1, !parts[0].isEmpty,
+              parts[0].utf8.allSatisfy({ (97...122).contains($0) }) else { return id }
+        return String(parts[0])
     }
 
     private static func model(id: String, displayName: String, supportsFastMode: Bool) -> ModelOption {
