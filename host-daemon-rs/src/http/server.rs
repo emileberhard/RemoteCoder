@@ -471,7 +471,7 @@ mod tests {
             (Some("gateway-inference-secret"), 0o600, 503),
             (Some("dictation-secret"), 0o644, 503),
         ] {
-            if let key = key {
+            if let Some(key) = key {
                 std::fs::write(&key_file, key).unwrap();
                 std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(mode)).unwrap();
             }

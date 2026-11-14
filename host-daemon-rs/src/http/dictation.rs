@@ -52,7 +52,7 @@ impl DictationAccess {
 
     fn credential(&self) -> Result<serde_json::Value> {
         let key = read_key(&self.key_file)?;
-        if let file = &self.gateway_key_file {
+        if let Some(file) = &self.gateway_key_file {
             ensure!(
                 key != read_key(file)?,
                 "Dictation must not publish the gateway router key"
@@ -129,10 +129,10 @@ mod tests {
             ),
         ] {
             let mut values = HashMap::new();
-            if let origin = origin {
+            if let Some(origin) = origin {
                 values.insert("RC_CODEX_GATEWAY_DICTATION_ORIGIN".into(), origin.into());
             }
-            if let key = key {
+            if let Some(key) = key {
                 values.insert("RC_CODEX_GATEWAY_DICTATION_KEY_FILE".into(), key.into());
             }
             let sources = ConfigSources::from_file_vars(values);

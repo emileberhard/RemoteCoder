@@ -78,7 +78,6 @@ impl RouterConfig {
         Self::local_for_test(([127, 0, 0, 1], 1).into(), key_file)
     }
 
-    #[cfg(test)]
     pub(crate) fn key_file(&self) -> &std::path::Path {
         &self.key_file
     }
