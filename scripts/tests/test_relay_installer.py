@@ -45,6 +45,7 @@ class RelayInstallerTests(unittest.TestCase):
             "maintenance-startup",
             "maintenance-recover",
             "maintenance_state.py",
+            "maintenance_drain.py",
             "haproxy-maintenance.conf",
             "config-activation.sh",
             "nftables.conf",
@@ -213,7 +214,7 @@ esac
             first[:2],
             [
                 "apt-get update -qq",
-                "apt-get install -y -qq haproxy tinyproxy nftables unattended-upgrades",
+                "apt-get install -y -qq conntrack haproxy iptables tinyproxy nftables unattended-upgrades",
             ],
         )
         self.assertTrue((self.root / "sbin/policy-rc.d").is_symlink())

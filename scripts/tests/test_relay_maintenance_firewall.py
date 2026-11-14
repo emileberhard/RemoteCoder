@@ -52,9 +52,46 @@ def run_lab(parent_namespace_fd):
         current_namespace.st_ino,
     ):
         raise RuntimeError("the firewall test requires a separate network namespace")
+    sys.path.insert(0, str(SERVER))
+    import maintenance_drain
+
+    maintenance_drain.NFT = NFT
+    maintenance_drain.LEGACY = ("/bin/true", "/bin/true")
     subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
     subprocess.run([NFT, "-c", "-f", str(SERVER / "nftables.conf")], check=True)
     subprocess.run([NFT, "-f", str(SERVER / "nftables.conf")], check=True)
+    maintenance_drain.tracking_is_configured()
+    subprocess.run([NFT, "add", "table", "inet", "test_notrack"], check=True)
+    subprocess.run(
+        [
+            NFT,
+            "add",
+            "chain",
+            "inet",
+            "test_notrack",
+            "prerouting",
+            "{",
+            "type",
+            "filter",
+            "hook",
+            "prerouting",
+            "priority",
+            "-300;",
+            "}",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [NFT, "add", "rule", "inet", "test_notrack", "prerouting", "notrack"],
+        check=True,
+    )
+    try:
+        maintenance_drain.tracking_is_configured()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("a notrack rule was accepted")
+    subprocess.run([NFT, "delete", "table", "inet", "test_notrack"], check=True)
     subprocess.run([NFT, "-c", "-f", str(SERVER / "nftables.conf")], check=True)
     subprocess.run(
         [TC, "qdisc", "add", "dev", "lo", "root", "netem", "delay", "500ms"],
@@ -91,6 +128,7 @@ def run_lab(parent_namespace_fd):
     listeners = []
     clients = []
     servers = []
+    auxiliary = []
     families = [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")]
 
     def connect(family, host):
@@ -105,6 +143,11 @@ def run_lab(parent_namespace_fd):
         return client
 
     try:
+        for port in (8888, 20001):
+            listener = socket.socket()
+            listener.bind(("127.0.0.1", port))
+            listener.listen(16)
+            auxiliary.append(listener)
         for family, host in families:
             listener = socket.socket(family)
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -112,7 +155,7 @@ def run_lab(parent_namespace_fd):
             listener.settimeout(2)
             if family == socket.AF_INET6:
                 listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-            listener.bind((host, 443))
+            listener.bind(("0.0.0.0" if family == socket.AF_INET else "::", 443))
             listener.listen(16)
             connect(family, host)
             accepted, _ = listener.accept()
@@ -123,9 +166,30 @@ def run_lab(parent_namespace_fd):
         subprocess.run(
             [NFT, "-f", str(SERVER / "maintenance-firewall.nft")], check=True
         )
+        maintenance_drain.fence_is_configured()
+        subprocess.run(
+            [
+                NFT,
+                "add",
+                "rule",
+                "inet",
+                "remote_coder_relay_maintenance",
+                "input",
+                "counter",
+            ],
+            check=True,
+        )
+        try:
+            maintenance_drain.fence_is_configured()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("an extra firewall rule was accepted")
         subprocess.run(
             [NFT, "-f", str(SERVER / "maintenance-firewall.nft")], check=True
         )
+        maintenance_drain.fence_is_configured()
+        assert maintenance_drain.listener_queues({443, 8888, 20001})
         subprocess.run([NFT, "-f", str(SERVER / "nftables.conf")], check=True)
         for index, (family, host) in enumerate(families):
             active, queued = clients[index * 2 : index * 2 + 2]
@@ -154,7 +218,7 @@ def run_lab(parent_namespace_fd):
             connect(family, host)
             print(f"{host}: admission reopened")
     finally:
-        for stream in clients + servers + listeners:
+        for stream in clients + servers + listeners + auxiliary:
             stream.close()
 
 

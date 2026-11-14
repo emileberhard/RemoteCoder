@@ -31,6 +31,10 @@ def run_lab(parent_fd, mode, version):
         raise RuntimeError("the conntrack test requires a separate network namespace")
     family = socket.AF_INET if version == "4" else socket.AF_INET6
     host = "127.0.0.1" if version == "4" else "::1"
+    sys.path.insert(0, str(SERVER))
+    import maintenance_drain
+
+    maintenance_drain.CONNTRACK = CONNTRACK
     subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
     Path("/proc/sys/net/ipv4/tcp_syncookies").write_text("2")
     if mode == "expire":
@@ -79,6 +83,7 @@ def run_lab(parent_fd, mode, version):
         client.setblocking(False)
         assert client.connect_ex((host, 443)) in (0, errno.EINPROGRESS)
         wait_until(lambda: "SYN_RECV" in state(), 5)
+        assert maintenance_drain.active_conntrack({443})
         half_open = subprocess.run(
             [
                 "ss",
@@ -100,6 +105,7 @@ def run_lab(parent_fd, mode, version):
         )
         if mode == "expire":
             wait_until(lambda: "SYN_RECV" not in state(), 4)
+            assert not maintenance_drain.active_conntrack({443})
         _, writable, _ = select.select([], [client], [], 8)
         assert writable and client.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0
         client.setblocking(True)

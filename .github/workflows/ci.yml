@@ -144,12 +144,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes bubblewrap conntrack iproute2 lsof nftables tmux zsh
+          test ! -e /usr/sbin/policy-rc.d && test ! -L /usr/sbin/policy-rc.d
+          printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+          sudo chmod 755 /usr/sbin/policy-rc.d
+          trap 'sudo rm -f /usr/sbin/policy-rc.d' EXIT
+          sudo apt-get install --yes haproxy
       - name: Test relay provisioning in a disposable filesystem
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           RC_RELAY_REQUIRE_SANDBOX=1 python3 -m unittest scripts.tests.test_relay_installer scripts.tests.test_relay_transaction -v
       - name: Test relay firewall in a network namespace
         run: RC_RELAY_REQUIRE_INGRESS=1 python3 -m unittest scripts.tests.test_relay_maintenance_firewall scripts.tests.test_relay_conntrack -v
+      - name: Test relay drain and HAProxy in a network namespace
+        run: RC_RELAY_REQUIRE_HAPROXY=1 python3 -m unittest scripts.tests.test_relay_drain scripts.tests.test_relay_haproxy_drain -v
       - run: rustup show
       - run: python3 scripts/gateway-check.py cargo
 
