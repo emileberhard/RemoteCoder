@@ -381,6 +381,7 @@ struct ChatWorkspaceModelTests {
         let model = try #require(fixture.workspace.selectedScreen)
         #expect(await model.prepareDraft())
         model.input = "Typed before the hold"
+        let draft = try #require(model.currentDraft)
         let transcription = HeldTranscription()
         model.target.voice = VoiceInputController(access: .fixture, owner: model.executionTarget,
                                            transcriber: HeldTranscriber(text: "spoken later", transcription: transcription),
@@ -392,6 +393,7 @@ struct ChatWorkspaceModelTests {
         await transcription.waitUntilHeld()
 
         #expect(await model.send())
+        #expect(model.currentDraft === draft)
         await transcription.release()
 
         #expect(await finishing.value == .unsent)

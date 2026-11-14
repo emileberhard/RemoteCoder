@@ -1220,8 +1220,13 @@ entrypoint linked above.
     dragged-away finger or a cancelled touch leaves the text in the draft,
     and a send that fails after the release shows "Not sent". A release
     before capture is live continues as ordinary dictation. Nothing moves
-    under the finger: the keyboard and the focused or folded layout stay. The
-    hold is the composer's own view state. The Mac has no hold.
+    under the finger: the keyboard and the focused or folded layout stay.
+    "Sending…" covers the composer's other controls for at most 1.5 seconds;
+    a slower transcript keeps sending behind the mic's spinner, so Stop is
+    never hidden for the length of a transcription. The hold is the
+    composer's own view state, shown only in the conversation that started
+    it, and a late result never changes another hold's state. The Mac has no
+    hold.
   - Stop and Voice Mode go through `SlideToConfirmButton`. On iOS a tap never
     acts. Touch-down reveals the "Swipe up to …" guide track, the thumb follows
     the finger, and lifting or cancelling the touch collapses it at once; no

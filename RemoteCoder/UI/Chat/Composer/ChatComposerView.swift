@@ -70,8 +70,14 @@ struct ChatComposerView: View {
     @State private var fileDestination: AttachmentDestination?
     @State private var focusAfterTakeOver = false
     @State private var isInputDropTargeted = false
-    @State private var quickDictation: QuickDictationPhase?
-    @State private var quickDictationBegan = ContinuousClock.now
+    @State private var quickDictation: QuickDictation?
+
+    private struct QuickDictation: Equatable {
+        let id = UUID()
+        let conversation: UUID
+        let began = ContinuousClock.now
+        var phase = QuickDictationPhase.held(.sends)
+    }
 
     private struct AttachmentDestination {
         let screen: ChatScreenModel
@@ -112,11 +118,12 @@ struct ChatComposerView: View {
     }
 
     private var showsRecordingBar: Bool {
-        screen.target.voice.isRecording && quickDictation == nil
+        screen.target.voice.isRecording && quickDictationPhase == nil
     }
 
     private var quickDictationPhase: QuickDictationPhase? {
-        guard case .held(let release) = quickDictation else { return quickDictation }
+        guard let quickDictation, quickDictation.conversation == screen.currentConversationID else { return nil }
+        guard case .held(let release) = quickDictation.phase else { return quickDictation.phase }
         guard screen.target.voice.isRecording else { return nil }
         return .held(release == .sends && screen.canSendDictation ? .sends : .edits)
     }
@@ -690,9 +697,9 @@ struct ChatComposerView: View {
             }
             .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: isQuickDictating)
             .task(id: quickDictation) {
-                guard quickDictation == .unsent else { return }
-                try? await Task.sleep(for: .seconds(1.2))
-                if !Task.isCancelled, quickDictation == .unsent { quickDictation = nil }
+                guard let linger = quickDictation?.phase.linger else { return }
+                try? await Task.sleep(for: linger)
+                if !Task.isCancelled { quickDictation = nil }
             }
         }
     }
@@ -824,24 +831,23 @@ struct ChatComposerView: View {
     private func startQuickDictation() {
         screen.micTapStart()
         guard screen.target.voice.isRecording else { return }
-        quickDictation = .held(.sends)
-        quickDictationBegan = .now
+        quickDictation = QuickDictation(conversation: screen.currentConversationID)
         Task { await screen.micTapStartAsync() }
     }
 
     private func moveQuickDictation(_ release: QuickDictationRelease) {
-        guard case .held(let current) = quickDictation, current != release else { return }
-        quickDictation = .held(release)
+        guard case .held(let current) = quickDictation?.phase, current != release else { return }
+        quickDictation?.phase = .held(release)
     }
 
     private func finishQuickDictation(_ release: QuickDictationRelease) {
-        guard case .held = quickDictation else { return }
+        guard let held = quickDictation, held.phase.isHeld else { return }
         let voice = screen.target.voice
         guard voice.isRecording else {
             quickDictation = nil
             return
         }
-        if release == .sends, voice.recordingStartTime == nil || ContinuousClock.now - quickDictationBegan < .milliseconds(300) {
+        if release == .sends, voice.recordingStartTime == nil || ContinuousClock.now - held.began < .milliseconds(300) {
             quickDictation = nil
             dismissSoftwareKeyboard()
             return
@@ -853,13 +859,15 @@ struct ChatComposerView: View {
             Task { await origin.micTapStopAsync() }
             return
         }
-        quickDictation = .sending
+        quickDictation?.phase = .sending
         Task { @MainActor in
             if await origin.finishHeldDictation() == .readyToSend, await onSend(origin) {
-                quickDictation = nil
+                if quickDictation?.id == held.id { quickDictation = nil }
             } else {
-                quickDictation = .unsent
                 origin.target.feedbackForCurrentConversation()(.warning)
+                if quickDictation == nil || quickDictation?.id == held.id {
+                    quickDictation = QuickDictation(conversation: held.conversation, phase: .unsent)
+                }
             }
         }
     }

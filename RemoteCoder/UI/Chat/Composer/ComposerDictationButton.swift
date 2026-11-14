@@ -12,6 +12,14 @@ enum QuickDictationPhase: Equatable {
         if case .held = self { true } else { false }
     }
 
+    var linger: Duration? {
+        switch self {
+        case .held: nil
+        case .sending: .seconds(1.5)
+        case .unsent: .seconds(1.2)
+        }
+    }
+
     var hint: LocalizedStringKey {
         switch self {
         case .held(.sends): "Release to send"
