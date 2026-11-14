@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+marker=/var/lib/remote-coder-relay/maintenance.json
+if [ -e "$marker" ] || [ -L "$marker" ]; then
+    exec /usr/sbin/nft -f /usr/local/lib/remote-coder-relay/maintenance-firewall.nft
+fi
