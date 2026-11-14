@@ -39,6 +39,24 @@ class RelayProvisioningTests(unittest.TestCase):
             ["ExecStop=", "ExecStop=/usr/bin/true"],
         )
 
+    def test_boot_recovery_is_ordered_after_the_relay_services(self):
+        unit = configparser.ConfigParser(interpolation=None)
+        unit.read(ROOT / "relay/server/remote-coder-relay-maintenance-recover.service")
+        expected = {
+            "nftables.service",
+            "ssh.service",
+            "tinyproxy.service",
+            "haproxy.service",
+            "remote-coder-relay-hosts.service",
+        }
+        self.assertTrue(expected <= set(unit["Unit"]["Wants"].split()))
+        self.assertTrue(expected <= set(unit["Unit"]["After"].split()))
+        self.assertEqual(
+            unit["Service"]["ExecStart"],
+            "/usr/local/lib/remote-coder-relay/maintenance-recover --boot",
+        )
+        self.assertEqual(unit["Install"]["WantedBy"], "multi-user.target")
+
     def test_provisioning_transports_the_policy_and_activation_owner(self):
         maintainer = types.ModuleType("maintainer_config")
         maintainer.load = dict
@@ -91,6 +109,7 @@ class RelayProvisioningTests(unittest.TestCase):
                 "maintenance_drain.py",
                 "haproxy-maintenance.conf",
                 "nftables-maintenance.conf",
+                "remote-coder-relay-maintenance-recover.service",
             ):
                 self.assertEqual(
                     archive.extractfile(name).read(),

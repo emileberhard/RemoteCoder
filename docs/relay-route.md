@@ -52,8 +52,10 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   committed, malformed and new-boot markers fenced for verification. HAProxy
   startup takes the admission lock before checking the marker, so it cannot
   reapply a fence between recovery removing it and deleting the marker. The
-  future owner must take the provisioning lock before the admission lock when
-  writing the marker or changing its fence, and must verify the new boot.
+  owner takes the provisioning lock before the admission lock when writing the
+  marker or changing its fence. While a marker exists, administrators leave
+  HAProxy, tinyproxy, SSH and the firewall to this owner; raw root commands can
+  bypass the fence, and recovery refuses a missing or altered fence.
   The nftables service stop leaves existing rules loaded; its normal restart
   reloads the base table without removing the separate maintenance table.
   The staged transaction helper holds those locks and both Debian package locks
@@ -63,10 +65,12 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   fails. Its staged reboot operation rechecks drain during the 06:33 Stockholm
   window and persists the committed phase before requesting reboot; an uncertain
   request leaves the fence. It does not establish the Mini's reboot state.
-  New-boot checks cover the boot identity, local service states, firewall,
-  listeners and HAProxy generation, while keeping the marker and fence. These
-  are staged building blocks, not complete route verification: no runnable
-  prepare-shutdown owner ties them together or verifies the public route yet.
+  On a new boot the staged recovery unit waits boundedly for local service
+  states, firewall, listeners and HAProxy generation; it reopens admission and
+  removes the marker only when those checks pass. The Mini must then run
+  `just relay-probe` independently and report a failed public route as an
+  outage. This probe is post-hoc; it is not part of the local boot decision.
+  No runnable prepare-shutdown owner ties the complete workflow together yet.
 - **HAProxy** terminates TLS 1.3 on 443 with a self-signed P-256 certificate
   whose SPKI the app pins, and passes only streams that begin with `CONNECT `.
 - **tinyproxy** requires Basic auth (it answers 407 and closes; URLSession

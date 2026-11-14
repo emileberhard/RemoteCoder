@@ -1,0 +1,12 @@
+[Unit]
+Description=Recover relay maintenance after a new boot
+Wants=nftables.service ssh.service tinyproxy.service haproxy.service remote-coder-relay-hosts.service
+After=nftables.service ssh.service tinyproxy.service haproxy.service remote-coder-relay-hosts.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/remote-coder-relay/maintenance-recover --boot
+TimeoutStartSec=210
+
+[Install]
+WantedBy=multi-user.target

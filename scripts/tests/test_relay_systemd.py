@@ -49,9 +49,20 @@ class RelaySystemdTests(unittest.TestCase):
             shutil.copyfile(
                 SERVER / "nftables-maintenance.conf", nft_dropin / "maintenance.conf"
             )
+            for name in (
+                "remote-coder-relay-maintenance-recover.service",
+                "remote-coder-relay-hosts.service",
+            ):
+                shutil.copyfile(SERVER / name, units / name)
             startup = fixture / "maintenance-startup"
             shutil.copyfile(SERVER / "maintenance-startup", startup)
             startup.chmod(0o755)
+            recovery = fixture / "maintenance-recover"
+            shutil.copyfile(SERVER / "maintenance-recover", recovery)
+            recovery.chmod(0o755)
+            hosts = fixture / "remote-coder-relay-hosts"
+            shutil.copyfile(SERVER / "remote-coder-relay-hosts", hosts)
+            hosts.chmod(0o755)
             command = [
                 "bwrap",
                 "--unshare-all",
@@ -87,6 +98,14 @@ class RelaySystemdTests(unittest.TestCase):
                 "--ro-bind",
                 str(startup),
                 "/usr/local/lib/remote-coder-relay/maintenance-startup",
+                "--ro-bind",
+                str(recovery),
+                "/usr/local/lib/remote-coder-relay/maintenance-recover",
+                "--tmpfs",
+                "/usr/local/sbin",
+                "--ro-bind",
+                str(hosts),
+                "/usr/local/sbin/remote-coder-relay-hosts",
                 "/usr/bin/env",
                 "SYSTEMD_UNIT_PATH=/tmp/fixture/units:",
                 "systemd-analyze",
@@ -94,6 +113,7 @@ class RelaySystemdTests(unittest.TestCase):
                 "verify",
                 "/tmp/fixture/units/haproxy.service",
                 "/tmp/fixture/units/nftables.service",
+                "/tmp/fixture/units/remote-coder-relay-maintenance-recover.service",
             ]
             result = subprocess.run(
                 command, capture_output=True, text=True, timeout=20, check=False

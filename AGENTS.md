@@ -473,6 +473,10 @@ These hold across the app and the gateway. Each is detailed in the area files.
   keys; each configured gateway holds one router key. `scripts/release-config.py` limits release bundles
   to public fields and development installs to public fields plus the gateway
   token.
+- **Relay maintenance has one owner.** While its durable marker exists, only
+  that owner changes relay services or firewall state. A new boot must pass the
+  local recovery checks before admission reopens; an independent pinned public
+  probe follows reopening. [Relay route](docs/relay-route.md) owns the details.
 - **macOS permissions have separate owners.** SimpleMDM owns supported TCC
   grants. Local Network has no per-app MDM grant; the gateway's LaunchAgent and
   cold-start launcher keep its bundle association and selected LaunchServices

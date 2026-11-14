@@ -266,6 +266,19 @@ class RelayTransaction:
             raise RuntimeError("relay boot identity changed during verification")
         return identity
 
+    def reopen_after_new_boot(self, timeout_seconds):
+        from maintenance_drain import fence_is_configured
+
+        if self._locks is None or self._operation_id is not None:
+            raise RuntimeError("relay transaction is not ready for recovery")
+        marker = read_marker()
+        identity = self.check_new_boot_prerequisites(timeout_seconds)
+        if read_marker() != marker:
+            raise RuntimeError("relay maintenance marker changed during verification")
+        fence_is_configured(time.monotonic() + 5)
+        remove_fence_and_marker()
+        return identity
+
     def commit(self):
         marker = self._preparing_marker()
         if not self._fenced:
