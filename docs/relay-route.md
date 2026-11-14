@@ -33,8 +33,9 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   changed configuration or activating installed packages.
   Package installation alone does not activate new binaries or libraries; the
   future maintenance owner or an explicit supervised operation must activate them.
-- **Maintenance ingress.** The checked-in firewall fragment rejects new TCP
-  connections while keeping tracked existing connections. It is not installed or
+- **Maintenance ingress.** The checked-in firewall fragment rejects TCP packets
+  to port 443 classified as new while keeping tracked existing connections;
+  handshakes already in progress can still complete. It is not installed or
   operated by provisioning and is not a complete maintenance workflow. The future
   owner must establish tracking before admission, persist and recover its fence,
   account for queued and in-flight work, and verify boot before using it. Reloading
