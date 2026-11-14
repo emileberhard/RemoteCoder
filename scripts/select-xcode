@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 version=$(<"$(dirname "$0")/../.xcode-version")
-expected="${version%%.0-release.candidate}"
+expected="${version%.0}"
 for app in /Applications/Xcode*.app; do
   if [[ $(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist" 2>/dev/null) == "$expected" ]]; then
     echo "DEVELOPER_DIR=$app/Contents/Developer" >> "${GITHUB_ENV:?}"
