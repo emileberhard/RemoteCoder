@@ -489,7 +489,9 @@ esac
         boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
         nft = self.root / "sbin/nft"
         nft.write_text(
-            "#!/bin/sh\ncat >> /tmp/fixture/nft-input\n"
+            "#!/bin/sh\n"
+            "if [ \"$1\" = -j ]; then printf '{}\\n'; exit 0; fi\n"
+            "cat >> /tmp/fixture/nft-input\n"
             "test ! -e /tmp/fixture/fail-nft\n"
         )
         nft.chmod(0o755)
@@ -610,8 +612,8 @@ esac
         )
         write_marker("committed")
         result = recover()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(marker.exists())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(marker.exists())
 
 
 if __name__ == "__main__":

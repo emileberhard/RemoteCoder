@@ -506,7 +506,17 @@ try:
         assert state.read_marker()["phase"] == phase
         with state.RelayTransaction() as recovery:
             if phase != "reboot-requesting":
-                assert "abandoned" in recovery.reconcile_pending(10)
+                if phase == "committed":
+                    with patch.object(drain, "fence_is_configured", side_effect=RuntimeError("missing fence")):
+                        try:
+                            recovery.reconcile_pending(10)
+                        except RuntimeError as error:
+                            assert "missing fence" in str(error)
+                        else:
+                            raise AssertionError("a missing committed fence was ignored")
+                    assert state.MARKER.exists()
+                with patch.object(drain, "fence_is_configured"):
+                    assert "abandoned" in recovery.reconcile_pending(10)
                 assert not state.MARKER.exists()
             else:
                 for _ in range(2):
