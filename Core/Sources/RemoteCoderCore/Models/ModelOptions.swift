@@ -142,6 +142,10 @@ extension AgentProvider {
 }
 
 enum ClaudeModelCatalog {
+    static func familyDisplayName(for id: String) -> String {
+        id.prefix(1).uppercased() + id.dropFirst()
+    }
+
     static let fableModelID = "fable"
     static let opusModelID = "opus"
     static let sonnetModelID = "sonnet"

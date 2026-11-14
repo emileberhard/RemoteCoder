@@ -15,7 +15,19 @@ struct ClaudeRouterAccountTests {
         #expect(response.automaticMarks(for: "one") == ["Others"])
         #expect(response.automaticMarks(for: "two") == ["Fable"])
         response.models = [.init(model: "fable", automatic: "one", availableAt: nil)]
-        #expect(response.automaticMarks(for: "one") == ["Others", "Fable"])
+        #expect(response.automaticMarks(for: "one") == ["Automatic"])
+        #expect(response.automaticMarks(for: "two").isEmpty)
+        response.models = [
+            .init(model: "fable", automatic: "one", availableAt: nil),
+            .init(model: "sonnet", automatic: "one", availableAt: nil),
+        ]
+        #expect(response.automaticMarks(for: "one") == ["Automatic"])
+        response.models = [
+            .init(model: "sonnet", automatic: "one", availableAt: nil),
+            .init(model: "fable", automatic: "two", availableAt: nil),
+        ]
+        #expect(response.automaticMarks(for: "one") == ["Others", "Sonnet"])
+        #expect(response.automaticMarks(for: "two") == ["Fable"])
         response.models = [.init(model: "fable", automatic: nil, availableAt: 18000)]
         try response.validate()
         #expect(response.automaticMarks(for: "one") == ["Others"])

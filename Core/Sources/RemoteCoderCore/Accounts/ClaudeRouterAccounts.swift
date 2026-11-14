@@ -31,7 +31,10 @@ struct ClaudeRouterAccountList: Codable, Equatable, Sendable {
 
     func automaticMarks(for accountID: String) -> [String] {
         let choices = models ?? []
-        let general = accountID == automatic ? [choices.isEmpty ? "Automatic" : "Others"] : []
+        guard choices.contains(where: { $0.automatic != automatic }) else {
+            return accountID == automatic ? ["Automatic"] : []
+        }
+        let general = accountID == automatic ? ["Others"] : []
         return general + choices.filter { $0.automatic == accountID }.sorted { $0.model < $1.model }.map(\.title)
     }
 
@@ -73,7 +76,7 @@ struct ClaudeModelAutomaticChoice: Codable, Equatable, Sendable {
     let automatic: String?
     let availableAt: Double?
 
-    var title: String { model.prefix(1).uppercased() + model.dropFirst() }
+    var title: String { ClaudeModelCatalog.familyDisplayName(for: model) }
 }
 
 struct CopilotRouterAccount: Codable, Equatable, Sendable {
@@ -148,16 +151,18 @@ struct ClaudeRouterAccount: Codable, Equatable, Sendable, Identifiable {
     }
 
     func usageRows(now: Date) -> [CodexUsageLimitRow] {
-        windows.map { window in
-            let kind = window.kind
-            return CodexUsageLimitRow(id: "claude-\(id)-\(window.id)", title: window.title,
-                usedPercent: 100 - window.remainingPercent, kind: kind,
-                isStale: isUsageStale(observedAt: window.observedAt ?? observedAt, now: now),
-                resetText: window.resetText(now: now, calendar: .autoupdatingCurrent),
-                runOutWarning: kind == .fiveHour ? observedAt.flatMap {
-                    UsageRunOutWarning(window: window, observedAt: Date(timeIntervalSince1970: $0), now: now)
-                } : nil)
-        }
+        windows.map { usageRow(for: $0, now: now) }
+    }
+
+    func usageRow(for window: AccountUsageWindow, now: Date) -> CodexUsageLimitRow {
+        let kind = window.kind
+        return CodexUsageLimitRow(id: "claude-\(id)-\(window.id)", title: window.title,
+            usedPercent: 100 - window.remainingPercent, kind: kind,
+            isStale: isUsageStale(observedAt: window.observedAt ?? observedAt, now: now),
+            resetText: window.resetText(now: now, calendar: .autoupdatingCurrent),
+            runOutWarning: kind == .fiveHour ? observedAt.flatMap {
+                UsageRunOutWarning(window: window, observedAt: Date(timeIntervalSince1970: $0), now: now)
+            } : nil)
     }
 
     private func isUsageStale(observedAt: Double?, now: Date) -> Bool {
