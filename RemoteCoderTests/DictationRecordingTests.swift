@@ -253,6 +253,8 @@ struct DictationRecordingTests {
 
         #expect(model.target.voiceError == nil)
         #expect(model.input == "spoken offline")
+        #expect(!model.target.voice.isRecording)
+        #expect(!model.target.voice.isTranscribing)
         let recordingID = try #require(transcriber.batchRecordingIDs.first)
         #expect(transcriber.batchRecordingIDs == [recordingID])
         #expect(try await model.drafts.hasSavedReceipt(for: recordingID))
@@ -278,7 +280,14 @@ struct DictationRecordingTests {
 
         #expect(model.target.voiceError != nil)
         let recordingID = try #require(transcriber.batchRecordingIDs.first)
-        #expect(await waitUntil { model.recoverableDictations.map(\.id) == [recordingID] })
+        #expect(await waitUntil {
+            guard model.recoverableDictations.map(\.id) == [recordingID] else { return false }
+            if case .failed = model.recoverableDictations.first?.status { return true }
+            return false
+        })
+        #expect(!model.target.voice.isRecording)
+        #expect(!model.target.voice.isTranscribing)
+        #expect(transcriber.batchRecordingIDs == [recordingID])
 
         model.target.voiceError = nil
         model.transcribeRecoverableDictation(recordingID)

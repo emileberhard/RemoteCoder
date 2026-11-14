@@ -15,7 +15,7 @@ struct GatewaySpeechAccessTests {
         }
         #expect(relay.baseURL.absoluteString == "https://mini.example:8787/speech/assemblyai")
         #expect(relay.bearerToken == "rc1.phone.secret")
-        #expect(relay.transport == nil)
+        #expect(relay.transport != nil)
 
         var trusted = host
         trusted.transport = .trustedNetwork
@@ -45,7 +45,7 @@ struct GatewaySpeechAccessTests {
 
         guard case .relay(let configured) = try await access.access(to: .openAI) else { Issue.record("OpenAI must relay"); return }
         #expect(configured.baseURL.absoluteString == "https://mini.example:8787/speech/openai")
-        #expect(configured.transport == nil)
+        #expect(configured.transport != nil)
 
         await routes.connected(over: .relay(relay), startedAt: .now, afterFailing: [])
         guard case .relay(let relayed) = try await access.access(to: .openAI),

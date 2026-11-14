@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SpeechKit
 import Synchronization
 
@@ -71,12 +72,20 @@ struct GatewaySpeechAccess: Sendable {
         }
 
         func transport(for route: GatewayRoute) -> SpeechRelayTransport? {
-            guard route != .configured else { return nil }
             return latest.withLock { latest in
                 if let latest, latest.route == route { return latest.transport }
                 let transport = SpeechRelayTransport(
-                    configure: { route.configure($0) },
-                    acceptsServerTrust: { [routes] in routes.acceptsServerTrust($0) }
+                    configure: {
+                        route.configure($0)
+                        $0.waitsForConnectivity = false
+                    },
+                    acceptsServerTrust: { [routes] in
+                        route == .configured ? SecTrustEvaluateWithError($0, nil) : routes.acceptsServerTrust($0)
+                    },
+                    uploadLog: { message in
+                        VoiceModeDiagnostics.log(message)
+                        Task { await DiagnosticsOutbox.shared.persistPending() }
+                    }
                 )
                 latest = (route, transport)
                 return transport

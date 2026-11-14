@@ -73,6 +73,7 @@ final class VoiceInputController {
     private let captureOwner = UUID()
     private let logger = AppLogger(category: "VoiceInput")
 
+    private(set) var failedTranscription: (id: UUID, message: String)?
     private(set) var isRecording = false
     private(set) var isTranscribing = false
     private(set) var recordingStartTime: Date?
@@ -211,6 +212,7 @@ final class VoiceInputController {
         stopped = StoppedDictation(recordingID: active.writer.id, audio: audio, live: active.live, configuration: active.configuration,
                                    archive: active.archive, stopRequested: stopRequested,
                                    recognition: active.recognition)
+        await recordAttempt(recordingID: active.writer.id, audio: audio, outcome: "stopped")
         VoiceModeDiagnostics.log("recording segment stopped")
     }
 
@@ -253,8 +255,17 @@ final class VoiceInputController {
         }
         defer { captureAccountMonitor?.cancel(); captureAccountMonitor = nil }
         do {
-            return try await withAccount(stopped.archive?.account) { [self] in try await transcribe(stopped) }
+            let result = try await withAccount(stopped.archive?.account) { [self] in try await transcribe(stopped) }
+            if failedTranscription?.id == stopped.recordingID { failedTranscription = nil }
+            await recordAttempt(recordingID: stopped.recordingID, audio: stopped.audio, outcome: "text")
+            return result
         } catch {
+            if !(error is CancellationError) {
+                failedTranscription = (stopped.recordingID, error.localizedDescription)
+                logger.error("dictation failed id=\(stopped.recordingID) error=\(error.localizedDescription)")
+            }
+            await recordAttempt(recordingID: stopped.recordingID, audio: stopped.audio,
+                                outcome: error is CancellationError ? "cancelled" : "failed")
             await stopped.live?.dictation.cancel()
             await stopped.recognition.cancel()
             if let archive = stopped.archive, archive.writer != nil {
@@ -276,7 +287,8 @@ final class VoiceInputController {
                 return Dictation(transcript: transcript, recordingID: stopped.recordingID, recording: stopped.audio.recording)
             } catch let error as RealtimeDictationError {
                 let explained = access.explain(error, provider: live.provider)
-                VoiceModeDiagnostics.log("realtime transcription failed; transcribing the saved recording error=\(explained.localizedDescription)")
+                VoiceModeDiagnostics.log("realtime transcription failed; transcribing the saved recording id=\(stopped.recordingID) error=\(explained.localizedDescription)")
+                await recordAttempt(recordingID: stopped.recordingID, audio: stopped.audio, outcome: "fallback")
             }
         }
         let route: StaticString = stopped.live == nil ? "saved" : "fallback"
@@ -317,6 +329,15 @@ final class VoiceInputController {
         }
     }
 
+    private func recordAttempt(recordingID: UUID, audio: SavedAudio, outcome: String) async {
+        let origin = access.host.gatewayHTTPBaseURL().map {
+            "\($0.scheme ?? "unknown")://\($0.host() ?? "unknown"):\($0.port ?? 443)"
+        } ?? "unknown"
+        let duration = audio.recording.map { String(Self.milliseconds($0.duration)) } ?? "unknown"
+        logger.notice("dictation attempt id=\(recordingID) configured_origin=\(origin) audio_ms=\(duration) bytes_sent=unknown outcome=\(outcome)")
+        await DiagnosticsOutbox.shared.persistPending()
+    }
+
     private static func logTranscribed(_ stopped: StoppedDictation, route: StaticString, model: String, characters: Int) {
         let stopToText = ContinuousClock.now - stopped.stopRequested
         let audio = stopped.audio.recording.map { "\(milliseconds($0.duration))" } ?? "unknown"
@@ -333,11 +354,23 @@ final class VoiceInputController {
         let local = configuration()
         let resolved = try await library?.plan(for: recording.id)
         let configuration = try resolved.map { try TranscriptionConfiguration(plan: $0.plan, local: local) } ?? local
-        return try await withAccount(resolved?.account) { [self] in
-            let raw = try await transcribe(recording, configuration: configuration)
-            let result = try await archiveResult(raw, recordingID: recording.id, plan: resolved?.plan)
-            VoiceModeDiagnostics.log("saved recording transcribed characters=\(result.text.count)")
+        await recordAttempt(recordingID: recording.id, audio: .complete(recording), outcome: "retry")
+        do {
+            let result = try await withAccount(resolved?.account) { [self] in
+                let raw = try await transcribe(recording, configuration: configuration)
+                let result = try await archiveResult(raw, recordingID: recording.id, plan: resolved?.plan)
+                VoiceModeDiagnostics.log("saved recording transcribed characters=\(result.text.count)")
+                return result
+            }
+            await recordAttempt(recordingID: recording.id, audio: .complete(recording), outcome: "text")
             return result
+        } catch {
+            if !(error is CancellationError) {
+                logger.error("saved dictation failed id=\(recording.id) error=\(error.localizedDescription)")
+            }
+            await recordAttempt(recordingID: recording.id, audio: .complete(recording),
+                                outcome: error is CancellationError ? "cancelled" : "failed")
+            throw error
         }
     }
 

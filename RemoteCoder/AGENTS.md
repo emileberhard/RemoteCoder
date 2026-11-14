@@ -1936,8 +1936,14 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
     Any failed start keeps its recording only when it holds audio
     (`closeAfterFailedStart`).
   - Azure Speech streams through `ProgressiveRealtimeTranscriptionSession` as a
-    progressive WAV upload that finishes on stop, with a longer finalization
-    timeout.
+    progressive WAV upload that finishes on stop, with an 8 s finalization
+    allowance plus unprocessed audio. Speech sessions never wait for connectivity.
+    SpeechKit fails an upload after 8 s without progress; saved Azure audio has
+    a separate 30 s response deadline after upload. At stop and outcome changes,
+    VoiceInputController persists content-free attempt records through the existing
+    DiagnosticsOutbox, and flushes failure logs to disk. Transport metrics reach
+    that same outbox through SpeechRelayTransport.uploadLog. Sent bytes stay
+    unknown in the stop record until the transport reports its metrics.
 - **Saved recordings.** Every dictation is written as it is spoken to
   SpeechKit's `DictationRecordingStore` (`DictationRecordingStore.app` in
   `DictationRecordings.swift`: Application Support

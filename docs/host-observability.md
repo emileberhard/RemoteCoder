@@ -394,6 +394,15 @@ took a third of the app's CPU in the field while RemoteCoder's own records were
 3.5% of what it exported. A failure that matters to RemoteCoder reaches its
 own log where the app handles it, for example a thrown SpeechKit error.
 
+Dictation stop and outcome records include the recording UUID, configured
+origin, audio duration and outcome, and are flushed to the existing on-device
+outbox before the operation returns. Sent bytes are unknown at stop; SpeechKit's
+upload metrics later report the actual origin, body bytes, connect/TLS completion
+and first-byte time through the transport's uploadLog callback, which persists
+them immediately. No transcript, request headers or credentials enter these
+records. A failed live dictation followed by a failed saved-audio attempt retains
+the recording and shows its retry tile immediately.
+
 Shared dictation publication emits one app-owned `DictationLibrary` notice for
 work or failure: background state, duration, pending before/after, held count,
 outcome and at most three UUID/case/domain/code capture failures. These pass

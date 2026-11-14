@@ -188,7 +188,9 @@ final class DictationSession {
                 if try await drafts.hasSavedReceipt(for: recording.id) {
                     received.append(recording)
                 } else {
-                    let status = recoverable.first { $0.id == recording.id }?.status ?? .waiting
+                    let failure = voice.failedTranscription.flatMap { $0.id == recording.id ? $0.message : nil }
+                    let status = recoverable.first { $0.id == recording.id }?.status
+                        ?? failure.map { .failed($0) } ?? .waiting
                     pending.append(RecoverableDictation(recording: recording, status: status))
                 }
             }
