@@ -1,4 +1,5 @@
 import argparse
+import configparser
 import contextlib
 import importlib.util
 import io
@@ -19,6 +20,16 @@ ACTIVATION = ROOT / "relay/server/config-activation.sh"
 
 
 class RelayProvisioningTests(unittest.TestCase):
+    def test_haproxy_orders_nftables_without_a_stop_propagating_dependency(self):
+        unit = configparser.ConfigParser(interpolation=None)
+        unit.read(ROOT / "relay/server/haproxy-maintenance.conf")
+        self.assertIn("nftables.service", unit["Unit"]["Wants"].split())
+        self.assertIn("nftables.service", unit["Unit"]["After"].split())
+        for directive in ("Requires", "BindsTo", "PartOf", "StopPropagatedFrom"):
+            self.assertNotIn(
+                "nftables.service", unit["Unit"].get(directive, "").split()
+            )
+
     def test_provisioning_transports_the_policy_and_activation_owner(self):
         maintainer = types.ModuleType("maintainer_config")
         maintainer.load = dict
@@ -78,6 +89,36 @@ class RelayProvisioningTests(unittest.TestCase):
 
 
 class RelayPolicyTests(unittest.TestCase):
+    def test_nftables_package_actions_are_denied_only_while_a_marker_exists(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            marker = root / "var/lib/remote-coder-relay/maintenance.json"
+            marker.parent.mkdir(parents=True)
+            environment = os.environ | {"DPKG_ROOT": str(root)}
+            for marker_kind in ("absent", "regular", "dangling"):
+                with self.subTest(marker=marker_kind):
+                    if marker_kind == "regular":
+                        marker.write_text("invalid still fences")
+                    elif marker_kind == "dangling":
+                        marker.unlink()
+                        marker.symlink_to("missing")
+                    for action in ("stop", "restart", "reload", "try-restart"):
+                        result = subprocess.run(
+                            ["/bin/sh", str(POLICY), "nftables.service", action],
+                            env=environment,
+                            check=False,
+                        )
+                        self.assertEqual(
+                            result.returncode, 0 if marker_kind == "absent" else 101
+                        )
+                    for action in ("start", "status"):
+                        result = subprocess.run(
+                            ["/bin/sh", str(POLICY), "nftables.service", action],
+                            env=environment,
+                            check=False,
+                        )
+                        self.assertEqual(result.returncode, 0)
+
     def test_relay_actions_are_fenced_without_blocking_other_services(self):
         for service in (
             "haproxy",
@@ -175,6 +216,19 @@ class RelayPolicyTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn("returned 101", result.stderr)
                     self.assertFalse(calls.exists())
+            marker = root / "var/lib/remote-coder-relay/maintenance.json"
+            marker.parent.mkdir(parents=True)
+            marker.write_text("preparing")
+            result = subprocess.run(
+                ["/usr/bin/deb-systemd-invoke", "try-restart", "nftables.service"],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("returned 101", result.stderr)
+            self.assertFalse(calls.exists())
             result = subprocess.run(
                 ["/usr/bin/deb-systemd-invoke", "start", "haproxy.service"],
                 env=environment,

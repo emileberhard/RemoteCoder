@@ -157,6 +157,8 @@ jobs:
         run: RC_RELAY_REQUIRE_INGRESS=1 python3 -m unittest scripts.tests.test_relay_maintenance_firewall scripts.tests.test_relay_conntrack -v
       - name: Test relay drain and HAProxy in a network namespace
         run: RC_RELAY_REQUIRE_HAPROXY=1 python3 -m unittest scripts.tests.test_relay_drain scripts.tests.test_relay_haproxy_drain -v
+      - name: Verify relay systemd unit
+        run: RC_RELAY_REQUIRE_SYSTEMD=1 python3 -m unittest scripts.tests.test_relay_systemd -v
       - run: rustup show
       - run: python3 scripts/gateway-check.py cargo
 
