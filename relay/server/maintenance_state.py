@@ -153,6 +153,7 @@ class RelayTransaction:
         self._locks = None
         self._operation_id = None
         self._fenced = False
+        self._drained = False
 
     def __enter__(self):
         if self._locks is not None:
@@ -183,6 +184,7 @@ class RelayTransaction:
         self._locks = None
         self._operation_id = None
         self._fenced = False
+        self._drained = False
 
     def prepare(self, master_pid, worker_pid):
         if self._locks is None:
@@ -210,6 +212,8 @@ class RelayTransaction:
         marker = self._preparing_marker()
         if not self._fenced:
             raise RuntimeError("relay admission has not been fenced")
+        if not self._drained:
+            raise RuntimeError("relay admission has not drained")
         for name in ("master", "worker"):
             if worker_identity(marker[name]["pid"]) != marker[name]:
                 raise RuntimeError("relay worker identity changed")
@@ -230,6 +234,8 @@ class RelayTransaction:
 
     def fence(self):
         self._preparing_marker()
+        if self._fenced:
+            raise RuntimeError("relay admission is already fenced")
         try:
             result = subprocess.run(
                 ["/usr/sbin/nft", "-f", str(FIREWALL)],
@@ -245,8 +251,23 @@ class RelayTransaction:
             raise RuntimeError("could not fence relay admission; keep the marker")
         self._fenced = True
 
+    def drain(self, timeout_seconds):
+        from maintenance_drain import wait_for_drain
+
+        marker = self._preparing_marker()
+        if not self._fenced or self._drained:
+            raise RuntimeError("relay admission is not awaiting drain")
+        identity = {name: marker[name] for name in ("master", "worker")}
+        try:
+            wait_for_drain(identity, timeout_seconds)
+        except BaseException:
+            self.abort()
+            raise
+        self._drained = True
+
     def abort(self):
         self._preparing_marker()
         remove_fence_and_marker()
         self._operation_id = None
         self._fenced = False
+        self._drained = False

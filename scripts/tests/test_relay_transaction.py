@@ -32,6 +32,9 @@ class RelayTransactionTests(unittest.TestCase):
         shutil.copyfile(
             SERVER / "maintenance_state.py", self.src / "maintenance_state.py"
         )
+        shutil.copyfile(
+            SERVER / "maintenance_drain.py", self.src / "maintenance_drain.py"
+        )
         self.sbin = self.root / "sbin"
         self.sbin.mkdir()
         nft = self.sbin / "nft"
@@ -124,6 +127,15 @@ try:
         else:
             raise AssertionError("commit without a fence was accepted")
         transaction.fence()
+        try:
+            transaction.commit()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("commit before drain was accepted")
+        with patch("maintenance_drain.wait_for_drain") as wait:
+            transaction.drain(300)
+            assert wait.call_args.args == ({"master": before["master"], "worker": before["worker"]}, 300)
         for path, kind in [
             (state.DIRECTORY / "provision.lock", "flock"),
             (state.DIRECTORY / "admission.lock", "flock"),
@@ -213,6 +225,8 @@ try:
         assert not list(state.DIRECTORY.glob(".maintenance-*"))
         transaction.prepare(os.getpid(), child.pid)
         transaction.fence()
+        with patch("maintenance_drain.wait_for_drain"):
+            transaction.drain(300)
         child.terminate()
         child.wait(timeout=5)
         try:
@@ -272,6 +286,42 @@ finally:
                 "-f -",
             ],
         )
+
+    def test_drain_failure_reopens_and_a_failed_reopen_preserves_the_marker(self):
+        code = r"""
+import os, subprocess, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, "/tmp/fixture")
+import maintenance_state as state
+child = subprocess.Popen(["/bin/sleep", "10"])
+try:
+    with state.RelayTransaction() as transaction:
+        for reopening_fails in (False, True):
+            transaction.prepare(os.getpid(), child.pid)
+            transaction.fence()
+            failure = Path("/tmp/fixture/fail-nft")
+            if reopening_fails:
+                failure.touch()
+            with patch("maintenance_drain.wait_for_drain", side_effect=TimeoutError("busy")):
+                try:
+                    transaction.drain(3)
+                except (TimeoutError, RuntimeError):
+                    pass
+                else:
+                    raise AssertionError("drain failure was ignored")
+            assert state.MARKER.exists() == reopening_fails
+            if reopening_fails:
+                assert state.read_marker()["phase"] == "preparing"
+                failure.unlink()
+                transaction.abort()
+finally:
+    child.terminate()
+    child.wait(timeout=5)
+"""
+        result = self.run_owner(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.directory / "maintenance.json").exists())
 
 
 if __name__ == "__main__":
