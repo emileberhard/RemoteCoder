@@ -243,12 +243,11 @@ class RelayTransaction:
                 timeout=10,
                 check=False,
             )
-        except subprocess.TimeoutExpired as error:
-            raise RuntimeError(
-                "fencing relay admission timed out; keep the marker"
-            ) from error
-        if result.returncode:
-            raise RuntimeError("could not fence relay admission; keep the marker")
+            if result.returncode:
+                raise RuntimeError("could not fence relay admission")
+        except BaseException:
+            self.abort()
+            raise
         self._fenced = True
 
     def drain(self, timeout_seconds):
