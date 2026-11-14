@@ -42,6 +42,10 @@ actor GatewayDictationCredentials {
 
     deinit { pending?.cancel() }
 
+    func cachedOrigin() throws -> URL? {
+        try stored()?.origin
+    }
+
     func current() async throws -> DictationRouterCredential {
         if let pending { return try await pending.value }
         if let credential = try stored() { return credential }

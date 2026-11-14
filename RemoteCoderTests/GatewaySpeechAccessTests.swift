@@ -17,6 +17,9 @@ struct GatewaySpeechAccessTests {
         }
         #expect(router.origin.absoluteString == "https://dictation.example")
         #expect(router.key == "dictation-key-1")
+        #expect(router.transport != nil)
+        guard case .router(let again) = try await access.access(to: provider) else { return }
+        #expect(router.transport === again.transport)
     }
 
     @Test(arguments: [401, 403])

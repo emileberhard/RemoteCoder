@@ -26,6 +26,7 @@ struct GatewaySpeechAccess: Sendable {
 
     let host: GatewayHostConfiguration
     let credentials: GatewayDictationCredentials
+    private let transport: SpeechRelayTransport
 
     init(host: GatewayHostConfiguration, routes: GatewayRoutes) {
         self.init(host: host, credentials: GatewayDictationCredentials(
@@ -37,22 +38,29 @@ struct GatewaySpeechAccess: Sendable {
     init(host: GatewayHostConfiguration, credentials: GatewayDictationCredentials) {
         self.host = host
         self.credentials = credentials
+        transport = SpeechRelayTransport(
+            configure: { $0.waitsForConnectivity = false },
+            uploadLog: { message in
+                VoiceModeDiagnostics.log(message)
+                Task { await DiagnosticsOutbox.shared.persistPending() }
+            }
+        )
     }
 
     func access(to provider: GatewaySpeechProvider) async throws -> SpeechProviderAccess {
         let credential = try await credentials.current()
-        return .router(try LLMRouter(origin: credential.origin, key: credential.key))
+        return try providerAccess(credential)
     }
 
     func perform<Value: Sendable>(
         _ operation: @Sendable (SpeechProviderAccess) async throws -> Value
     ) async throws -> Value {
         let credential = try await credentials.current()
-        do { return try await operation(.router(LLMRouter(origin: credential.origin, key: credential.key))) }
+        do { return try await operation(providerAccess(credential)) }
         catch {
             guard Self.isUnauthorized(error), !Task.isCancelled else { throw error }
             let replacement = try await credentials.refresh(rejecting: credential.key)
-            return try await operation(.router(LLMRouter(origin: replacement.origin, key: replacement.key)))
+            return try await operation(providerAccess(replacement))
         }
     }
 
@@ -65,6 +73,10 @@ struct GatewaySpeechAccess: Sendable {
     func explain(_ error: any Error, provider: GatewaySpeechProvider) -> any Error {
         guard case .httpFailure(let status, _) = Self.transportCause(of: error) as? SpeechKitError else { return error }
         return GatewaySpeechFailure(status: status, message: "\(provider.name) dictation failed (HTTP \(status)).")
+    }
+
+    private func providerAccess(_ credential: DictationRouterCredential) throws -> SpeechProviderAccess {
+        .router(try LLMRouter(origin: credential.origin, key: credential.key, transport: transport))
     }
 
     private static func isUnauthorized(_ error: any Error) -> Bool {
