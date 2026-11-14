@@ -143,7 +143,7 @@ class RelaySystemdTests(unittest.TestCase):
                 SERVER / "haproxy-maintenance.conf", dropin / "maintenance.conf"
             )
             (nft_dropin / "maintenance.conf").write_text(
-                "[Service]\nExecStop=/nonexistent-nft-check\n"
+                "[Service]\nExecStop=\nExecStop=/nonexistent-nft-check\n"
             )
             invalid_nft = subprocess.run(
                 command, capture_output=True, text=True, timeout=20, check=False
