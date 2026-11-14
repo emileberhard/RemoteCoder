@@ -43,50 +43,59 @@ def recover():
             raise RuntimeError(
                 "relay maintenance or provisioning still owns the lock"
             ) from error
-        try:
-            marker_stat = MARKER.lstat()
-            if (
-                not stat.S_ISREG(marker_stat.st_mode)
-                or marker_stat.st_uid != 0
-                or marker_stat.st_mode & 0o077
-            ):
-                raise ValueError("invalid marker ownership or permissions")
-            marker = json.loads(MARKER.read_text(), object_pairs_hook=unique_fields)
-            if (
-                not isinstance(marker, dict)
-                or type(marker.get("schema")) is not int
-                or marker["schema"] != 1
-            ):
-                raise ValueError("unsupported marker schema")
-            phase, previous_boot = marker["phase"], marker["boot_id"]
-            if phase not in ("preparing", "committed"):
-                raise ValueError("unknown maintenance phase")
-            previous_boot = str(uuid.UUID(previous_boot))
-            current_boot = str(uuid.UUID(BOOT_ID.read_text().strip()))
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            raise RuntimeError(
-                "invalid relay maintenance marker; keep the fence"
-            ) from error
-        if phase != "preparing" or previous_boot != current_boot:
-            raise RuntimeError(
-                "committed or new-boot maintenance requires verification; keep the fence"
-            )
-        result = subprocess.run(
-            ["/usr/sbin/nft", "-f", "-"],
-            input="destroy table inet remote_coder_relay_maintenance\n",
-            text=True,
-            capture_output=True,
-            timeout=10,
-            check=False,
+        with (DIRECTORY / "admission.lock").open("a") as admission:
+            try:
+                fcntl.flock(admission, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise RuntimeError("relay admission is still owned") from error
+            recover_preparing()
+
+
+def recover_preparing():
+    try:
+        marker_stat = MARKER.lstat()
+        if (
+            not stat.S_ISREG(marker_stat.st_mode)
+            or marker_stat.st_uid != 0
+            or marker_stat.st_mode & 0o077
+        ):
+            raise ValueError("invalid marker ownership or permissions")
+        marker = json.loads(MARKER.read_text(), object_pairs_hook=unique_fields)
+        if (
+            not isinstance(marker, dict)
+            or type(marker.get("schema")) is not int
+            or marker["schema"] != 1
+        ):
+            raise ValueError("unsupported marker schema")
+        phase, previous_boot = marker["phase"], marker["boot_id"]
+        if phase not in ("preparing", "committed"):
+            raise ValueError("unknown maintenance phase")
+        previous_boot = str(uuid.UUID(previous_boot))
+        current_boot = str(uuid.UUID(BOOT_ID.read_text().strip()))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise RuntimeError(
+            "invalid relay maintenance marker; keep the fence"
+        ) from error
+    if phase != "preparing" or previous_boot != current_boot:
+        raise RuntimeError(
+            "committed or new-boot maintenance requires verification; keep the fence"
         )
-        if result.returncode:
-            raise RuntimeError("could not reopen relay admission; keep the marker")
-        MARKER.unlink()
-        directory_fd = os.open(DIRECTORY, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+    result = subprocess.run(
+        ["/usr/sbin/nft", "-f", "-"],
+        input="destroy table inet remote_coder_relay_maintenance\n",
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("could not reopen relay admission; keep the marker")
+    MARKER.unlink()
+    directory_fd = os.open(DIRECTORY, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 if __name__ == "__main__":

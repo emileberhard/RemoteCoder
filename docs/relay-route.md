@@ -46,9 +46,12 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   for queued and in-flight work, and verify boot before using it. Reloading the
   relay's base firewall replaces only its own table and preserves the fence.
   The staged recovery command reopens only an abandoned `preparing` marker from
-  the current boot after taking the provisioning lock; it leaves committed,
-  malformed and new-boot markers fenced for verification. A maintenance owner
-  that writes the marker and verifies the new boot is still required.
+  the current boot after taking the provisioning and admission locks; it leaves
+  committed, malformed and new-boot markers fenced for verification. HAProxy
+  startup takes the admission lock before checking the marker, so it cannot
+  reapply a fence between recovery removing it and deleting the marker. The
+  future owner must take the provisioning lock before the admission lock when
+  writing the marker or changing its fence, and must verify the new boot.
 - **HAProxy** terminates TLS 1.3 on 443 with a self-signed P-256 certificate
   whose SPKI the app pins, and passes only streams that begin with `CONNECT `.
 - **tinyproxy** requires Basic auth (it answers 407 and closes; URLSession

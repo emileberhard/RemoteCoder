@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -345,30 +346,33 @@ esac
         )
         nft.chmod(0o755)
 
+        def startup_command():
+            return [
+                "bwrap",
+                "--unshare-all",
+                "--die-with-parent",
+                "--ro-bind",
+                "/",
+                "/",
+                "--tmpfs",
+                "/tmp",
+                "--bind",
+                str(self.root / "varlib"),
+                "/var/lib",
+                "--bind",
+                str(self.root / "sbin"),
+                "/usr/sbin",
+                "--bind",
+                str(self.shared),
+                "/tmp/fixture",
+                "--",
+                "/bin/sh",
+                "/tmp/fixture/src/maintenance-startup",
+            ]
+
         def start():
             return subprocess.run(
-                [
-                    "bwrap",
-                    "--unshare-all",
-                    "--die-with-parent",
-                    "--ro-bind",
-                    "/",
-                    "/",
-                    "--tmpfs",
-                    "/tmp",
-                    "--bind",
-                    str(self.root / "varlib"),
-                    "/var/lib",
-                    "--bind",
-                    str(self.root / "sbin"),
-                    "/usr/sbin",
-                    "--bind",
-                    str(self.shared),
-                    "/tmp/fixture",
-                    "--",
-                    "/bin/sh",
-                    "/tmp/fixture/src/maintenance-startup",
-                ],
+                startup_command(),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -382,6 +386,21 @@ esac
             (self.shared / "nft-calls").read_text().splitlines(),
             ["-f /usr/local/lib/remote-coder-relay/maintenance-firewall.nft"],
         )
+        with (directory / "admission.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            process = subprocess.Popen(
+                startup_command(), stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            try:
+                time.sleep(0.2)
+                self.assertIsNone(process.poll())
+                self.assertEqual(
+                    len((self.shared / "nft-calls").read_text().splitlines()), 1
+                )
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 0)
         (self.shared / "fail-nft").touch()
         self.assertNotEqual(start().returncode, 0)
 
@@ -466,6 +485,9 @@ esac
 
         write_marker("preparing")
         with (directory / "provision.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertNotEqual(recover().returncode, 0)
+        with (directory / "admission.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.assertNotEqual(recover().returncode, 0)
         self.assertTrue(marker.exists())
