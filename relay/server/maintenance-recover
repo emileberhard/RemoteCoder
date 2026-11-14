@@ -1,25 +1,9 @@
 #!/usr/bin/python3
-import fcntl
-import json
 import os
-import stat
 import subprocess
 import sys
-import uuid
-from pathlib import Path
 
-DIRECTORY = Path("/var/lib/remote-coder-relay")
-MARKER = DIRECTORY / "maintenance.json"
-BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
-
-
-def unique_fields(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate marker field")
-        result[key] = value
-    return result
+from maintenance_state import DIRECTORY, MARKER, boot_id, owner_locks, read_marker
 
 
 def recover():
@@ -29,49 +13,15 @@ def recover():
         MARKER.lstat()
     except FileNotFoundError:
         return
-    directory = DIRECTORY.lstat()
-    if (
-        not stat.S_ISDIR(directory.st_mode)
-        or directory.st_uid != 0
-        or directory.st_mode & 0o077
-    ):
-        raise RuntimeError("invalid relay maintenance directory; keep the fence")
-    with (DIRECTORY / "provision.lock").open("a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise RuntimeError(
-                "relay maintenance or provisioning still owns the lock"
-            ) from error
-        with (DIRECTORY / "admission.lock").open("a") as admission:
-            try:
-                fcntl.flock(admission, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise RuntimeError("relay admission is still owned") from error
-            recover_preparing()
+    with owner_locks():
+        recover_preparing()
 
 
 def recover_preparing():
     try:
-        marker_stat = MARKER.lstat()
-        if (
-            not stat.S_ISREG(marker_stat.st_mode)
-            or marker_stat.st_uid != 0
-            or marker_stat.st_mode & 0o077
-        ):
-            raise ValueError("invalid marker ownership or permissions")
-        marker = json.loads(MARKER.read_text(), object_pairs_hook=unique_fields)
-        if (
-            not isinstance(marker, dict)
-            or type(marker.get("schema")) is not int
-            or marker["schema"] != 1
-        ):
-            raise ValueError("unsupported marker schema")
+        marker = read_marker()
         phase, previous_boot = marker["phase"], marker["boot_id"]
-        if phase not in ("preparing", "committed"):
-            raise ValueError("unknown maintenance phase")
-        previous_boot = str(uuid.UUID(previous_boot))
-        current_boot = str(uuid.UUID(BOOT_ID.read_text().strip()))
+        current_boot = boot_id()
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise RuntimeError(
             "invalid relay maintenance marker; keep the fence"
