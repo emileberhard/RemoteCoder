@@ -17,8 +17,9 @@ HAPROXY = os.environ.get("RC_RELAY_TEST_HAPROXY", "haproxy")
 def wait_until(predicate):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        if predicate():
-            return
+        value = predicate()
+        if value:
+            return value
         time.sleep(0.02)
     raise TimeoutError("HAProxy did not reach the expected state")
 
@@ -99,8 +100,24 @@ backend tinyproxy
                     if process.poll() is not None:
                         log.seek(0)
                         raise RuntimeError("disposable HAProxy failed: " + log.read())
-                    wait_until(lambda: not maintenance_drain.haproxy_busy())
-                    identity = maintenance_drain.haproxy_identity()
+
+                    def ready():
+                        if process.poll() is not None:
+                            log.seek(0)
+                            raise RuntimeError(
+                                "disposable HAProxy exited: " + log.read()
+                            )
+                        try:
+                            identity = maintenance_drain.haproxy_identity()
+                            return (
+                                identity
+                                if not maintenance_drain.haproxy_busy()
+                                else None
+                            )
+                        except (OSError, RuntimeError):
+                            return None
+
+                    identity = wait_until(ready)
                     with (
                         socket.create_connection(("127.0.0.1", port), timeout=5) as raw,
                         ssl._create_unverified_context().wrap_socket(
