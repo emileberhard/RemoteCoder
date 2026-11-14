@@ -14,6 +14,30 @@ state = importlib.import_module("maintenance_state")
 
 
 class RelayDrainTests(unittest.TestCase):
+    def test_candidate_and_fenced_checks_require_opposite_admission_states(self):
+        with (
+            patch.object(drain, "tracking_is_configured"),
+            patch.object(
+                drain, "fence_is_absent", side_effect=RuntimeError("already fenced")
+            ),
+            patch.object(drain, "fence_is_configured"),
+            patch.object(drain, "_live_work", return_value=False),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "already fenced"):
+                drain.candidate_snapshot({}, 10)
+            self.assertFalse(drain.snapshot({}, 10))
+        with (
+            patch.object(drain, "tracking_is_configured"),
+            patch.object(drain, "fence_is_absent"),
+            patch.object(
+                drain, "fence_is_configured", side_effect=RuntimeError("fence missing")
+            ),
+            patch.object(drain, "_live_work", return_value=False),
+        ):
+            self.assertFalse(drain.candidate_snapshot({}, 10))
+            with self.assertRaisesRegex(RuntimeError, "fence missing"):
+                drain.snapshot({}, 10)
+
     def test_reboot_window_uses_stockholm_time_in_winter_and_summer(self):
         stockholm = ZoneInfo("Europe/Stockholm")
         with patch.object(state, "datetime") as clock:

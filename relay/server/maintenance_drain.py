@@ -272,10 +272,8 @@ def haproxy_busy(deadline=None):
     return int(info["CurrConns"]) != 0 or any(counts.values())
 
 
-def snapshot(expected_identity, deadline):
+def _live_work(expected_identity, deadline):
     ports = tracked_ports()
-    tracking_is_configured(deadline)
-    fence_is_configured(deadline)
     if haproxy_identity(deadline) != expected_identity:
         raise RuntimeError("HAProxy generation changed")
     busy = (
@@ -286,22 +284,18 @@ def snapshot(expected_identity, deadline):
     if haproxy_identity(deadline) != expected_identity:
         raise RuntimeError("HAProxy generation changed")
     return busy
+
+
+def snapshot(expected_identity, deadline):
+    tracking_is_configured(deadline)
+    fence_is_configured(deadline)
+    return _live_work(expected_identity, deadline)
 
 
 def candidate_snapshot(expected_identity, deadline):
-    ports = tracked_ports()
     tracking_is_configured(deadline)
     fence_is_absent(deadline)
-    if haproxy_identity(deadline) != expected_identity:
-        raise RuntimeError("HAProxy generation changed")
-    busy = (
-        active_conntrack(ports, deadline)
-        or listener_queues(ports)
-        or haproxy_busy(deadline)
-    )
-    if haproxy_identity(deadline) != expected_identity:
-        raise RuntimeError("HAProxy generation changed")
-    return busy
+    return _live_work(expected_identity, deadline)
 
 
 def wait_for_candidate(expected_identity, timeout_seconds):

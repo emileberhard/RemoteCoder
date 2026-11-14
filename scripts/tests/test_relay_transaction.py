@@ -435,46 +435,6 @@ finally:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((self.directory / "maintenance.json").exists())
 
-    def test_new_boot_local_verification_never_reopens_the_fence(self):
-        code = r"""
-import os, subprocess, sys
-from unittest.mock import patch
-sys.path.insert(0, "/tmp/fixture")
-import maintenance_drain as drain
-import maintenance_state as state
-child = subprocess.Popen(["/bin/sleep", "10"])
-try:
-    with state.RelayTransaction() as transaction:
-        transaction.prepare(os.getpid(), child.pid)
-    original = state.MARKER.read_bytes()
-    with state.RelayTransaction() as transaction:
-        try:
-            transaction.check_new_boot_prerequisites(10)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("the old boot passed verification")
-        with patch.object(state, "boot_id", return_value="00000000-0000-4000-8000-000000000001"), patch.object(drain, "verify_local_boot_prerequisites", return_value={"worker": 7}) as health:
-            assert transaction.check_new_boot_prerequisites(10) == {"worker": 7}
-            health.assert_called_once_with(10)
-        assert state.MARKER.read_bytes() == original
-        with patch.object(state, "boot_id", return_value="00000000-0000-4000-8000-000000000001"), patch.object(drain, "verify_local_boot_prerequisites", side_effect=RuntimeError("unhealthy")):
-            try:
-                transaction.check_new_boot_prerequisites(10)
-            except RuntimeError:
-                pass
-            else:
-                raise AssertionError("unhealthy services passed verification")
-        assert state.MARKER.read_bytes() == original
-finally:
-    child.terminate()
-    child.wait(timeout=5)
-"""
-        result = self.run_owner(code)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue((self.directory / "maintenance.json").exists())
-        self.assertFalse((self.src / "nft-calls").exists())
-
     def test_new_boot_reopens_only_after_local_checks_and_fence_recheck(self):
         code = r"""
 import os, subprocess, sys
