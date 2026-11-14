@@ -44,6 +44,7 @@ class RelayInstallerTests(unittest.TestCase):
             "maintenance-firewall.nft",
             "maintenance-startup",
             "maintenance-recover",
+            "maintenance_state.py",
             "haproxy-maintenance.conf",
             "config-activation.sh",
             "nftables.conf",

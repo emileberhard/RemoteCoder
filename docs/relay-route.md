@@ -52,6 +52,10 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   reapply a fence between recovery removing it and deleting the marker. The
   future owner must take the provisioning lock before the admission lock when
   writing the marker or changing its fence, and must verify the new boot.
+  The staged transaction helper holds those locks and both Debian package locks
+  while atomically syncing a preparing or committed marker. Committing it is
+  safe only after admission and drain are proved; no prepare-shutdown command
+  wires that proof or requests a reboot yet.
 - **HAProxy** terminates TLS 1.3 on 443 with a self-signed P-256 certificate
   whose SPKI the app pins, and passes only streams that begin with `CONNECT `.
 - **tinyproxy** requires Basic auth (it answers 407 and closes; URLSession
