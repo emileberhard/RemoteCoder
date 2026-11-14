@@ -212,3 +212,7 @@ Mine labels. SpeechKit owns the encoder and preserves the local PCM recovery
 copy. ElevenLabs and AssemblyAI realtime modes use the router directly.
 The gateway relay remains for web and installed older builds. Upload time grows
 with the encoded recording size and the available uplink bandwidth.
+
+Saved Azure plans with the former `azure/MAI-Transcribe-2/progressive` model ID
+resolve to the same MAI model and options through upload at stop. Their saved
+plans and historical results retain their original identities.

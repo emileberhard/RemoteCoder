@@ -25,6 +25,22 @@ struct TranscriptionSettingsTests {
         #expect(TranscriptionModel.azureMAITranscribe2.capture == .batch)
     }
 
+    @Test(arguments: ["azure/MAI-Transcribe-2/progressive", "azure/MAI-Transcribe-2/batch"])
+    func savedAzurePlansRetainTheirModelAndOptions(modelID: String) throws {
+        let profile = DictationProfile(archiveEnabled: true, preferredModel: modelID,
+            languages: ["sv"], dictionary: ["Mumla"], cleanupEnabled: false,
+            outputLanguage: nil, thinkingLevel: "minimal")
+        let capabilities = try DictationCapabilities(models: [modelID], fallbackModel: modelID,
+            supportsCleanup: false, modelOptions: [modelID: ["transcribeStyle": "clean"]])
+        let plan = DictationPlan(unverifiedProfile: profile, context: .chat, capabilities: capabilities)
+        let configuration = try TranscriptionConfiguration(plan: plan,
+            local: TranscriptionConfiguration(model: .elevenLabsScribeV2, language: .automatic))
+        #expect(configuration.model == .azureMAITranscribe2)
+        #expect(configuration.languageHints == ["sv"])
+        #expect(configuration.customVocabulary == ["Mumla"])
+        #expect(plan.effectiveModel == modelID)
+    }
+
     @Test @MainActor func choosingAProviderMovesTheModelIntoIt() {
         let store = TranscriptionSettingsStore(defaults: AppStorageScope.current.defaults)
         let original = store.model

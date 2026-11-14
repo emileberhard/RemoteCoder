@@ -521,7 +521,9 @@ extension TranscriptionModel {
 
 extension TranscriptionConfiguration {
     init(plan: DictationPlan, local: TranscriptionConfiguration) throws {
-        guard let model = TranscriptionModel.allCases.first(where: { $0.libraryID == plan.effectiveModel && $0.libraryOptions == plan.providerOptions }) else {
+        let modelID = plan.effectiveModel == "azure/MAI-Transcribe-2/progressive"
+            ? TranscriptionModel.azureMAITranscribe2.libraryID : plan.effectiveModel
+        guard let model = TranscriptionModel.allCases.first(where: { $0.libraryID == modelID && $0.libraryOptions == plan.providerOptions }) else {
             throw DictationLibraryError.invalidConfiguration
         }
         self.init(model: model, language: local.language, customVocabulary: plan.dictionary, sharedLanguages: plan.languages,
