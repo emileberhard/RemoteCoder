@@ -28,6 +28,7 @@ final class VoiceInputController {
     private struct LiveTranscription {
         let dictation: RealtimeDictation
         let provider: GatewaySpeechProvider
+        let progressive: ProgressiveRealtimeTranscriptionSession?
     }
 
     private struct ActiveDictation {
@@ -212,7 +213,7 @@ final class VoiceInputController {
         stopped = StoppedDictation(recordingID: active.writer.id, audio: audio, live: active.live, configuration: active.configuration,
                                    archive: active.archive, stopRequested: stopRequested,
                                    recognition: active.recognition)
-        await recordAttempt(recordingID: active.writer.id, audio: audio, outcome: "stopped")
+        await recordAttempt(recordingID: active.writer.id, audio: audio, live: active.live, outcome: "stopped")
         VoiceModeDiagnostics.log("recording segment stopped")
     }
 
@@ -257,14 +258,14 @@ final class VoiceInputController {
         do {
             let result = try await withAccount(stopped.archive?.account) { [self] in try await transcribe(stopped) }
             if failedTranscription?.id == stopped.recordingID { failedTranscription = nil }
-            await recordAttempt(recordingID: stopped.recordingID, audio: stopped.audio, outcome: "text")
+            await recordAttempt(recordingID: stopped.recordingID, audio: stopped.audio, live: stopped.live, outcome: "text")
             return result
         } catch {
             if !(error is CancellationError) {
                 failedTranscription = (stopped.recordingID, error.localizedDescription)
                 logger.error("dictation failed id=\(stopped.recordingID) error=\(error.localizedDescription)")
             }
-            await recordAttempt(recordingID: stopped.recordingID, audio: stopped.audio,
+            await recordAttempt(recordingID: stopped.recordingID, audio: stopped.audio, live: stopped.live,
                                 outcome: error is CancellationError ? "cancelled" : "failed")
             await stopped.live?.dictation.cancel()
             await stopped.recognition.cancel()
@@ -288,7 +289,7 @@ final class VoiceInputController {
             } catch let error as RealtimeDictationError {
                 let explained = access.explain(error, provider: live.provider)
                 VoiceModeDiagnostics.log("realtime transcription failed; transcribing the saved recording id=\(stopped.recordingID) error=\(explained.localizedDescription)")
-                await recordAttempt(recordingID: stopped.recordingID, audio: stopped.audio, outcome: "fallback")
+                await recordAttempt(recordingID: stopped.recordingID, audio: stopped.audio, live: stopped.live, outcome: "fallback")
             }
         }
         let route: StaticString = stopped.live == nil ? "saved" : "fallback"
@@ -329,12 +330,14 @@ final class VoiceInputController {
         }
     }
 
-    private func recordAttempt(recordingID: UUID, audio: SavedAudio, outcome: String) async {
+    private func recordAttempt(recordingID: UUID, audio: SavedAudio, live: LiveTranscription?, outcome: String) async {
         let origin = access.host.gatewayHTTPBaseURL().map {
             "\($0.scheme ?? "unknown")://\($0.host() ?? "unknown"):\($0.port ?? 443)"
         } ?? "unknown"
         let duration = audio.recording.map { String(Self.milliseconds($0.duration)) } ?? "unknown"
-        logger.notice("dictation attempt id=\(recordingID) configured_origin=\(origin) audio_ms=\(duration) bytes_sent=unknown outcome=\(outcome)")
+        let sentBytes = await live?.progressive?.uploadedBodyByteCount
+        let sent = sentBytes.map(String.init) ?? "unknown"
+        logger.notice("dictation attempt id=\(recordingID) configured_origin=\(origin) audio_ms=\(duration) live_body_bytes_sent=\(sent) outcome=\(outcome)")
         await DiagnosticsOutbox.shared.persistPending()
     }
 
@@ -354,7 +357,7 @@ final class VoiceInputController {
         let local = configuration()
         let resolved = try await library?.plan(for: recording.id)
         let configuration = try resolved.map { try TranscriptionConfiguration(plan: $0.plan, local: local) } ?? local
-        await recordAttempt(recordingID: recording.id, audio: .complete(recording), outcome: "retry")
+        await recordAttempt(recordingID: recording.id, audio: .complete(recording), live: nil, outcome: "retry")
         do {
             let result = try await withAccount(resolved?.account) { [self] in
                 let raw = try await transcribe(recording, configuration: configuration)
@@ -362,13 +365,13 @@ final class VoiceInputController {
                 VoiceModeDiagnostics.log("saved recording transcribed characters=\(result.text.count)")
                 return result
             }
-            await recordAttempt(recordingID: recording.id, audio: .complete(recording), outcome: "text")
+            await recordAttempt(recordingID: recording.id, audio: .complete(recording), live: nil, outcome: "text")
             return result
         } catch {
             if !(error is CancellationError) {
                 logger.error("saved dictation failed id=\(recording.id) error=\(error.localizedDescription)")
             }
-            await recordAttempt(recordingID: recording.id, audio: .complete(recording),
+            await recordAttempt(recordingID: recording.id, audio: .complete(recording), live: nil,
                                 outcome: error is CancellationError ? "cancelled" : "failed")
             throw error
         }
@@ -436,7 +439,8 @@ final class VoiceInputController {
             if let account = archive?.account { try await library?.validateAccount(account) }
             try Task.checkCancellation()
             let sampleRate = realtime?.session.sampleRate ?? TranscriptionCapture.batchSampleRate
-            let live = realtime.map { LiveTranscription(dictation: RealtimeDictation(session: $0.session), provider: $0.provider) }
+            let live = realtime.map { LiveTranscription(dictation: RealtimeDictation(session: $0.session), provider: $0.provider,
+                                                         progressive: $0.session as? ProgressiveRealtimeTranscriptionSession) }
             let dictation = live?.dictation
             liveDictation = dictation
             let writer: DictationRecordingWriter<ExecutionTarget>
