@@ -1,3 +1,4 @@
+destroy table inet remote_coder_relay_maintenance
 table inet remote_coder_relay_maintenance {
     chain input {
         type filter hook input priority -1; policy accept;

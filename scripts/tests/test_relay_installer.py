@@ -38,6 +38,9 @@ class RelayInstallerTests(unittest.TestCase):
             "policy-rc.d",
             "maintenance-fence-check",
             "dpkg-maintenance.conf",
+            "maintenance-firewall.nft",
+            "maintenance-startup",
+            "haproxy-maintenance.conf",
             "config-activation.sh",
             "nftables.conf",
             "haproxy.cfg",
@@ -327,6 +330,57 @@ esac
         marker.unlink()
         marker.symlink_to("missing")
         self.assertNotEqual(run_guard().returncode, 0)
+
+    def test_haproxy_startup_applies_a_pending_fence_and_propagates_failure(self):
+        directory = self.root / "varlib/remote-coder-relay"
+        directory.mkdir()
+        marker = directory / "maintenance.json"
+        nft = self.root / "sbin/nft"
+        nft.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$*" >> /tmp/fixture/nft-calls\n'
+            "test ! -e /tmp/fixture/fail-nft\n"
+        )
+        nft.chmod(0o755)
+
+        def start():
+            return subprocess.run(
+                [
+                    "bwrap",
+                    "--unshare-all",
+                    "--die-with-parent",
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--tmpfs",
+                    "/tmp",
+                    "--bind",
+                    str(self.root / "varlib"),
+                    "/var/lib",
+                    "--bind",
+                    str(self.root / "sbin"),
+                    "/usr/sbin",
+                    "--bind",
+                    str(self.shared),
+                    "/tmp/fixture",
+                    "--",
+                    "/bin/sh",
+                    "/tmp/fixture/src/maintenance-startup",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(start().returncode, 0)
+        self.assertFalse((self.shared / "nft-calls").exists())
+        marker.write_text("invalid")
+        self.assertEqual(start().returncode, 0)
+        self.assertEqual(
+            (self.shared / "nft-calls").read_text().splitlines(),
+            ["-f /usr/local/lib/remote-coder-relay/maintenance-firewall.nft"],
+        )
+        (self.shared / "fail-nft").touch()
+        self.assertNotEqual(start().returncode, 0)
 
 
 if __name__ == "__main__":

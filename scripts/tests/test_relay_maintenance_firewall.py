@@ -123,6 +123,9 @@ def run_lab(parent_namespace_fd):
         subprocess.run(
             [NFT, "-f", str(SERVER / "maintenance-firewall.nft")], check=True
         )
+        subprocess.run(
+            [NFT, "-f", str(SERVER / "maintenance-firewall.nft")], check=True
+        )
         subprocess.run([NFT, "-f", str(SERVER / "nftables.conf")], check=True)
         for index, (family, host) in enumerate(families):
             active, queued = clients[index * 2 : index * 2 + 2]

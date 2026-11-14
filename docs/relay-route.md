@@ -39,11 +39,12 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   exclude a transaction that has already started.
 - **Maintenance ingress.** The checked-in firewall fragment rejects TCP packets
   to port 443 classified as new while keeping tracked existing connections;
-  handshakes already in progress can still complete. It is not installed or
-  operated by provisioning and is not a complete maintenance workflow. The future
-  owner must establish tracking before admission, persist and recover its fence,
-  account for queued and in-flight work, and verify boot before using it. Reloading
-  the relay's base firewall replaces only its own table and preserves the fence.
+  handshakes already in progress can still complete. Provisioning stages the
+  fragment and an HAProxy startup guard that applies it whenever the maintenance
+  marker exists. These are not a complete maintenance workflow. The future owner
+  must establish tracking before admission, persist and recover its fence, account
+  for queued and in-flight work, and verify boot before using it. Reloading the
+  relay's base firewall replaces only its own table and preserves the fence.
 - **HAProxy** terminates TLS 1.3 on 443 with a self-signed P-256 certificate
   whose SPKI the app pins, and passes only streams that begin with `CONNECT `.
 - **tinyproxy** requires Basic auth (it answers 407 and closes; URLSession
