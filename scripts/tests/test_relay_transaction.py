@@ -472,6 +472,53 @@ finally:
         self.assertTrue((self.directory / "maintenance.json").exists())
         self.assertFalse((self.src / "nft-calls").exists())
 
+    def test_new_boot_reopens_only_after_local_checks_and_fence_recheck(self):
+        code = r"""
+import os, subprocess, sys
+from unittest.mock import patch
+sys.path.insert(0, "/tmp/fixture")
+import maintenance_drain as drain
+import maintenance_state as state
+child = subprocess.Popen(["/bin/sleep", "10"])
+try:
+    with state.RelayTransaction() as transaction:
+        transaction.prepare(os.getpid(), child.pid)
+    original = state.MARKER.read_bytes()
+    with state.RelayTransaction() as transaction:
+        try:
+            transaction.reopen_after_new_boot(10)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("same boot reopened admission")
+        with patch.object(state, "boot_id", return_value="00000000-0000-4000-8000-000000000001"), patch.object(drain, "verify_local_boot_prerequisites", side_effect=RuntimeError("unhealthy")):
+            try:
+                transaction.reopen_after_new_boot(10)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("unhealthy boot reopened admission")
+        assert state.MARKER.read_bytes() == original
+        with patch.object(state, "boot_id", return_value="00000000-0000-4000-8000-000000000001"), patch.object(drain, "verify_local_boot_prerequisites", return_value={"worker": 7}), patch.object(drain, "fence_is_configured", side_effect=RuntimeError("missing fence")):
+            try:
+                transaction.reopen_after_new_boot(10)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("a missing fence was accepted")
+        assert state.MARKER.read_bytes() == original
+        with patch.object(state, "boot_id", return_value="00000000-0000-4000-8000-000000000001"), patch.object(drain, "verify_local_boot_prerequisites", return_value={"worker": 7}), patch.object(drain, "fence_is_configured"):
+            assert transaction.reopen_after_new_boot(10) == {"worker": 7}
+        assert not state.MARKER.exists()
+finally:
+    child.terminate()
+    child.wait(timeout=5)
+"""
+        result = self.run_owner(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.directory / "maintenance.json").exists())
+        self.assertEqual((self.src / "nft-calls").read_text().splitlines(), ["-f -"])
+
     def test_reboot_enqueue_requires_idle_window_and_persists_uncertainty(self):
         code = r"""
 import contextlib, os, subprocess, sys

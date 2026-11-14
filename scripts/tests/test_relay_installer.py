@@ -48,6 +48,7 @@ class RelayInstallerTests(unittest.TestCase):
             "maintenance_drain.py",
             "haproxy-maintenance.conf",
             "nftables-maintenance.conf",
+            "remote-coder-relay-maintenance-recover.service",
             "config-activation.sh",
             "nftables.conf",
             "haproxy.cfg",
@@ -168,8 +169,22 @@ esac
             "--unshare-all",
             "--die-with-parent",
             "--ro-bind",
-            "/",
-            "/",
+            "/usr",
+            "/usr",
+            "--symlink",
+            "usr/bin",
+            "/bin",
+            "--symlink",
+            "usr/sbin",
+            "/sbin",
+            "--symlink",
+            "usr/lib",
+            "/lib",
+            "--symlink",
+            "usr/lib64",
+            "/lib64",
+            "--dir",
+            "/var",
             "--tmpfs",
             "/tmp",
         ]
@@ -219,6 +234,12 @@ esac
             ],
         )
         self.assertTrue((self.root / "sbin/policy-rc.d").is_symlink())
+        self.assertIn(
+            "systemctl enable --quiet remote-coder-relay-maintenance-recover", first
+        )
+        self.assertNotIn(
+            "systemctl start remote-coder-relay-maintenance-recover", first
+        )
         self.assertLess(
             first.index("systemctl daemon-reload"),
             first.index("systemctl start nftables"),

@@ -1,9 +1,12 @@
 #!/usr/bin/python3
 import os
+import subprocess
 import sys
+import time
 
 from maintenance_state import (
     MARKER,
+    RelayTransaction,
     boot_id,
     owner_locks,
     read_marker,
@@ -38,9 +41,47 @@ def recover_preparing():
     remove_fence_and_marker()
 
 
+def recover_new_boot(timeout_seconds):
+    try:
+        MARKER.lstat()
+    except FileNotFoundError:
+        return
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "prerequisites did not become ready"
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(f"new-boot relay recovery timed out: {last_error}")
+        try:
+            with RelayTransaction() as transaction:
+                transaction.reopen_after_new_boot(min(10, remaining))
+            print("relay admission reopened after local new-boot checks")
+            return
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            KeyError,
+            subprocess.SubprocessError,
+        ) as error:
+            last_error = str(error)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"new-boot relay recovery failed: {error}"
+                ) from error
+            time.sleep(min(1, remaining))
+
+
 if __name__ == "__main__":
     try:
-        recover()
+        if sys.argv[1:] == ["--boot"]:
+            recover_new_boot(180)
+        elif not sys.argv[1:]:
+            recover()
+        else:
+            raise RuntimeError("usage: maintenance-recover [--boot]")
     except (OSError, RuntimeError) as error:
         print(f"relay recovery: {error}", file=sys.stderr)
         sys.exit(1)
