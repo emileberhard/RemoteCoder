@@ -1111,7 +1111,9 @@ entrypoint linked above.
     composer grows by one row however many are added. Each tile has a corner
     remove control with a `ControlMetrics.minimumTarget` hit area, and the whole
     strip is a composer control hit region, so it scrolls.
-  - The attachment menu offers camera, photo library, file import and paste. It
+  - The attachment menu offers, nearest the finger first, Choose from Library,
+    Paste from Clipboard, Choose File and Take Photo, so an accidental second
+    tap lands on the cheapest item and never opens the camera. It
     is an `AppActionMenu`, so it opens on touch-down instead of on release, and a
     touch that starts on it belongs to the menu: press, slide and release picks
     an item, and a swipe from it does not move the drawer.

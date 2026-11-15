@@ -482,23 +482,23 @@ struct ChatComposerView: View {
 
     private var attachmentItems: [ContextMenuItem] {
         var items: [ContextMenuItem] = []
+        items.append(ContextMenuItem(title: "Choose from Library", systemImage: "photo.on.rectangle") {
+            dismissSoftwareKeyboard()
+            photoDestination = attachmentDestination
+            presentations.showPhotoPicker = true
+        })
+        items.append(ContextMenuItem(title: "Paste from Clipboard", systemImage: "doc.on.clipboard", perform: pasteFromClipboard))
+        items.append(ContextMenuItem(title: "Choose File", systemImage: "doc") {
+            dismissSoftwareKeyboard()
+            fileDestination = attachmentDestination
+            presentations.showFileImporter = true
+        })
         #if os(iOS)
         items.append(ContextMenuItem(title: "Take Photo", systemImage: "camera") {
             dismissSoftwareKeyboard()
             if let draft = screen.currentDraft { presentations.presentCamera(for: screen, draft: draft) }
         })
         #endif
-        items.append(ContextMenuItem(title: "Choose from Library", systemImage: "photo.on.rectangle") {
-            dismissSoftwareKeyboard()
-            photoDestination = attachmentDestination
-            presentations.showPhotoPicker = true
-        })
-        items.append(ContextMenuItem(title: "Choose File", systemImage: "doc") {
-            dismissSoftwareKeyboard()
-            fileDestination = attachmentDestination
-            presentations.showFileImporter = true
-        })
-        items.append(ContextMenuItem(title: "Paste from Clipboard", systemImage: "doc.on.clipboard", perform: pasteFromClipboard))
         return items
     }
 
