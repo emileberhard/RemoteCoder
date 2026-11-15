@@ -631,7 +631,7 @@ import maintenance_drain as drain
 import maintenance_state as state
 child = subprocess.Popen(["/bin/sleep", "10"])
 try:
-    for lost_receipt in (False, True):
+    for case in ("missing", "permission", "other_error", "lost_receipt"):
         with state.RelayTransaction() as transaction:
             transaction.prepare(os.getpid(), child.pid)
             transaction.fence()
@@ -639,19 +639,21 @@ try:
                 transaction.drain(30)
             original_write = state._write_marker
             def write(marker):
-                if lost_receipt and marker["phase"] == "reboot-not-submitted":
+                if case == "lost_receipt" and marker["phase"] == "reboot-not-submitted":
                     raise OSError("receipt write interrupted")
                 original_write(marker)
-            with patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "snapshot", return_value=False), patch.object(state, "_write_marker", side_effect=write), patch.object(state.subprocess, "Popen", side_effect=FileNotFoundError("missing systemctl")):
+            launch_error = {"missing": FileNotFoundError("missing"), "permission": PermissionError("denied"), "other_error": OSError("ambiguous I/O"), "lost_receipt": FileNotFoundError("missing")}[case]
+            with patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "snapshot", return_value=False), patch.object(state, "_write_marker", side_effect=write), patch.object(state.subprocess, "Popen", side_effect=launch_error):
                 try:
                     transaction.enqueue_reboot()
                 except (RuntimeError, OSError):
                     pass
                 else:
                     raise AssertionError("failed exec was accepted")
-        assert state.read_marker()["phase"] == ("reboot-requesting" if lost_receipt else "reboot-not-submitted")
+        uncertain = case in ("lost_receipt", "other_error")
+        assert state.read_marker()["phase"] == ("reboot-requesting" if uncertain else "reboot-not-submitted")
         with state.RelayTransaction() as recovery:
-            if lost_receipt:
+            if uncertain:
                 try:
                     recovery.reconcile_pending(10)
                 except RuntimeError as error:

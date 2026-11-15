@@ -341,10 +341,12 @@ class RelayTransaction:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-        except OSError as error:
+        except (FileNotFoundError, PermissionError) as error:
             marker["phase"] = "reboot-not-submitted"
             _write_marker(marker)
             raise RuntimeError("reboot command could not start") from error
+        except OSError as error:
+            raise RuntimeError("reboot request is uncertain; keep the fence") from error
         try:
             result = process.wait(timeout=15)
         except subprocess.TimeoutExpired as error:
