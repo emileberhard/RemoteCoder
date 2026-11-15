@@ -486,12 +486,16 @@ esac
     def test_recovery_reopens_only_an_abandoned_same_boot_preparation(self):
         directory = self.root / "varlib/remote-coder-relay"
         directory.mkdir(mode=0o700)
+        dpkg = self.root / "varlib/dpkg"
+        dpkg.mkdir()
+        for name in ("lock-frontend", "lock"):
+            (dpkg / name).touch()
         marker = directory / "maintenance.json"
         boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
         nft = self.root / "sbin/nft"
         nft.write_text(
             "#!/bin/sh\n"
-            "if [ \"$1\" = -j ]; then printf '{}\\n'; exit 0; fi\n"
+            "if [ \"$1\" = -j ]; then if [ -f /tmp/fixture/fence.json ]; then cat /tmp/fixture/fence.json; else printf '{}\\n'; fi; exit 0; fi\n"
             "cat >> /tmp/fixture/nft-input\n"
             "test ! -e /tmp/fixture/fail-nft\n"
         )
@@ -615,6 +619,53 @@ esac
         result = recover()
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(marker.exists())
+        write_marker("reboot-not-submitted")
+        self.assertNotEqual(recover().returncode, 0)
+        self.assertTrue(marker.exists())
+        fence = {
+            "nftables": [
+                {
+                    "chain": {
+                        "family": "inet",
+                        "table": "remote_coder_relay_maintenance",
+                        "name": "input",
+                        "type": "filter",
+                        "hook": "input",
+                        "prio": -1,
+                        "policy": "accept",
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "remote_coder_relay_maintenance",
+                        "chain": "input",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {
+                                        "payload": {"protocol": "tcp", "field": "dport"}
+                                    },
+                                    "right": 443,
+                                }
+                            },
+                            {
+                                "match": {
+                                    "op": "in",
+                                    "left": {"ct": {"key": "state"}},
+                                    "right": "new",
+                                }
+                            },
+                            {"reject": {"type": "tcp reset"}},
+                        ],
+                    }
+                },
+            ]
+        }
+        (self.shared / "fence.json").write_text(json.dumps(fence))
+        self.assertEqual(recover().returncode, 0)
+        self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":

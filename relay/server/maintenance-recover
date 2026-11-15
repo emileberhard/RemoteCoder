@@ -7,10 +7,6 @@ import time
 from maintenance_state import (
     MARKER,
     RelayTransaction,
-    boot_id,
-    owner_locks,
-    read_marker,
-    remove_fence_and_marker,
 )
 
 
@@ -21,28 +17,8 @@ def recover():
         MARKER.lstat()
     except FileNotFoundError:
         return
-    with owner_locks():
-        recover_preparing()
-
-
-def recover_preparing():
-    try:
-        marker = read_marker()
-        phase, previous_boot = marker["phase"], marker["boot_id"]
-        current_boot = boot_id()
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise RuntimeError(
-            "invalid relay maintenance marker; keep the fence"
-        ) from error
-    if phase not in ("preparing", "committed") or previous_boot != current_boot:
-        raise RuntimeError(
-            "uncertain reboot or new-boot maintenance requires verification; keep the fence"
-        )
-    if phase == "committed":
-        from maintenance_drain import fence_is_configured
-
-        fence_is_configured(time.monotonic() + 5)
-    remove_fence_and_marker()
+    with RelayTransaction() as transaction:
+        print(transaction.reconcile_pending(10))
 
 
 def recover_pending(timeout_seconds):

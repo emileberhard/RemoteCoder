@@ -21,6 +21,10 @@ class RelayUpdatesTests(unittest.TestCase):
         self.proc = root / "proc"
         self.cgroup = root / "cgroup"
         self.flag = root / "reboot-required"
+        self.status = root / "status"
+        self.status.write_text("installed package state")
+        self.log = root / "dpkg.log"
+        self.log.write_text("2026-11-15 01:00:00 startup archives unpack\n")
         self.proc.mkdir()
         for unit, pid in zip(updates.SERVICES, (11, 12, 13)):
             group = self.cgroup / "system.slice" / unit
@@ -36,6 +40,12 @@ class RelayUpdatesTests(unittest.TestCase):
             patch.object(updates, "PROC", self.proc),
             patch.object(updates, "CGROUP", self.cgroup),
             patch.object(updates, "REBOOT_REQUIRED", self.flag),
+            patch.object(updates, "DPKG_STATUS", self.status),
+            patch.object(updates, "DPKG_LOG", self.log),
+            patch.object(updates, "ATTEMPT", root / "update-attempt.json"),
+            patch.object(
+                updates, "boot_id", return_value="00000000-0000-4000-8000-000000000001"
+            ),
             patch.object(updates.subprocess, "run", side_effect=self.systemctl),
         )
         for item in self.patches:
@@ -55,19 +65,23 @@ class RelayUpdatesTests(unittest.TestCase):
         )
 
     def test_flag_and_replaced_library_or_executable_request_reboot(self):
-        self.assertFalse(updates.update_requires_reboot())
+        self.assertIsNone(updates.reboot_evidence())
         self.flag.touch()
-        self.assertTrue(updates.update_requires_reboot())
+        self.assertIsNotNone(updates.reboot_evidence())
         self.flag.unlink()
         maps = self.proc / "12" / "maps"
         maps.write_text("1000-2000 r-xp 0000 00:00 0 /usr/lib/libssl.so.3 (deleted)\n")
-        self.assertTrue(updates.update_requires_reboot())
+        self.assertIsNotNone(updates.reboot_evidence())
+        maps.write_text(
+            "1000-2000 r--p 0000 00:00 0 /usr/lib/locale/archive (deleted)\n"
+        )
+        self.assertIsNone(updates.reboot_evidence())
         maps.write_text("1000-2000 r-xp 0000 00:00 0 /tmp/not-a-library (deleted)\n")
-        self.assertFalse(updates.update_requires_reboot())
+        self.assertIsNone(updates.reboot_evidence())
         exe = self.proc / "13" / "exe"
         exe.unlink()
         exe.symlink_to("/usr/sbin/sshd (deleted)")
-        self.assertTrue(updates.update_requires_reboot())
+        self.assertIsNotNone(updates.reboot_evidence())
 
     def test_child_control_group_is_counted(self):
         group = self.cgroup / "system.slice" / "ssh.service" / "child"
@@ -78,12 +92,13 @@ class RelayUpdatesTests(unittest.TestCase):
         (process / "maps").write_text(
             "1000-2000 r-xp 0000 00:00 0 /lib/libcrypto.so (deleted)\n"
         )
-        self.assertTrue(updates.update_requires_reboot())
+        (process / "exe").symlink_to("/usr/sbin/service")
+        self.assertIsNotNone(updates.reboot_evidence())
 
     def test_unreadable_or_missing_service_state_aborts(self):
         (self.cgroup / "system.slice" / "haproxy.service" / "cgroup.procs").unlink()
         with self.assertRaisesRegex(RuntimeError, "unreadable control group"):
-            updates.update_requires_reboot()
+            updates.reboot_evidence()
 
     def test_optional_service_load_failure_is_not_reported_as_absent(self):
         result = CompletedProcess(
@@ -94,6 +109,17 @@ class RelayUpdatesTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "not active and loaded"),
         ):
             updates.service_processes("tailscaled.service", optional=True)
+
+    def test_invalid_attempt_is_not_mistaken_for_fresh_evidence(self):
+        (self.proc / "12" / "maps").write_text(
+            "1000-2000 r-xp 0000 00:00 0 /usr/lib/libssl.so.3 (deleted)\n"
+        )
+        updates.ATTEMPT.write_text("not a valid receipt")
+        updates.ATTEMPT.chmod(0o600)
+        with self.assertRaises((RuntimeError, ValueError)):
+            updates.reboot_evidence()
+        self.flag.touch()
+        self.assertIsNotNone(updates.reboot_evidence())
 
     def test_real_deleted_library_mapping_and_executable_in_sandbox(self):
         if sys.platform != "linux" or not shutil.which("bwrap"):
@@ -113,14 +139,14 @@ path = '/usr/lib/locale/libtest.so'
 with open(path, 'wb') as source:
     source.write(b'x' * 4096)
 with open(path, 'rb') as source:
-    mapping = mmap.mmap(source.fileno(), 0, access=mmap.ACCESS_READ)
+    mapping = mmap.mmap(source.fileno(), 0, flags=mmap.MAP_PRIVATE, prot=mmap.PROT_READ | mmap.PROT_EXEC)
     os.unlink(path)
-    assert updates.process_uses_replaced_file(os.getpid())
+    assert updates.process_replaced_files(os.getpid())
     mapping.close()
 process = subprocess.Popen(['/usr/lib/locale/sleep', '10'])
 try:
     os.unlink('/usr/lib/locale/sleep')
-    assert updates.process_uses_replaced_file(process.pid)
+    assert updates.process_replaced_files(process.pid)
 finally:
     process.terminate()
     process.wait(timeout=5)
