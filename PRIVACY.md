@@ -31,9 +31,8 @@ paths and can read those files. Uploaded files are retained on the gateway for
 up to 30 days, unfinished uploads for up to 7 days, subject to the store's space
 limits and earlier reclamation. Agent-requested original photos saved to the
 host's Pictures folder remain until the operator removes them. Camera-roll
-copies remain in Photos independently of attachment removal. Unclaimed share
-and locked-camera handoffs have their own expiry; completed imports become
-ordinary draft attachments. Removing a draft or file does not retract data
+copies remain in Photos independently of attachment removal. Unclaimed shares
+have their own expiry; completed imports become ordinary draft attachments. Removing a draft or file does not retract data
 already sent to a provider.
 
 Generated HTML visuals can request external HTTPS resources; those services

@@ -1,7 +1,6 @@
 import Photos
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 struct SystemCamera: UIViewControllerRepresentable {
     @MainActor static let isAvailable = UIImagePickerController.isSourceTypeAvailable(.camera)
@@ -13,7 +12,6 @@ struct SystemCamera: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
         picker.sourceType = .camera
-        picker.mediaTypes = [UTType.image.identifier]
         picker.delegate = context.coordinator
         return picker
     }

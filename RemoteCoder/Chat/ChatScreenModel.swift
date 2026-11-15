@@ -1532,7 +1532,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             do {
                 try await CameraPhoto.saveToPhotos(file)
             } catch {
-                self?.present(.attachments("The photo was attached but not saved to your camera roll: \(error.localizedDescription)"))
+                self?.present(.attachments("Could not save the photo to your camera roll: \(error.localizedDescription)"))
             }
             return file
         }], for: draft)
