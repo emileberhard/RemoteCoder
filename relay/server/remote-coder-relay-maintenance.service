@@ -1,6 +1,5 @@
 [Unit]
 Description=Prepare relay for a required reboot
-ConditionPathExists=/run/reboot-required
 
 [Service]
 Type=oneshot

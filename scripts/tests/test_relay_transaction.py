@@ -36,6 +36,9 @@ class RelayTransactionTests(unittest.TestCase):
             SERVER / "maintenance_drain.py", self.src / "maintenance_drain.py"
         )
         shutil.copyfile(
+            SERVER / "maintenance_updates.py", self.src / "maintenance_updates.py"
+        )
+        shutil.copyfile(
             SERVER / "maintenance-prepare", self.src / "maintenance-prepare"
         )
         systemctl = self.src / "systemctl"
@@ -682,7 +685,7 @@ loader.exec_module(prepare)
 child = subprocess.Popen(["/bin/sleep", "10"])
 try:
     identity = {"master": state.worker_identity(os.getpid()), "worker": state.worker_identity(child.pid)}
-    with patch.object(prepare, "_reboot_window", return_value=True), patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "haproxy_identity", return_value=identity), patch.object(drain, "wait_for_candidate"), patch.object(drain, "wait_for_drain"), patch.object(drain, "snapshot", return_value=False):
+    with patch.object(prepare, "_reboot_window", return_value=True), patch.object(prepare, "update_requires_reboot", return_value=True), patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "haproxy_identity", return_value=identity), patch.object(drain, "wait_for_candidate"), patch.object(drain, "wait_for_drain"), patch.object(drain, "snapshot", return_value=False):
         prepare.prepare()
     assert state.read_marker()["phase"] == "reboot-requesting"
 finally:
@@ -698,6 +701,31 @@ finally:
             json.loads((self.directory / "maintenance.json").read_text())["phase"],
             "reboot-requesting",
         )
+
+    def test_prepare_checks_update_evidence_under_package_locks_before_fencing(self):
+        code = r"""
+import fcntl, importlib.machinery, importlib.util, subprocess, sys
+from unittest.mock import patch
+sys.path.insert(0, "/tmp/fixture")
+import maintenance_state as state
+loader = importlib.machinery.SourceFileLoader("prepare_fixture", "/tmp/fixture/maintenance-prepare")
+spec = importlib.util.spec_from_loader(loader.name, loader)
+prepare = importlib.util.module_from_spec(spec)
+loader.exec_module(prepare)
+def no_update():
+    for path in state.DPKG_LOCKS:
+        probe = subprocess.run([sys.executable, '-c', 'import fcntl,sys; f=open(sys.argv[1],"r+"); fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)', str(path)], capture_output=True)
+        assert probe.returncode != 0
+    assert not state.MARKER.exists()
+    return False
+with patch.object(prepare, "_reboot_window", return_value=True), patch.object(prepare, "update_requires_reboot", side_effect=no_update):
+    prepare.prepare()
+assert not state.MARKER.exists()
+"""
+        result = self.run_owner(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.src / "nft-calls").exists())
+        self.assertFalse((self.src / "systemctl-calls").exists())
 
 
 if __name__ == "__main__":

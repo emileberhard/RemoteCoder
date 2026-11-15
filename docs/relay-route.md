@@ -71,8 +71,11 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   fails. Its staged reboot operation rechecks drain during the 06:33 Stockholm
   window and persists the request-intent phase before requesting reboot; an uncertain
   request leaves the fence. A staged relay-local timer invokes it at 06:33
-  Stockholm time only when `/run/reboot-required` exists; it does not catch up
-  after a missed window. Provisioning does not enable or start this timer: its
+  Stockholm time when `/run/reboot-required` exists or an owned relay service
+  maps a deleted system library or executable. This check holds the package
+  locks and reads process state without restarting services. A missing or
+  unreadable service state aborts the attempt; it does not catch up after a
+  missed window. Provisioning does not enable or start this timer: its
   owner must explicitly enable it after recovery and a supervised cycle have
   been accepted. Provisioning stages the HAProxy startup guard without restarting
   HAProxy; that guard takes effect at the next coordinated restart. A busy or

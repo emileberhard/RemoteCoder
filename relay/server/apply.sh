@@ -49,6 +49,7 @@ install -m 0755 "$src/maintenance-recover" /usr/local/lib/remote-coder-relay/mai
 install -m 0755 "$src/maintenance-prepare" /usr/local/lib/remote-coder-relay/maintenance-prepare
 install -m 0644 "$src/maintenance_state.py" /usr/local/lib/remote-coder-relay/maintenance_state.py
 install -m 0644 "$src/maintenance_drain.py" /usr/local/lib/remote-coder-relay/maintenance_drain.py
+install -m 0644 "$src/maintenance_updates.py" /usr/local/lib/remote-coder-relay/maintenance_updates.py
 install -d -m 0755 /etc/systemd/system/haproxy.service.d
 install -m 0644 "$src/haproxy-maintenance.conf" /etc/systemd/system/haproxy.service.d/10-relay-maintenance.conf
 install -d -m 0755 /etc/systemd/system/nftables.service.d
