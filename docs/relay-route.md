@@ -73,7 +73,7 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   window and persists the request-intent phase before requesting reboot; an uncertain
   request leaves the fence. A staged relay-local timer invokes it at 06:33
   Stockholm time when `/run/reboot-required` exists or an owned relay service
-  maps a deleted system library or executable. This check holds the package
+  maps deleted executable library code or a deleted executable. This check holds the package
   locks and reads process state without restarting services. A missing or
   unreadable service state aborts the attempt; it does not catch up after a
   missed window. Provisioning does not enable or start this timer: its
@@ -81,6 +81,11 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   been accepted. Provisioning stages the HAProxy startup guard without restarting
   HAProxy; that guard takes effect at the next coordinated restart. A busy or
   uncertain drain aborts and reopens admission.
+  Before requesting reboot, the owner durably records a hash of the deleted-file
+  evidence, the boot identity and the dpkg generation. If the same evidence
+  persists after that boot, another automatic reboot is inhibited and the unit
+  fails with a journal diagnostic. A new dpkg run or `/run/reboot-required`
+  rearms the check. This receipt never delays admission recovery.
   A path unit starts the recovery owner whenever a marker appears. On a new boot
   it checks local service states, firewall,
   listeners and HAProxy generation; it logs failures and systemd keeps retrying
@@ -88,7 +93,8 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   the marker. The Mini must then run
   `just relay-probe` independently and report a failed public route as an
   outage. This probe is post-hoc; it is not part of the local boot decision.
-  The post-boot Mini probe and its outage alert are not yet automated.
+  The Mini's post-login agent runs the pinned probe and sends an outage alert
+  on failure, after the 06:33 window.
 - **HAProxy** terminates TLS 1.3 on 443 with a self-signed P-256 certificate
   whose SPKI the app pins, and passes only streams that begin with `CONNECT `.
 - **tinyproxy** requires Basic auth (it answers 407 and closes; URLSession

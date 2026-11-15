@@ -113,17 +113,17 @@ def _reboot_window():
     return current.hour == 6 and current.minute == 33
 
 
-def _write_marker(marker):
+def _write_atomic(path, value):
     fd, temporary = tempfile.mkstemp(
         prefix=".maintenance-", suffix=".tmp", dir=DIRECTORY
     )
     try:
         with os.fdopen(fd, "w") as stream:
-            json.dump(marker, stream, sort_keys=True, separators=(",", ":"))
+            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, MARKER)
+        os.replace(temporary, path)
         directory_fd = os.open(DIRECTORY, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory_fd)
@@ -134,6 +134,10 @@ def _write_marker(marker):
             os.unlink(temporary)
         except FileNotFoundError:
             pass
+
+
+def _write_marker(marker):
+    _write_atomic(MARKER, marker)
 
 
 def _remove_stale_temporaries():
@@ -305,8 +309,9 @@ class RelayTransaction:
         marker["phase"] = "committed"
         _write_marker(marker)
 
-    def enqueue_reboot(self):
+    def enqueue_reboot(self, evidence):
         from maintenance_drain import snapshot
+        from maintenance_updates import ATTEMPT
 
         marker = self._preparing_marker()
         if not self._drained:
@@ -333,6 +338,7 @@ class RelayTransaction:
             or marker["operation_id"] != self._operation_id
         ):
             raise RuntimeError("relay committed marker changed before reboot request")
+        _write_atomic(ATTEMPT, evidence)
         marker["phase"] = "reboot-requesting"
         _write_marker(marker)
         try:

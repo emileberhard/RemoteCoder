@@ -507,7 +507,7 @@ try:
                     transaction.commit()
                 else:
                     with patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "snapshot", return_value=False):
-                        transaction.enqueue_reboot()
+                        transaction.enqueue_reboot({})
         assert state.read_marker()["phase"] == phase
         with state.RelayTransaction() as recovery:
             if phase != "reboot-requesting":
@@ -590,7 +590,7 @@ try:
             request = patch.object(state.subprocess, "Popen", return_value=TimeoutProcess()) if case == "timeout" else contextlib.nullcontext()
             with patch.object(state, "_reboot_window", side_effect=windows), patch.object(drain, "snapshot", return_value=case == "busy"), writer, request:
                 try:
-                    transaction.enqueue_reboot()
+                    transaction.enqueue_reboot({})
                 except (RuntimeError, OSError):
                     if case == "success":
                         raise
@@ -645,7 +645,7 @@ try:
             launch_error = {"missing": FileNotFoundError("missing"), "permission": PermissionError("denied"), "other_error": OSError("ambiguous I/O"), "lost_receipt": FileNotFoundError("missing")}[case]
             with patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "snapshot", return_value=False), patch.object(state, "_write_marker", side_effect=write), patch.object(state.subprocess, "Popen", side_effect=launch_error):
                 try:
-                    transaction.enqueue_reboot()
+                    transaction.enqueue_reboot({})
                 except (RuntimeError, OSError):
                     pass
                 else:
@@ -687,7 +687,7 @@ loader.exec_module(prepare)
 child = subprocess.Popen(["/bin/sleep", "10"])
 try:
     identity = {"master": state.worker_identity(os.getpid()), "worker": state.worker_identity(child.pid)}
-    with patch.object(prepare, "_reboot_window", return_value=True), patch.object(prepare, "update_requires_reboot", return_value=True), patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "haproxy_identity", return_value=identity), patch.object(drain, "wait_for_candidate"), patch.object(drain, "wait_for_drain"), patch.object(drain, "snapshot", return_value=False):
+    with patch.object(prepare, "_reboot_window", return_value=True), patch.object(prepare, "reboot_evidence", return_value={}), patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "haproxy_identity", return_value=identity), patch.object(drain, "wait_for_candidate"), patch.object(drain, "wait_for_drain"), patch.object(drain, "snapshot", return_value=False):
         prepare.prepare()
     assert state.read_marker()["phase"] == "reboot-requesting"
 finally:
@@ -719,8 +719,8 @@ def no_update():
         probe = subprocess.run([sys.executable, '-c', 'import fcntl,sys; f=open(sys.argv[1],"r+"); fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)', str(path)], capture_output=True)
         assert probe.returncode != 0
     assert not state.MARKER.exists()
-    return False
-with patch.object(prepare, "_reboot_window", return_value=True), patch.object(prepare, "update_requires_reboot", side_effect=no_update):
+    return None
+with patch.object(prepare, "_reboot_window", return_value=True), patch.object(prepare, "reboot_evidence", side_effect=no_update):
     prepare.prepare()
 assert not state.MARKER.exists()
 """
@@ -728,6 +728,66 @@ assert not state.MARKER.exists()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((self.src / "nft-calls").exists())
         self.assertFalse((self.src / "systemctl-calls").exists())
+
+    def test_reboot_inhibits_repeated_evidence_until_new_package_work(self):
+        code = r"""
+import os, subprocess, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, "/tmp/fixture")
+import maintenance_drain as drain
+import maintenance_state as state
+import maintenance_updates as updates
+status = Path('/var/lib/dpkg/status')
+status.write_text('installed')
+log = Path('/tmp/fixture/dpkg.log')
+log.write_text('2026-11-15 01:00:00 startup archives unpack\n')
+flag = Path('/tmp/fixture/reboot-required')
+old_boot = state.boot_id()
+new_boot = '00000000-0000-4000-8000-000000000001'
+child = subprocess.Popen(['/bin/sleep', '10'])
+try:
+    with patch.object(updates, 'DPKG_STATUS', status), patch.object(updates, 'DPKG_LOG', log), patch.object(updates, 'REBOOT_REQUIRED', flag), patch.object(updates, 'service_processes', return_value={123}), patch.object(updates, 'process_replaced_files', return_value={'/usr/lib/libexample.so (deleted)'}):
+        with state.RelayTransaction() as transaction:
+            evidence = updates.reboot_evidence()
+            assert evidence is not None
+            transaction.prepare(os.getpid(), child.pid)
+            transaction.fence()
+            with patch.object(drain, 'wait_for_drain'):
+                transaction.drain(30)
+            with patch.object(state, '_reboot_window', return_value=True), patch.object(drain, 'snapshot', return_value=False):
+                transaction.enqueue_reboot(evidence)
+        assert updates.ATTEMPT.is_file()
+        with state.RelayTransaction() as recovery:
+            with patch.object(state, 'boot_id', return_value=new_boot), patch.object(drain, 'verify_local_boot_prerequisites', return_value={'worker': 7}), patch.object(drain, 'fence_is_configured'):
+                assert 'new-boot' in recovery.reconcile_pending(10)
+        assert not state.MARKER.exists()
+        with patch.object(updates, 'boot_id', return_value=new_boot):
+            def inhibited():
+                try:
+                    updates.reboot_evidence()
+                except RuntimeError as error:
+                    assert 'automatic reboot inhibited' in str(error)
+                else:
+                    raise AssertionError('unchanged evidence authorized another reboot')
+            inhibited()
+            log.write_text('')
+            inhibited()
+            log.write_text('2026-11-15 07:00:00 startup archives unpack\n')
+            assert updates.reboot_evidence() is not None
+            log.write_text('2026-11-15 01:00:00 startup archives unpack\n')
+            inhibited()
+            flag.touch()
+            assert updates.reboot_evidence() is not None
+            flag.unlink()
+            status.write_text('updated installed package state')
+            assert updates.reboot_evidence() is not None
+finally:
+    child.terminate()
+    child.wait(timeout=5)
+"""
+        result = self.run_owner(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
