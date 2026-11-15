@@ -102,6 +102,8 @@ class RelayTransactionTests(unittest.TestCase):
                 "/usr/bin/systemctl",
                 "--proc",
                 "/proc",
+                "--dev",
+                "/dev",
                 "--",
                 "/usr/bin/python3",
                 "-c",
@@ -573,7 +575,16 @@ try:
                 writer = patch.object(state, "_write_marker", side_effect=interrupted_intent)
             else:
                 writer = contextlib.nullcontext()
-            request = patch.object(state.subprocess, "run", side_effect=subprocess.TimeoutExpired("systemctl", 15)) if case == "timeout" else contextlib.nullcontext()
+            class TimeoutProcess:
+                def __init__(self):
+                    self.killed = False
+                def wait(self, timeout=None):
+                    if not self.killed:
+                        raise subprocess.TimeoutExpired("systemctl", 15)
+                    return -9
+                def kill(self):
+                    self.killed = True
+            request = patch.object(state.subprocess, "Popen", return_value=TimeoutProcess()) if case == "timeout" else contextlib.nullcontext()
             with patch.object(state, "_reboot_window", side_effect=windows), patch.object(drain, "snapshot", return_value=case == "busy"), writer, request:
                 try:
                     transaction.enqueue_reboot()
@@ -607,6 +618,55 @@ finally:
             (self.src / "systemctl-calls").read_text().splitlines(),
             ["reboot", "reboot"],
         )
+
+    def test_unexecuted_reboot_receipt_is_recovered_but_lost_receipt_is_not(self):
+        code = r"""
+import os, subprocess, sys
+from unittest.mock import patch
+sys.path.insert(0, "/tmp/fixture")
+import maintenance_drain as drain
+import maintenance_state as state
+child = subprocess.Popen(["/bin/sleep", "10"])
+try:
+    for lost_receipt in (False, True):
+        with state.RelayTransaction() as transaction:
+            transaction.prepare(os.getpid(), child.pid)
+            transaction.fence()
+            with patch.object(drain, "wait_for_drain"):
+                transaction.drain(30)
+            original_write = state._write_marker
+            def write(marker):
+                if lost_receipt and marker["phase"] == "reboot-not-submitted":
+                    raise OSError("receipt write interrupted")
+                original_write(marker)
+            with patch.object(state, "_reboot_window", return_value=True), patch.object(drain, "snapshot", return_value=False), patch.object(state, "_write_marker", side_effect=write), patch.object(state.subprocess, "Popen", side_effect=FileNotFoundError("missing systemctl")):
+                try:
+                    transaction.enqueue_reboot()
+                except (RuntimeError, OSError):
+                    pass
+                else:
+                    raise AssertionError("failed exec was accepted")
+        assert state.read_marker()["phase"] == ("reboot-requesting" if lost_receipt else "reboot-not-submitted")
+        with state.RelayTransaction() as recovery:
+            if lost_receipt:
+                try:
+                    recovery.reconcile_pending(10)
+                except RuntimeError as error:
+                    assert "uncertain" in str(error)
+                else:
+                    raise AssertionError("lost receipt reopened admission")
+                state.MARKER.unlink()
+            else:
+                with patch.object(drain, "fence_is_configured"):
+                    assert "unsubmitted" in recovery.reconcile_pending(10)
+                assert not state.MARKER.exists()
+finally:
+    child.terminate()
+    child.wait(timeout=5)
+"""
+        result = self.run_owner(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.src / "systemctl-calls").exists())
 
     def test_prepare_entrypoint_fences_drains_and_enqueues_only_after_commit(self):
         code = r"""

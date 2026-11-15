@@ -51,7 +51,10 @@ app ═══════════ inner TLS, pinned gateway LAN SPKI, end to
   the same boot only after acquiring its locks; these phases prove that no
   reboot was submitted. Before invoking systemd it durably writes
   `reboot-requesting`, whose same-boot outcome stays fenced and is retried until
-  a new boot or an operator resolves the uncertainty. Invalid markers stay
+  a new boot or an operator resolves the uncertainty. If the reboot command
+  cannot be created or executed, the owner records `reboot-not-submitted` and
+  recovery reopens after checking the fence. A timeout, nonzero exit or crash
+  before this receipt is still uncertain. Invalid markers stay
   fenced. HAProxy
   startup takes the admission lock before checking the marker, so it cannot
   reapply a fence between recovery removing it and deleting the marker. The

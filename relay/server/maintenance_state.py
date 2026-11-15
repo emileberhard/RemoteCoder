@@ -69,7 +69,9 @@ def read_marker():
         or marker["schema"] != 1
     ):
         raise ValueError("unsupported marker schema")
-    if marker["phase"] not in ("preparing", "committed", "reboot-requesting"):
+    if marker["phase"] not in (
+        "preparing", "committed", "reboot-requesting", "reboot-not-submitted"
+    ):
         raise ValueError("unknown maintenance phase")
     for name in ("boot_id", "operation_id"):
         if not isinstance(marker[name], str):
@@ -280,13 +282,13 @@ class RelayTransaction:
         if marker["boot_id"] != boot_id():
             self.reopen_after_new_boot(timeout_seconds)
             return "relay admission reopened after local new-boot checks"
-        if marker["phase"] in ("preparing", "committed"):
-            if marker["phase"] == "committed":
+        if marker["phase"] in ("preparing", "committed", "reboot-not-submitted"):
+            if marker["phase"] != "preparing":
                 from maintenance_drain import fence_is_configured
 
                 fence_is_configured(time.monotonic() + min(5, timeout_seconds))
             remove_fence_and_marker()
-            return "relay admission reopened after abandoned preparation"
+            return "relay admission reopened after abandoned preparation or unsubmitted reboot"
         raise RuntimeError(
             "reboot submission is uncertain on this boot; keep the fence"
         )
@@ -334,15 +336,22 @@ class RelayTransaction:
         marker["phase"] = "reboot-requesting"
         _write_marker(marker)
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 ["/usr/bin/systemctl", "reboot"],
-                capture_output=True,
-                timeout=15,
-                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
-        except (OSError, subprocess.TimeoutExpired) as error:
+        except OSError as error:
+            marker["phase"] = "reboot-not-submitted"
+            _write_marker(marker)
+            raise RuntimeError("reboot command could not start") from error
+        try:
+            result = process.wait(timeout=15)
+        except subprocess.TimeoutExpired as error:
+            process.kill()
+            process.wait()
             raise RuntimeError("reboot request is uncertain; keep the fence") from error
-        if result.returncode:
+        if result:
             raise RuntimeError("reboot request failed or is uncertain; keep the fence")
 
     def _preparing_marker(self):
