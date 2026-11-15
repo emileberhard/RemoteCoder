@@ -1,8 +1,5 @@
 import OSLog
 import SwiftUI
-#if os(iOS)
-import LockedCameraCapture
-#endif
 
 enum ChatOpeningEvent: Equatable {
     case initial(ConversationWindowValue)
@@ -139,11 +136,6 @@ struct ChatRootView: View {
                 workspace.events.receive(event)
             }
         }
-        #if os(iOS)
-        .onContinueUserActivity(NSUserActivityTypeLockedCameraCapture) { _ in
-            workspace.events.receive(.lockedCameraCaptures)
-        }
-        #endif
     }
 
     private func registerWithEventRouter(_ window: ChatWindowModel) {
@@ -172,7 +164,7 @@ struct ChatRootView: View {
         let admittedGeneration = workspace.navigationGeneration
         switch event {
         case .completionNotificationTap: break
-        case .quickAction, .presentVoiceCall, .open, .sharedItems, .lockedCameraCaptures:
+        case .quickAction, .presentVoiceCall, .open, .sharedItems:
             if let screen = window.selectedScreen, let perform = eventPresenter.handler(for: screen) {
                 perform(event)
                 return
@@ -427,15 +419,6 @@ private struct ChatScreen: View {
                     configuration: request.voiceConfiguration
                 )
                 #endif
-            case .camera:
-                #if os(iOS)
-                if let destination = openNewChatWithKeyboard() {
-                    dismissComposerFocus()
-                    destination.openCamera { draft in
-                        composerPresentations.presentCamera(for: destination, draft: draft)
-                    }
-                }
-                #endif
             }
         #if os(iOS)
         case .presentVoiceCall(let callID):
@@ -455,10 +438,6 @@ private struct ChatScreen: View {
             openUnsentDraft(address)
         case .sharedItems(let id):
             openNewChatWithKeyboard()?.receiveSharedItems(id)
-        case .lockedCameraCaptures:
-            #if os(iOS)
-            openNewChatWithKeyboard()?.receiveLockedCameraCaptures()
-            #endif
         case .completionNotificationTap(let payloadJSON):
             Task { await workspace.handleCompletionNotificationTap(payloadJSON: payloadJSON) }
         }

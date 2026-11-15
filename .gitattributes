@@ -14,7 +14,6 @@ RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderLiveActivities.xcscheme 
 RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderLocationPushService.xcscheme worktree-gc-regenerable
 RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderNotificationService.xcscheme worktree-gc-regenerable
 RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderShareExtension.xcscheme worktree-gc-regenerable
-RemoteCoder.xcodeproj/xcshareddata/xcschemes/RemoteCoderCaptureExtension.xcscheme worktree-gc-regenerable
 RemoteCoder.xcodeproj/xcuserdata/*.xcuserdatad/xcschemes/xcschememanagement.plist worktree-gc-regenerable
 RemoteCoder.xcworkspace/contents.xcworkspacedata worktree-gc-regenerable
 RemoteCoder.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings worktree-gc-regenerable

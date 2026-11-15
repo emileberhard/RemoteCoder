@@ -22,7 +22,7 @@ there. So open it yourself, especially for the iOS targets outside
 
 | Editing | Read first |
 |---|---|
-| iOS app and extensions: `RemoteCoder/`, `Shared/`, `RemoteCoderLiveActivities/`, `RemoteCoderNotificationService/`, `RemoteCoderLocationPushService/`, `RemoteCoderShareExtension/`, `RemoteCoderCaptureExtension/`, `RemoteCoderTests/`, `RemoteCoderUITests/`, `Core/` | [`RemoteCoder/AGENTS.md`](RemoteCoder/AGENTS.md) |
+| iOS app and extensions: `RemoteCoder/`, `Shared/`, `RemoteCoderLiveActivities/`, `RemoteCoderNotificationService/`, `RemoteCoderLocationPushService/`, `RemoteCoderShareExtension/`, `RemoteCoderTests/`, `RemoteCoderUITests/`, `Core/` | [`RemoteCoder/AGENTS.md`](RemoteCoder/AGENTS.md) |
 | Gateway, Codex runtime, Claude provider, agent tools, gateway voice: `host-daemon-rs/` | [`host-daemon-rs/AGENTS.md`](host-daemon-rs/AGENTS.md) |
 | Gateway debug CLIs, live probes, wire protocol notes: `dev-tools/` | [`dev-tools/AGENTS.md`](dev-tools/AGENTS.md) |
 

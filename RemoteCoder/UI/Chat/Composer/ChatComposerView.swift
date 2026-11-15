@@ -16,7 +16,6 @@ final class ComposerPresentations {
         let id = UUID()
         let screen: ChatScreenModel
         let draft: ComposerDraft
-        var directory: URL { URL.temporaryDirectory.appending(path: "CameraCaptures/\(id)", directoryHint: .isDirectory) }
     }
 
     func presentCamera(for screen: ChatScreenModel, draft: ComposerDraft) {
@@ -494,10 +493,12 @@ struct ChatComposerView: View {
             presentations.showFileImporter = true
         })
         #if os(iOS)
-        items.append(ContextMenuItem(title: "Take Photo", systemImage: "camera") {
-            dismissSoftwareKeyboard()
-            if let draft = screen.currentDraft { presentations.presentCamera(for: screen, draft: draft) }
-        })
+        if SystemCamera.isAvailable {
+            items.append(ContextMenuItem(title: "Take Photo", systemImage: "camera") {
+                dismissSoftwareKeyboard()
+                if let draft = screen.currentDraft { presentations.presentCamera(for: screen, draft: draft) }
+            })
+        }
         #endif
         return items
     }
@@ -531,16 +532,11 @@ struct ChatComposerView: View {
         )
         #if os(iOS)
         .fullScreenCover(item: $presentations.camera, onDismiss: { focus.wrappedValue = true }) { capture in
-            CameraCaptureView(directory: capture.directory, onDone: { files in
-                try await CameraCaptureBatch.importFiles(files, from: capture.directory) { files in
-                    guard capture.screen.target.acceptsWork, !Task.isCancelled else { throw CancellationError() }
-                    capture.screen.importFiles(files.map { file in .inOwnDirectory { file } }, for: capture.draft)
-                }
+            SystemCamera { photo in
+                if let photo { capture.screen.attachCameraPhoto(photo, to: capture.draft) }
                 presentations.camera = nil
-            }, dismissal: .button {
-                try await CameraCaptureBatch.discard(in: capture.directory)
-                presentations.camera = nil
-            })
+            }
+            .ignoresSafeArea()
             .chatPresentationDiagnostics("cover-camera")
         }
         #endif

@@ -31,7 +31,6 @@ EXEMPT_ROOTS = frozenset(
         "RemoteCoderNotificationService",
         "RemoteCoderLocationPushService",
         "RemoteCoderShareExtension",
-        "RemoteCoderCaptureExtension",
         "RemoteCoderTests",
         "RemoteCoderUITests",
         "Shared",

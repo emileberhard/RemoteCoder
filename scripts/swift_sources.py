@@ -17,7 +17,6 @@ SOURCE_ROOTS = (
     "RemoteCoderLocationPushService",
     "RemoteCoderNotificationService",
     "RemoteCoderShareExtension",
-    "RemoteCoderCaptureExtension",
     "RemoteCoderTests",
     "RemoteCoderUITests",
     "Shared",

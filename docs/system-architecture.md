@@ -906,50 +906,18 @@ Staging passes every file through `AgentImageFiles`, which recognizes photo
 formats agents cannot view by their content (HEIF and HEIC, TIFF, camera RAW)
 and converts them to a full-resolution JPEG of the same name, so agents can
 view, crop and convert every photo with their own tools. Other files, including
-icons and other image assets, keep their exact bytes. The shared camera preserves
-the capture output's original HEIC or JPEG file until staging.
+icons and other image assets, keep their exact bytes.
 Staging runs two files at a time beside four uploads, and each file joins the
 draft at its selection position, not when its staging finishes.
 
-`ChatComposerView`, backed by `ComposerPresentations.camera`, owns every in-app
-camera presentation and attachment destination. Take Photo uses the current
-composer draft. The unlocked `RemoteCoderCameraCaptureIntent` opens a New Chat
-in the active host's home folder and requests that same presentation once the
-draft is ready. An unavailable home folder or offline host does not prevent
-attachment; uploads wait in the existing staging queue. `RemoteCoderCameraControl`
-registers the intent with the system; the system selects the app or
-`RemoteCoderCaptureExtension` for its launch surface.
-
-The app and extension share `CameraCaptureView` and `CameraCaptureModel`.
-Hardware capture interaction stays enabled even while busy or reviewing, so
-those presses are consumed without relaunching the camera. Only the app has
-Close; the system dismisses the extension. `CameraCaptureSession` owns its
-serial AVFoundation executor, readiness, full-quality original writes and
-device-derived lenses, flash, front/back switching and zoom controls. Supported
-hardware enables responsive and fast capture, with at most two requests in flight.
-The capture executor never decodes thumbnails or waits for PhotoKit.
-
-`CameraCaptureModel` owns per-shot processing tasks on `CameraPhotoProcessing`:
-160-pixel tray thumbnails and add-only saves of the original photo files. Save
-failures are recorded on their shot and shown without blocking attachment.
-Selection is bounded to 24 shots, so retained tray RGBA pixels use at most
-2.5 MB. Review images decode at the cell size up to 512 pixels and release on
-disappearance. Done and removal join the applicable processing tasks before
-transferring or deleting files. Removed photos free their slot and temporary
-folder. In-app Done transfers the ordered files to `FileAttachmentImports` and
-removes the batch directory. Close attaches nothing. Camera-roll copies remain.
-`AgentPhotoCapture` retains its separate headless contract and never saves to Photos.
-
-`RemoteCoderCaptureExtension` owns confirmation and unlock handoff. Only its
-Done writes the ordered `CameraCaptureBatch` manifest in `sessionContentURL`
-before `openApplication(for:)`. Failed handoff retains confirmed files for retry;
-unconfirmed sessions are discarded. `ChatRootView` routes the locked user
-activity through `ExternalEventRouter` to a home-folder New Chat.
-`LockedCameraCaptureImports` owns initial and added-session discovery, oldest-first
-session transfer, one-hour expiry and invalidation. Its receiver is screen-owned
-and cancelled on draft navigation or retirement; replacement joins the old
-receiver and rejected admission rolls file moves back. No camera path sends a
-message automatically.
+Take Photo presents the system camera (`SystemCamera`, a
+`UIImagePickerController`) for the current composer draft through
+`ComposerPresentations.camera`, one photo per presentation.
+`ChatScreenModel.attachCameraPhoto` encodes the photo as a JPEG off the main
+actor, saves that file add-only to the camera roll, reporting a failed save
+without blocking the attachment, and hands it to `FileAttachmentImports`. It
+sends nothing. `AgentPhotoCapture` retains its separate headless contract and
+never saves to Photos.
 
 A file picked from Files is first snapshotted into the host's
 `RemoteCoder/hosts/<host UUID>/upload-staging/<attachment id>/` by

@@ -3,7 +3,6 @@ import Foundation
 enum RemoteCoderQuickAction: String, Codable, Sendable {
     case newChat
     case voiceChat
-    case camera
 }
 
 /// One request shape for every entry point. App Intents and `remotecoder://`

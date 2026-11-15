@@ -51,18 +51,6 @@
           "index": false
         },
         {
-          "path": "<PRODUCTS>/RemoteCoderCaptureExtension.appex",
-          "id": "TEMP_75877422-E459-4B10-9A30-A8C10AC3C4D8",
-          "type": "wrapper.app-extension",
-          "index": false,
-          "target-membership": [
-            {
-              "build-phase": "RemoteCoder/copy/Embed ExtensionKit Extensions",
-              "header-preservation": "remove-on-copy"
-            }
-          ]
-        },
-        {
           "path": "<PRODUCTS>/RemoteCoderLiveActivities.appex",
           "id": "TEMP_B960181A-C398-4EF9-9D78-BAE31C2A58A1",
           "type": "wrapper.app-extension",
@@ -152,21 +140,9 @@
                   ]
                 },
                 {
-                  "path": "RemoteCoderCore/Files/CameraCaptureBatch.swift",
-                  "target-membership": [
-                    "RemoteCoderCaptureExtension/compile-sources"
-                  ]
-                },
-                {
                   "path": "RemoteCoderCore/Notifications/NotificationSoundPolicy.swift",
                   "target-membership": [
                     "RemoteCoderNotificationService/compile-sources"
-                  ]
-                },
-                {
-                  "path": "RemoteCoderCore/Workspace/OwnedTasks.swift",
-                  "target-membership": [
-                    "RemoteCoderCaptureExtension/compile-sources"
                   ]
                 },
                 {
@@ -441,18 +417,6 @@
         },
         {
           "kind": "group",
-          "path": "RemoteCoderCaptureExtension",
-          "children": [
-            {
-              "path": "RemoteCoderCaptureExtension.swift",
-              "target-membership": [
-                "RemoteCoderCaptureExtension/compile-sources"
-              ]
-            }
-          ]
-        },
-        {
-          "kind": "group",
           "path": "RemoteCoderLiveActivities",
           "children": [
             {
@@ -463,12 +427,6 @@
             },
             {
               "path": "RemoteCoderActiveTasksWidget.swift",
-              "target-membership": [
-                "RemoteCoderLiveActivities/compile-sources"
-              ]
-            },
-            {
-              "path": "RemoteCoderCameraControl.swift",
               "target-membership": [
                 "RemoteCoderLiveActivities/compile-sources"
               ]
@@ -578,13 +536,6 @@
                   ]
                 },
                 {
-                  "path": "RemoteCoderCameraCaptureIntent.swift",
-                  "target-membership": [
-                    "RemoteCoderCaptureExtension/compile-sources",
-                    "RemoteCoderLiveActivities/compile-sources"
-                  ]
-                },
-                {
                   "path": "RemoteCoderDeepLinks.swift",
                   "target-membership": [
                     "RemoteCoderLiveActivities/compile-sources",
@@ -595,48 +546,6 @@
                   "path": "RemoteCoderVoiceCallAttributes.swift",
                   "target-membership": [
                     "RemoteCoderLiveActivities/compile-sources"
-                  ]
-                }
-              ]
-            },
-            {
-              "kind": "group",
-              "path": "CameraCapture",
-              "children": [
-                {
-                  "path": "CameraCaptureModel.swift",
-                  "target-membership": [
-                    "RemoteCoderCaptureExtension/compile-sources"
-                  ]
-                },
-                {
-                  "path": "CameraCaptureSession.swift",
-                  "target-membership": [
-                    "RemoteCoderCaptureExtension/compile-sources"
-                  ]
-                },
-                {
-                  "path": "CameraCaptureView.swift",
-                  "target-membership": [
-                    "RemoteCoderCaptureExtension/compile-sources"
-                  ]
-                },
-                {
-                  "path": "CameraPhotoProcessing.swift",
-                  "target-membership": [
-                    "RemoteCoderCaptureExtension/compile-sources"
-                  ]
-                },
-                {
-                  "path": "CameraPhotoReview.swift",
-                  "target-membership": [
-                    "RemoteCoderCaptureExtension/compile-sources"
-                  ]
-                },
-                {
-                  "path": "CameraPreview.swift",
-                  "target-membership": [
-                    "RemoteCoderCaptureExtension/compile-sources"
                   ]
                 }
               ]
@@ -818,14 +727,7 @@
           "target": "RemoteCoderMac",
           "exclusions": [
             "AppExtensionContract/RemoteCoderActiveTasksAttributes.swift",
-            "AppExtensionContract/RemoteCoderCameraCaptureIntent.swift",
             "AppExtensionContract/RemoteCoderVoiceCallAttributes.swift",
-            "CameraCapture/CameraCaptureModel.swift",
-            "CameraCapture/CameraCaptureSession.swift",
-            "CameraCapture/CameraCaptureView.swift",
-            "CameraCapture/CameraPhotoProcessing.swift",
-            "CameraCapture/CameraPhotoReview.swift",
-            "CameraCapture/CameraPreview.swift",
             "LiveNavigationContract/LiveNavigationModels.swift",
             "LiveNavigationContract/LiveNavigationUploader.swift"
           ]
@@ -872,7 +774,6 @@
         }
       ],
       "dependencies": [
-        "RemoteCoderCaptureExtension",
         "RemoteCoderLiveActivities",
         "RemoteCoderLocationPushService",
         "RemoteCoderNotificationService",
@@ -885,12 +786,6 @@
           "kind": "copy",
           "name": "Embed Foundation Extensions",
           "bundle-base-path": "plugins-directory"
-        },
-        {
-          "kind": "copy",
-          "name": "Embed ExtensionKit Extensions",
-          "bundle-base-path": "build-products-directory",
-          "relative-path": "$(EXTENSIONS_FOLDER_PATH)"
         },
         "frameworks",
         {
@@ -972,10 +867,9 @@
         "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
         "SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD": "NO",
         "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": [
-          "$(inherited) REMOTE_CODER_APP",
+          "$(inherited)",
           "DEBUG"
         ],
-        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Release]": "$(inherited) REMOTE_CODER_APP",
         "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
         "SWIFT_COMPILATION_MODE[config=Debug]": "singlefile",
         "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
@@ -993,88 +887,6 @@
         "PROVISIONING_PROFILE_SPECIFIER[config=Release]": "$(RC_PROFILE_REMOTECODER_APP)",
         "RC_APP_ENTITLEMENTS[config=Debug]": "RemoteCoder/Entitlements/RemoteCoder.Debug.entitlements",
         "RC_APP_ENTITLEMENTS[config=Release]": "RemoteCoder/Entitlements/RemoteCoder.Release.entitlements"
-      }
-    },
-    {
-      "name": "RemoteCoderCaptureExtension",
-      "id": "TEMP_C8450EB9-AB34-463D-90EA-E75791F39329",
-      "product": "Products/RemoteCoderCaptureExtension.appex",
-      "product-type": "extensionkit-extension",
-      "specialized-configurations": [
-        {
-          "name": "Debug",
-          "file": "Project/Config/RemoteCoder.xcconfig"
-        },
-        {
-          "name": "Release",
-          "file": "Project/Config/RemoteCoder.xcconfig"
-        }
-      ],
-      "build-phases": [
-        "compile-sources",
-        "resources",
-        "frameworks",
-        {
-          "kind": "copy",
-          "name": "Embed Frameworks",
-          "bundle-base-path": "frameworks-directory"
-        }
-      ],
-      "build-settings": {
-        "APPLICATION_EXTENSION_API_ONLY": "YES",
-        "CURRENT_PROJECT_VERSION": "1",
-        "INFOPLIST_FILE": "Config/InfoPlists/RemoteCoderCaptureExtension-Info.plist",
-        "INFOPLIST_KEY_CFBundleShortVersionString": "$(MARKETING_VERSION)",
-        "INFOPLIST_KEY_CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
-        "IPHONEOS_DEPLOYMENT_TARGET": "27.0",
-        "LD_RUNPATH_SEARCH_PATHS": [
-          "$(inherited)",
-          "@executable_path/Frameworks",
-          "@executable_path/../../Frameworks"
-        ],
-        "MARKETING_VERSION": "0.0.0",
-        "OTHER_LDFLAGS": [
-          "$(inherited)",
-          "-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
-        ],
-        "PRODUCT_BUNDLE_IDENTIFIER": "$(RC_BUNDLE_ID).RemoteCoderCaptureExtension",
-        "PRODUCT_NAME": "RemoteCoderCaptureExtension",
-        "RC_BUILD_ID": "unrecorded",
-        "RC_SOURCE_COMMIT": "unrecorded",
-        "RC_SOURCE_FINGERPRINT": "unrecorded",
-        "RC_SOURCE_MODIFIED": "unrecorded",
-        "SDKROOT": "iphoneos",
-        "SKIP_INSTALL": "YES",
-        "STRING_CATALOG_GENERATE_SYMBOLS": "YES",
-        "SUPPORTS_MACCATALYST": "NO",
-        "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
-        "SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD": "NO",
-        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": [
-          "$(inherited)",
-          "DEBUG"
-        ],
-        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
-        "SWIFT_COMPILATION_MODE[config=Debug]": "singlefile",
-        "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
-        "SWIFT_DEFAULT_ACTOR_ISOLATION": "nonisolated",
-        "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
-        "SWIFT_OPTIMIZATION_LEVEL[config=Release]": "-O",
-        "SWIFT_STRICT_CONCURRENCY": "complete",
-        "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
-        "SWIFT_VERSION": "6.0",
-        "SWIFT_WARN_CONCURRENCY": "YES",
-        "TARGETED_DEVICE_FAMILY": "1,2",
-        "CODE_SIGN_STYLE": "Automatic",
-        "CODE_SIGN_IDENTITY[config=Debug]": "Apple Development",
-        "CODE_SIGN_IDENTITY[config=Release]": "Apple Distribution",
-        "EXCLUDED_SOURCE_FILE_NAMES": [
-          "$(inherited)",
-          ".gitkeep",
-          ".DS_Store",
-          "AGENTS.md",
-          "CLAUDE.md"
-        ],
-        "PROVISIONING_PROFILE_SPECIFIER[config=Release]": "$(RC_PROFILE_CAPTURE_EXTENSION)"
       }
     },
     {

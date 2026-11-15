@@ -3,6 +3,5 @@
   "PlugIns/RemoteCoderLiveActivities.appex": "RemoteCoderLiveActivities/RemoteCoderLiveActivities.entitlements",
   "PlugIns/RemoteCoderLocationPushService.appex": "RemoteCoderLocationPushService/RemoteCoderLocationPushService.entitlements",
   "PlugIns/RemoteCoderNotificationService.appex": "RemoteCoderNotificationService/RemoteCoderNotificationService.entitlements",
-  "PlugIns/RemoteCoderShareExtension.appex": "RemoteCoderShareExtension/RemoteCoderShareExtension.entitlements",
-  "Extensions/RemoteCoderCaptureExtension.appex": null
+  "PlugIns/RemoteCoderShareExtension.appex": "RemoteCoderShareExtension/RemoteCoderShareExtension.entitlements"
 }

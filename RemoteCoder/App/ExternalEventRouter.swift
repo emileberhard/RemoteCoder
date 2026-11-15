@@ -7,7 +7,6 @@ enum ExternalEvent: Equatable, Sendable {
     case presentVoiceCall(UUID)
     case open(ConversationWindowValue, opening: ConversationSearchOpening? = nil)
     case sharedItems(UUID)
-    case lockedCameraCaptures
     case completionNotificationTap(payloadJSON: String)
 
     var expires: Bool {

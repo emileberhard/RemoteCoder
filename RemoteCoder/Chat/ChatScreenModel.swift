@@ -13,7 +13,7 @@ enum HeldDictationOutcome {
 final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private enum OwnedTask: Hashable {
         case snapshots, resume, settingsUpdate, compaction, compactionStatus, draftLoad, sharedItems(UUID)
-        case cameraCaptures, searchAsk
+        case searchAsk
     }
 
     private(set) var currentDraft: ComposerDraft?
@@ -157,7 +157,6 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     func selectDraft(_ destination: ComposerDraftStore.Destination) {
         drafts.requestFlush()
         ownedTasks.cancel(.draftLoad)
-        ownedTasks.cancel(.cameraCaptures)
         draftDestination = destination
         currentDraft = drafts.cachedDraft(for: destination)
         guard currentDraft == nil else { return }
@@ -1527,35 +1526,16 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     #if os(iOS)
-    func receiveLockedCameraCaptures() {
-        guard target.acceptsWork else { return }
-        let destination = draftDestination
-        ownedTasks.start(.cameraCaptures) { [weak self] in
-            guard let self else { return }
+    func attachCameraPhoto(_ photo: CameraPhoto, to draft: ComposerDraft) {
+        importFiles([.inOwnDirectory { [weak self] in
+            let file = try await photo.writeFile()
             do {
-                guard await self.prepareDraft(destination), let draft = self.currentDraft else { return }
-                await self.updateWorkingDirectoryToRemoteHome(preferCachedHomePath: true)
-                try Task.checkCancellation()
-                try await LockedCameraCaptureImports.shared.receive { [weak self] files in
-                    guard let self, self.target.acceptsWork, !Task.isCancelled,
-                          self.draftDestination == destination else { throw CancellationError() }
-                    self.importFiles(files.map { file in .inOwnDirectory { file } }, for: draft)
-                }
-            } catch is CancellationError {
+                try await CameraPhoto.saveToPhotos(file)
             } catch {
-                self.present(.attachments("Could not add the captured photo: \(error.localizedDescription)"))
+                self?.present(.attachments("The photo was attached but not saved to your camera roll: \(error.localizedDescription)"))
             }
-        }
-    }
-
-    func openCamera(present: @escaping @MainActor (ComposerDraft) -> Void) {
-        let destination = draftDestination
-        ownedTasks.start(.cameraCaptures) { [weak self] in
-            guard let self, await self.prepareDraft(destination), let draft = self.currentDraft else { return }
-            await self.updateWorkingDirectoryToRemoteHome(preferCachedHomePath: true)
-            guard !Task.isCancelled, self.target.acceptsWork, self.draftDestination == destination else { return }
-            present(draft)
-        }
+            return file
+        }], for: draft)
     }
     #endif
 

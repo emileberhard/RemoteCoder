@@ -56,18 +56,11 @@ def verify_xcode_products(
             "RemoteCoderLocationPushService",
             "RemoteCoderLiveActivities",
             "RemoteCoderShareExtension",
-            "RemoteCoderCaptureExtension",
         }:
             platform = (
                 "Debug-iphoneos" if kind == "ios-install" else "Debug-iphonesimulator"
             )
             paths.append(products / platform / f"{target}.appex/{target}")
-            if target == "RemoteCoderCaptureExtension":
-                paths.append(
-                    products
-                    / platform
-                    / f"RemoteCoder.app/Extensions/{target}.appex/{target}"
-                )
         else:
             raise ValueError(
                 f"Cannot verify the product for Xcode diagnostic target '{target}'"

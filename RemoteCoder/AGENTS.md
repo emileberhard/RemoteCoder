@@ -948,11 +948,9 @@ entrypoint linked above.
     retires. A new caller of preparation work must keep that fence.
 - **Images.** `ImagePreparation` (`Services/Images/`) is the one serial actor
   for app decoded-image work: display thumbnails and the device tool's bounded JPEGs.
-  The shared camera actor prepares its own bounded preview thumbnails because
-  the capture extension does not compile the app's image services.
   - Thumbnails decode at display size and have no full-resolution fallback.
-  - Composer photos are files. The picker, composer camera, Camera Control,
-    locked capture, paste, Mac drop and share sheet all enter `FileAttachmentImports`; no path sends images inline in
+  - Composer photos are files. The picker, Take Photo, paste, Mac drop and
+    share sheet all enter `FileAttachmentImports`; no path sends images inline in
     `turn/start`. `UploadStaging` passes every staged file through
     `AgentImageFiles` (Core `Files/`), which converts HEIF, TIFF and camera
     RAW, detected by content, to JPEG and leaves everything else untouched.
@@ -1144,34 +1142,14 @@ entrypoint linked above.
     text; typed text documents such as source files arrive as files. Nothing is
     sent. A new share removes
     unclaimed shares older than `SharedItemsInbox.unclaimedLifetime`.
-  - **Camera Control.** `ChatComposerView` is the app's sole camera presenter
-    and attachment owner, backed by `ComposerPresentations.camera`. Take Photo
-    uses the current draft; the unlocked intent opens a home-folder New Chat and
-    requests this presentation once its draft is ready. Host availability does
-    not gate attachment; offline uploads use the existing staging queue.
-    `CameraCaptureView` and `CameraCaptureModel` are shared with
-    `RemoteCoderCaptureExtension`. Hardware capture interaction stays enabled
-    throughout presentation, including busy states and review; presses there
-    are ignored. Only the app provides Close; the system dismisses the extension.
-    `CameraCaptureSession` owns the serial AVFoundation session, full-quality
-    original writes, readiness, lenses and zoom, with at most two requests in
-    flight and responsive/fast capture enabled where supported.
-    `CameraCaptureModel` owns and joins per-shot thumbnail and add-only Photos
-    tasks on `CameraPhotoProcessing`, separate from the capture executor. Save
-    failures belong to their shot and do not block attachment. Done and removal
-    wait for those tasks before transferring or deleting files. Selection is
-    bounded to 24 photos with 160-pixel tray thumbnails (at most 2.5 MB of RGBA
-    pixels); review loads at most 512-pixel images for visible cells and releases
-    them on disappearance. Removing a shot deletes its temporary folder and
-    frees its slot. In-app Done transfers files to `FileAttachmentImports` and
-    deletes the batch directory. Camera-roll copies survive removal and Close.
-    The extension alone writes the ordered `CameraCaptureBatch` confirmation
-    manifest at Done before requesting unlock and app handoff. Failed handoff
-    retains confirmed files for retry. `LockedCameraCaptureImports` owns session
-    discovery, expiry, ordered transfer and invalidation; unconfirmed sessions
-    never attach. The screen owns its receiver until draft navigation or
-    retirement. Receiver replacement joins its predecessor, and cancelled
-    admission restores moved files. Neither camera entry point sends a message.
+  - **Take Photo** presents the system camera (`SystemCamera`, a
+    `UIImagePickerController`) for the current draft through
+    `ComposerPresentations.camera`, one photo per presentation, and only where
+    the device has a camera. `ChatScreenModel.attachCameraPhoto` encodes the
+    photo as a JPEG off the main actor, saves that file add-only to the camera
+    roll and hands it to `FileAttachmentImports`; a failed save is reported and
+    never blocks the attachment. Nothing is sent. Agent `take_photo` captures
+    stay out of the camera roll.
   - Settings, input and action controls share one neutral glass surface. The
     focused iOS composer keeps its multiline editor above the action row.
     Unfocused, it folds that same editor to one line between the leading
@@ -2066,19 +2044,11 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   Its `RemoteCoderVoiceCallAttributes` carry no content state, so nothing
   updates it while the call runs.
 - `RemoteCoderLiveActivitiesBundle` registers the active-tasks and voice-call
-  Live Activities and `RemoteCoderCameraControl`, whose `CameraCaptureIntent` makes RemoteCoder
-  available to Camera Control, Control Center, the Lock Screen and Action button.
-  App Intents provide New Chat and Voice Mode quick actions.
+  Live Activities. App Intents provide New Chat and Voice Mode quick actions.
 - The app's generated Info.plist sets `NSSupportsLiveActivities=YES`.
 
 ## App Intents and quick actions (`App/`, `Shared/`)
 
-- `RemoteCoderCameraCaptureIntent` lives in `Shared/AppExtensionContract/` and
-  compiles into the app, widget and capture extension. `REMOTE_CODER_APP` gates
-  its app-only workspace dependency and `.quickAction(.camera)` routing.
-  The system chooses the app or capture extension; the intent uses no app
-  context and is not listed in `RemoteCoderAppShortcuts`. The Mac excludes
-  the intent and shared viewfinder sources.
 - The shipping intents are `RemoteCoderVoiceChatIntent` ("Voice Mode") and
   `RemoteCoderNewChatIntent` ("New Chat") in `App/RemoteCoderQuickActions.swift`.
   Both declare iOS 27 `allowedExecutionTargets: [.main]`, so execution and
@@ -2133,8 +2103,7 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   reports activity through `WindowActivity`, including while no selected screen
   exists. The selected `ChatScreen` supplies presentation actions; the root owns
   no-screen preparation and the opening event slot, and detach unregisters the
-  window. `ChatRootView` owns `onOpenURL` and the locked-camera user-activity
-  handoff to `.lockedCameraCaptures`. Workspace bootstrap, scene lifecycle, notification
+  window. `ChatRootView` owns `onOpenURL`. Workspace bootstrap, scene lifecycle, notification
   routing and teardown belong to the stable `ChatRootView` root, which runs
   before a host's chat model exists. The selected screen never owns
   workspace startup or teardown.

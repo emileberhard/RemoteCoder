@@ -79,7 +79,6 @@ DEVICE_BUNDLES = {
     "RC_PROFILE_LIVE_ACTIVITIES": f"{BUNDLE}.RemoteCoderLiveActivities",
     "RC_PROFILE_LOCATION_PUSH_SERVICE": f"{BUNDLE}.RemoteCoderLocationPushService",
     "RC_PROFILE_SHARE_EXTENSION": f"{BUNDLE}.RemoteCoderShareExtension",
-    "RC_PROFILE_CAPTURE_EXTENSION": f"{BUNDLE}.RemoteCoderCaptureExtension",
 }
 TRACE_DIR = Path.home() / "perf-traces/remotecoder"
 

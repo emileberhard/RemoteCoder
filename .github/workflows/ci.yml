@@ -35,7 +35,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          APP_SOURCES: RemoteCoder RemoteCoder.xcodeproj RemoteCoderCaptureExtension RemoteCoderLiveActivities RemoteCoderLocationPushService RemoteCoderNotificationService RemoteCoderShareExtension RemoteCoderTests RemoteCoderUITests Core Shared Config web-client
+          APP_SOURCES: RemoteCoder RemoteCoder.xcodeproj RemoteCoderLiveActivities RemoteCoderLocationPushService RemoteCoderNotificationService RemoteCoderShareExtension RemoteCoderTests RemoteCoderUITests Core Shared Config web-client
           GATEWAY_SOURCES: host-daemon-rs .cargo rust-toolchain.toml web-client agent-calls relay dev-tools docs AGENTS.md CLAUDE.md README.md CONTRIBUTING.md SECURITY.md PRIVACY.md
         run: |
           set -euo pipefail

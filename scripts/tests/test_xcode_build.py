@@ -19,19 +19,6 @@ EXTENSION_WARNING = (
 
 
 class XcodeDiagnosticProductTests(unittest.TestCase):
-    def test_capture_extension_requires_the_extensionkit_embedded_product(self):
-        target = "RemoteCoderCaptureExtension"
-        with tempfile.TemporaryDirectory() as temporary:
-            derived = Path(temporary)
-            products = derived / "Build/Products/Debug-iphonesimulator"
-            standalone = products / f"{target}.appex/{target}"
-            standalone.parent.mkdir(parents=True)
-            standalone.write_bytes(b"capture-extension")
-            os.utime(standalone, (110, 110))
-            diagnostics = [f"Ld capture (in target '{target}' from project 'RemoteCoder')"]
-            with self.assertRaisesRegex(ValueError, "missing or stale"):
-                module.verify_xcode_products("ios-build", derived, 100, diagnostics)
-
     def test_mac_bench_verifies_its_release_product_and_mac_install_its_debug_product(self):
         diagnostics = module.xcode_exit_zero_diagnostics(WARNING)
         for kind, configuration in (("mac-bench", "Release"), ("mac-install", "Debug")):
