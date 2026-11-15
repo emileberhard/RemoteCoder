@@ -69,12 +69,12 @@ class RelayProvisioningTests(unittest.TestCase):
             watcher["Path"]["Unit"], "remote-coder-relay-maintenance-recover.service"
         )
 
-    def test_daily_maintenance_requires_reboot_and_never_catches_up(self):
+    def test_daily_maintenance_checks_for_updates_and_never_catches_up(self):
         service = configparser.ConfigParser(interpolation=None)
         service.read(ROOT / "relay/server/remote-coder-relay-maintenance.service")
         timer = configparser.ConfigParser(interpolation=None)
         timer.read(ROOT / "relay/server/remote-coder-relay-maintenance.timer")
-        self.assertEqual(service["Unit"]["ConditionPathExists"], "/run/reboot-required")
+        self.assertNotIn("ConditionPathExists", service["Unit"])
         self.assertEqual(
             service["Service"]["ExecStart"],
             "/usr/local/lib/remote-coder-relay/maintenance-prepare",
@@ -139,6 +139,7 @@ class RelayProvisioningTests(unittest.TestCase):
                 "maintenance-prepare",
                 "maintenance_state.py",
                 "maintenance_drain.py",
+                "maintenance_updates.py",
                 "haproxy-maintenance.conf",
                 "nftables-maintenance.conf",
                 "remote-coder-relay-maintenance-recover.service",

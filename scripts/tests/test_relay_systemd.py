@@ -153,29 +153,6 @@ class RelaySystemdTests(unittest.TestCase):
             )
             self.assertIn("nonexistent-nft-check", invalid_nft.stderr)
 
-    def test_reboot_condition_in_a_disposable_filesystem(self):
-        required = os.environ.get("RC_RELAY_REQUIRE_SYSTEMD") == "1"
-        if sys.platform != "linux" or not shutil.which("systemd-analyze"):
-            if required:
-                self.fail("systemd-analyze is required")
-            self.skipTest("systemd condition verification is unavailable")
-        with tempfile.TemporaryDirectory() as directory:
-            marker = Path(directory) / "reboot-required"
-            command = [
-                "systemd-analyze",
-                "condition",
-                f"ConditionPathExists={marker}",
-            ]
-            absent = subprocess.run(
-                command, capture_output=True, text=True, timeout=10, check=False
-            )
-            self.assertNotEqual(absent.returncode, 0, absent.stdout + absent.stderr)
-            marker.touch()
-            present = subprocess.run(
-                command, capture_output=True, text=True, timeout=10, check=False
-            )
-            self.assertEqual(present.returncode, 0, present.stdout + present.stderr)
-
     def test_calendar_tracks_stockholm_daylight_saving(self):
         required = os.environ.get("RC_RELAY_REQUIRE_SYSTEMD") == "1"
         if sys.platform != "linux" or not shutil.which("systemd-analyze"):

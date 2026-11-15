@@ -47,6 +47,7 @@ class RelayInstallerTests(unittest.TestCase):
             "maintenance-prepare",
             "maintenance_state.py",
             "maintenance_drain.py",
+            "maintenance_updates.py",
             "haproxy-maintenance.conf",
             "nftables-maintenance.conf",
             "remote-coder-relay-maintenance-recover.service",

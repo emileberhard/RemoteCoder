@@ -3,12 +3,16 @@ import subprocess
 import sys
 
 from maintenance_state import RelayTransaction, _reboot_window
+from maintenance_updates import update_requires_reboot
 
 
 def prepare():
     if not _reboot_window():
         raise RuntimeError("relay reboot window is not open")
     with RelayTransaction() as transaction:
+        if not update_requires_reboot():
+            print("no relay reboot required")
+            return
         transaction.prepare_idle(40, 15)
         transaction.enqueue_reboot()
     print("relay reboot requested; the maintenance marker remains until recovery")
