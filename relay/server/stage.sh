@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 src="$1"
-export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l
+export DEBIAN_FRONTEND=noninteractive
 umask 022
 
 install -d -m 0700 /var/lib/remote-coder-relay
@@ -34,14 +34,8 @@ if [[ ! -L "$policy" ]]; then
     ln -s "$relay_policy" "$policy"
 fi
 
-install -m 0755 "$src/policy-rc.d" "$relay_policy.restore"
-printf '#!/bin/sh\nexit 101\n' > "$relay_policy.next"
-chmod 0755 "$relay_policy.next"
-trap 'mv -f "$relay_policy.restore" "$relay_policy"' EXIT
-mv -f "$relay_policy.next" "$relay_policy"
-apt-get install -y -qq --no-upgrade --no-install-recommends conntrack iptables >/dev/null
-mv -f "$relay_policy.restore" "$relay_policy"
-trap - EXIT
+env REMOTE_CODER_RELAY_STAGE_PACKAGES=1 NEEDRESTART_MODE=l \
+    apt-get install -y -qq --no-upgrade --no-install-recommends conntrack iptables >/dev/null
 for executable in /usr/sbin/conntrack /usr/sbin/iptables-legacy /usr/sbin/ip6tables-legacy; do
     [[ -x "$executable" ]] || { echo "Missing maintenance dependency: $executable" >&2; exit 1; }
 done

@@ -177,6 +177,24 @@ class RelayProvisioningTests(unittest.TestCase):
 
 
 class RelayPolicyTests(unittest.TestCase):
+    def test_staging_policy_does_not_change_unrelated_package_actions(self):
+        for service, action in (
+            ("nftables.service", "restart"),
+            ("cron.service", "start"),
+        ):
+            with self.subTest(service=service, action=action):
+                command = ["/bin/sh", str(POLICY), service, action]
+                environment = os.environ.copy()
+                environment.pop("REMOTE_CODER_RELAY_STAGE_PACKAGES", None)
+                self.assertEqual(
+                    subprocess.run(command, env=environment, check=False).returncode, 0
+                )
+                environment["REMOTE_CODER_RELAY_STAGE_PACKAGES"] = "1"
+                self.assertEqual(
+                    subprocess.run(command, env=environment, check=False).returncode,
+                    101,
+                )
+
     def test_nftables_package_actions_are_denied_only_while_a_marker_exists(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
