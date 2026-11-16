@@ -985,6 +985,7 @@ impl Gateway {
             let _ = self.reject_draining(out_tx, id.as_ref()).await;
             return Ok(());
         }
+        selected |= self.add_conversation_links(&method, &mut params).await;
         let admitted = self
             .admit_native(&method, &mut params)
             .await

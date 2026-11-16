@@ -594,7 +594,7 @@ fn the_mcp_token_travels_in_a_private_file_never_in_argv() {
     );
     assert_eq!(
         settings["hooks"]["SessionStart"][0]["hooks"][0]["args"],
-        json!(["claude-session-context"])
+        json!(["claude-session-context", "--mcp-config", access.config_path])
     );
     assert_eq!(
         fs::metadata(&settings_path).unwrap().permissions().mode() & 0o777,

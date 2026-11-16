@@ -172,23 +172,6 @@ async fn hook_response(
     input: &Value,
     include_tool_input: bool,
 ) -> Option<Value> {
-    let data = tokio::fs::read(mcp_config).await.ok()?;
-    let config: Value = serde_json::from_slice(&data).ok()?;
-    let server = &config["mcpServers"][crate::agents::tools::NAMESPACE];
-    let mut url = reqwest::Url::parse(server["url"].as_str()?).ok()?;
-    if url.host_str() != Some("127.0.0.1") {
-        return None;
-    }
-    url.set_path("/mcp/notification-hook");
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(if include_tool_input {
-            Duration::from_millis(1_800)
-        } else {
-            Duration::from_millis(250)
-        })
-        .build()
-        .ok()?;
     let mut body = json!({"hook_event_name":input["hook_event_name"],"tool_name":input["tool_name"],"session_id":input["session_id"]});
     if let Some(agent) = input.get("agent_id") {
         body["agent_id"] = agent.clone();
@@ -196,21 +179,12 @@ async fn hook_response(
     if include_tool_input {
         body["tool_input"] = input["tool_input"].clone();
     }
-    client
-        .post(url)
-        .header(
-            "Authorization",
-            server["headers"]["Authorization"].as_str()?,
-        )
-        .json(&body)
-        .send()
-        .await
-        .ok()?
-        .error_for_status()
-        .ok()?
-        .json()
-        .await
-        .ok()
+    let timeout = if include_tool_input {
+        Duration::from_millis(1_800)
+    } else {
+        Duration::from_millis(250)
+    };
+    super::runtime_callback::post(mcp_config, "/mcp/notification-hook", &body, timeout).await
 }
 
 #[cfg(test)]

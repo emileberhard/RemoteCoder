@@ -398,7 +398,7 @@ impl ClaudeSupervisor {
             }});
             if launch.job().is_none() {
                 settings["hooks"]["SessionStart"] =
-                    crate::providers::claude::session_context::hooks(&executable);
+                    crate::providers::claude::session_context::hooks(&executable, &config_path);
             }
             write_private_file(&runtime_settings_path(&config_path), &settings.to_string())?;
             write_private_file(&config_path, &config.to_string())

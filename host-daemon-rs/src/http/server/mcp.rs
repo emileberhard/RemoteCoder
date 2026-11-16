@@ -142,6 +142,16 @@ pub(super) async fn mcp_notification_hook(
     StatusCode::NO_CONTENT.into_response()
 }
 
+pub(super) async fn mcp_session_context(McpRuntime { gateway, identity }: McpRuntime) -> Response {
+    match gateway.conversation_links(&identity.thread_id).await {
+        Ok(links) => Json(json!({"conversationLinks": links})).into_response(),
+        Err(error) => {
+            warn!(thread_id = %identity.thread_id, "conversation links unavailable: {error:#}");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+    }
+}
+
 /// This protocol revision removed the GET stream endpoint.
 pub(super) async fn mcp_get() -> Response {
     (
@@ -361,6 +371,23 @@ mod tests {
             status,
             serde_json::from_slice(&response).unwrap_or(Value::Null),
         )
+    }
+
+    #[tokio::test]
+    async fn session_context_links_only_the_runtime_that_owns_the_token() {
+        let harness = LanHarness::start().await;
+        let token = harness.gateway.mcp_tokens().mint("claude_root", "session");
+        let (status, response) =
+            notification_request(&harness, "/mcp/session-context", &token, json!({})).await;
+        assert_eq!(status, 200);
+        let links = response["conversationLinks"].as_str().unwrap();
+        let host = harness.gateway.host_identity().await.unwrap().host_id;
+        assert!(links.ends_with(&format!(
+            "\nThis conversation: remotecoder://chat/conversation?host={host}&thread=claude_root"
+        )), "{links}");
+        let (status, _) =
+            notification_request(&harness, "/mcp/session-context", OPERATOR, json!({})).await;
+        assert_eq!(status, 401);
     }
 
     #[tokio::test]

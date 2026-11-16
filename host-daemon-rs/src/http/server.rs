@@ -27,7 +27,7 @@ use crate::observability::journal::Journal;
 use self::auth::{enroll_credential, share_credential};
 use self::client::{app_logs, diagnostics, health, navigation_events, version, ws};
 use self::files::{append_upload, discard_upload, download_file, legacy_upload, upload_status};
-use self::mcp::{mcp_get, mcp_notification_hook, mcp_post};
+use self::mcp::{mcp_get, mcp_notification_hook, mcp_post, mcp_session_context};
 use super::{accounts, claude_accounts, resets};
 
 pub(crate) mod auth;
@@ -246,6 +246,10 @@ fn router(state: HttpState) -> Router {
         .route(
             "/mcp/notification-hook",
             post(mcp_notification_hook).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/mcp/session-context",
+            post(mcp_session_context).layer(DefaultBodyLimit::max(1024)),
         )
         .route("/navigation/events", post(navigation_events))
         .route_layer(middleware::from_fn_with_state(
@@ -705,6 +709,7 @@ mod tests {
             (post_head("/app-logs", None, 1_000_000), 401),
             (post_head("/mcp", None, 1_000_000), 401),
             (post_head("/mcp/notification-hook", None, 1_000_000), 401),
+            (post_head("/mcp/session-context", None, 1_000_000), 401),
             (post_head("/credentials/enroll", None, 1_000_000), 403),
             (post_head("/navigation/events", None, 1_000_000), 401),
             (upload_head(None, 1_000_000), 401),

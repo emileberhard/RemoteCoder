@@ -2152,6 +2152,15 @@ The iOS side is in `RemoteCoder/AGENTS.md`; both paths are in
   CLI prefixes a synthetic frame without a typed origin with `[MESSAGE FROM
   NON-USER SOURCE - NOT USER INPUT]` and merges it into the user's next prompt.
   `isSynthetic` skills and local command output stay out of user bubbles.
+- Agents get conversation links from the gateway, never from rediscovery.
+  `src/gateway/conversation_links.rs` renders one block: the default to link
+  any conversation the agent points to, the link format, every active cluster
+  host's ID and this conversation's own link. The Claude hook fetches it from
+  `/mcp/session-context` with its runtime token and appends it to the static
+  context; a failed callback leaves the static context alone. Codex gets it as
+  the `remote_coder_conversation_links` entry the gateway adds to each forwarded
+  `turn/start` and `turn/steer` `additionalContext`, which Codex records only
+  when the value changes.
   - Voice delegations carry `<realtime_delegation>` with `<input>` and
     `<transcript_delta>`, and replay strips that envelope.
   - A handoff binds only when the CLI echoes its exact input UUID, so an earlier

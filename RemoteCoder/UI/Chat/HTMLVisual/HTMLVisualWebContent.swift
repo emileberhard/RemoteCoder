@@ -310,7 +310,7 @@ final class HTMLVisualWebContent {
                 if (!event.isTrusted) return;
                 if (['data:','blob:'].includes(destination.protocol)) {
                     embed(destination.href,link.getAttribute('download') || '',link).catch(() => {});
-                } else if (['http:','https:','mailto:','tel:','file:'].includes(destination.protocol) && destination.href.length <= 4096) {
+                } else if (['http:','https:','mailto:','tel:','file:','remotecoder:'].includes(destination.protocol) && destination.href.length <= 4096) {
                     send({kind:'link',url:destination.href});
                 }
             },true);
@@ -379,7 +379,7 @@ private final class HTMLVisualBridge: NSObject, WKScriptMessageHandlerWithReply 
         case "settled": onEvent(.settled)
         case "link":
             guard let raw = value["url"] as? String, raw.utf8.count <= 4096,
-                  let url = URL(string: raw), ["http", "https", "mailto", "tel", "file"].contains(url.scheme?.lowercased() ?? ""),
+                  let url = URL(string: raw), ["http", "https", "mailto", "tel", "file", "remotecoder"].contains(url.scheme?.lowercased() ?? ""),
                   url.host != origin.host else { return }
             open(.link(url))
         case "open":

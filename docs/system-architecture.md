@@ -3134,7 +3134,9 @@ and the find bar is seeded with the best matching term without taking keyboard
 focus or issuing a competing jump.
 
 Ask an agent starts an ordinary new chat with the query and asks it to use
-its available conversation-search tools and return verified links. `ChatRootView` accepts
+its available conversation-search tools and return verified links. Every agent
+already knows the link format, the cluster's host IDs and its own link from the
+gateway's conversation-links context (`host-daemon-rs/AGENTS.md`). `ChatRootView` accepts
 `remotecoder://chat/conversation?host=<hostId>&thread=<threadId>&item=<itemKey>` through
 `ExternalEventRouter`. The optional `item` uses the same locate path. The
 configured host must resolve uniquely. A new window claims its matching item

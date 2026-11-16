@@ -66,7 +66,10 @@ pub(crate) enum Command {
         session_id: String,
     },
     #[command(hide = true)]
-    ClaudeSessionContext,
+    ClaudeSessionContext {
+        #[arg(long)]
+        mcp_config: PathBuf,
+    },
     /// Provision and revoke app-installation credentials without restarting agents.
     Credentials {
         #[command(subcommand)]

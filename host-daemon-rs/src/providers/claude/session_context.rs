@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 use std::io::Write;
 use std::path::Path;
+use std::time::Duration;
 
 const REMOTE_CODER_CONTEXT: &str = "\
 You are working in RemoteCoder. The user can switch between text chat and live \
@@ -25,24 +26,38 @@ When the user says goodbye, asks to hang up or asks whether the call ended, \
 call end_voice_call at once without writing anything; the voice has already \
 said goodbye.";
 
-pub(crate) fn hooks(executable: &Path) -> Value {
+pub(crate) fn hooks(executable: &Path, mcp_config: &Path) -> Value {
     json!([{"hooks":[{
         "type":"command", "command":executable, "timeout":10,
-        "args":["claude-session-context"]
+        "args":["claude-session-context", "--mcp-config", mcp_config]
     }]}])
 }
 
-pub(crate) fn run() -> i32 {
-    match writeln!(std::io::stdout(), "{}", output()) {
+pub(crate) async fn run(mcp_config: &Path) -> i32 {
+    let links = super::runtime_callback::post(
+        mcp_config,
+        "/mcp/session-context",
+        &json!({}),
+        Duration::from_secs(2),
+    )
+    .await;
+    let links = links
+        .as_ref()
+        .and_then(|response| response["conversationLinks"].as_str());
+    match writeln!(std::io::stdout(), "{}", output(links)) {
         Ok(()) => 0,
         Err(_) => 1,
     }
 }
 
-fn output() -> Value {
+fn output(conversation_links: Option<&str>) -> Value {
+    let context = match conversation_links {
+        Some(links) => format!("{REMOTE_CODER_CONTEXT}\n{links}"),
+        None => REMOTE_CODER_CONTEXT.to_owned(),
+    };
     json!({"hookSpecificOutput":{
         "hookEventName":"SessionStart",
-        "additionalContext":REMOTE_CODER_CONTEXT,
+        "additionalContext":context,
     }})
 }
 
@@ -52,20 +67,31 @@ mod tests {
 
     #[test]
     fn every_session_start_receives_the_context_from_the_gateway_executable() {
-        let hooks = hooks(Path::new("/fixture path/gateway"));
+        let hooks = hooks(
+            Path::new("/fixture path/gateway"),
+            Path::new("/private path/mcp.json"),
+        );
         assert!(hooks[0].get("matcher").is_none());
         assert_eq!(hooks[0]["hooks"][0]["command"], "/fixture path/gateway");
         assert_eq!(
             hooks[0]["hooks"][0]["args"],
-            json!(["claude-session-context"])
+            json!([
+                "claude-session-context",
+                "--mcp-config",
+                "/private path/mcp.json"
+            ])
         );
         assert_eq!(
-            output()["hookSpecificOutput"]["hookEventName"],
+            output(None)["hookSpecificOutput"]["hookEventName"],
             "SessionStart"
         );
         assert_eq!(
-            output()["hookSpecificOutput"]["additionalContext"],
+            output(None)["hookSpecificOutput"]["additionalContext"],
             REMOTE_CODER_CONTEXT
+        );
+        assert_eq!(
+            output(Some("links"))["hookSpecificOutput"]["additionalContext"],
+            format!("{REMOTE_CODER_CONTEXT}\nlinks")
         );
     }
 }
