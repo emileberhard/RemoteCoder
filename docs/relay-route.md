@@ -143,6 +143,16 @@ configuration.
 
 ## Operate
 
+`just relay-stage` on the configured provisioner installs conntrack and the
+maintenance owner without applying firewall rules or restarting relay services.
+It stages the scoped base firewall, HAProxy startup guard and stop-preserving
+nftables drop-in for their next service start, enables boot recovery and starts
+the recovery path watcher with the marker absent. The watcher invokes recovery
+only when a marker appears. The maintenance timer must already be disabled and
+remains disabled; a supervised first cycle invokes maintenance separately.
+Package activation, the first fenced reboot and public-route acceptance remain
+separate operations.
+
 Maintainer topology, tunnel keys, provisioning, rotation and probes live in the
 private [RemoteCoder-deploy operations entrypoint](https://github.com/emileberhard/RemoteCoder-deploy/blob/main/AGENTS.md).
 The public tree contains synthetic examples only; never use an example address

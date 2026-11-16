@@ -38,6 +38,7 @@ class RelayInstallerTests(unittest.TestCase):
         self.src = self.shared / "src"
         for name in (
             "apply.sh",
+            "stage.sh",
             "policy-rc.d",
             "maintenance-fence-check",
             "dpkg-maintenance.conf",
@@ -95,6 +96,9 @@ exec /usr/bin/install "${args[@]}"
             "apt-get",
             r"""
 printf 'apt-get %s\n' "$*" >> "$TEST_LOG"
+if [[ "$*" == *conntrack* && "$*" != *haproxy* ]]; then
+    test "${NEEDRESTART_MODE:-}" = l
+fi
 test -x /usr/sbin/policy-rc.d
 set +e
 /usr/sbin/policy-rc.d haproxy restart
@@ -114,8 +118,16 @@ printf 'systemctl %s\n' "$*" >> "$TEST_LOG"
 action=$1
 shift
 case "$action" in
+    is-enabled)
+        printf '%s\n' "${TEST_TIMER_ENABLED:-not-found}"
+        exit 1
+        ;;
     is-active)
         [[ "${1:-}" != --quiet ]] || shift
+        if [[ "$1" == remote-coder-relay-maintenance.timer ]]; then
+            printf '%s\n' "${TEST_TIMER_ACTIVE:-unknown}"
+            exit 3
+        fi
         test -e "/tmp/fixture/state/$1"
         ;;
     start|restart|reload)
@@ -166,7 +178,7 @@ esac
         path.write_text("#!/bin/bash\nset -eu\n" + body + "\n")
         path.chmod(0o755)
 
-    def run_installer(self, failure=""):
+    def run_installer(self, failure="", script="apply.sh", share_net=False):
         log = self.shared / "calls"
         log.unlink(missing_ok=True)
         command = [
@@ -193,6 +205,8 @@ esac
             "--tmpfs",
             "/tmp",
         ]
+        if share_net:
+            command.insert(2, "--share-net")
         for source, target in (
             ("etc", "/etc"),
             ("varlib", "/var/lib"),
@@ -222,11 +236,65 @@ esac
             "SSH_CONNECTION",
             "--",
             "/bin/bash",
-            "/tmp/fixture/src/apply.sh",
+            f"/tmp/fixture/src/{script}",
             "/tmp/fixture/src",
         ]
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         return result, log.read_text().splitlines() if log.exists() else []
+
+    def test_stage_installs_recovery_without_activating_relay_services(self):
+        result, calls = self.run_installer(script="stage.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            calls,
+            [
+                "systemctl is-enabled remote-coder-relay-maintenance.timer",
+                "systemctl is-active remote-coder-relay-maintenance.timer",
+                "apt-get install -y -qq --no-upgrade --no-install-recommends conntrack",
+                "systemctl enable --no-reload --quiet remote-coder-relay-maintenance-recover.service remote-coder-relay-maintenance-recover.path",
+                "systemctl daemon-reload",
+                "systemctl start remote-coder-relay-maintenance-recover.path",
+            ],
+        )
+        self.assertEqual(
+            (self.root / "etc/nftables.conf").read_bytes(),
+            (SERVER / "nftables.conf").read_bytes(),
+        )
+        self.assertTrue(
+            (self.root / "local/lib/remote-coder-relay/maintenance-prepare").is_file()
+        )
+        self.assertTrue(
+            (
+                self.root
+                / "etc/systemd/system/haproxy.service.d/10-relay-maintenance.conf"
+            ).is_file()
+        )
+        self.assertTrue(
+            (
+                self.root
+                / "etc/systemd/system/nftables.service.d/10-relay-maintenance.conf"
+            ).is_file()
+        )
+
+    def test_stage_rejects_existing_marker_and_foreign_policy(self):
+        directory = self.root / "varlib/remote-coder-relay"
+        directory.mkdir()
+        (directory / "maintenance.json").write_text("pending")
+        result, calls = self.run_installer(script="stage.sh")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls, [])
+        (directory / "maintenance.json").unlink()
+        (self.root / "sbin/policy-rc.d").write_text("foreign")
+        result, calls = self.run_installer(script="stage.sh")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(line.startswith("apt-get ") for line in calls))
+
+    def test_stage_refuses_an_enabled_timer(self):
+        self.fake("systemctl", 'printf "%s\\n" "enabled"')
+        result, calls = self.run_installer(script="stage.sh")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Maintenance timer is not disabled", result.stderr)
+        self.assertFalse(any(line.startswith("apt-get ") for line in calls))
 
     def test_install_reapply_changes_and_recovery(self):
         result, first = self.run_installer()

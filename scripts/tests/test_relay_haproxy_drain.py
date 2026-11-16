@@ -118,6 +118,48 @@ backend tinyproxy
                             return None
 
                     identity = wait_until(ready)
+                    from test_relay_installer import RelayInstallerTests
+
+                    subprocess.run(
+                        ["/usr/sbin/nft", "-f", str(SERVER / "nftables.conf")],
+                        check=True,
+                    )
+                    rules = subprocess.check_output(
+                        ["/usr/sbin/nft", "list", "ruleset"]
+                    )
+                    fixture = RelayInstallerTests(
+                        "test_stage_installs_recovery_without_activating_relay_services"
+                    )
+                    fixture.setUp()
+                    fixture.fake("nft", "exit 99")
+                    try:
+                        result, calls = fixture.run_installer(
+                            script="stage.sh", share_net=True
+                        )
+                        assert result.returncode == 0, result.stderr
+                        assert (
+                            calls[-1]
+                            == "systemctl start remote-coder-relay-maintenance-recover.path"
+                        )
+                        assert not any(
+                            line.startswith(
+                                (
+                                    "systemctl restart ",
+                                    "systemctl reload ",
+                                    "systemctl stop ",
+                                )
+                            )
+                            for line in calls
+                        )
+                        assert (
+                            subprocess.check_output(
+                                ["/usr/sbin/nft", "list", "ruleset"]
+                            )
+                            == rules
+                        )
+                        assert maintenance_drain.haproxy_identity() == identity
+                    finally:
+                        fixture.doCleanups()
                     with (
                         socket.create_connection(("127.0.0.1", port), timeout=5) as raw,
                         ssl._create_unverified_context().wrap_socket(

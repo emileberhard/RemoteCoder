@@ -152,6 +152,29 @@ class RelayProvisioningTests(unittest.TestCase):
                     (ROOT / "relay/server" / name).read_bytes(),
                 )
 
+        with (
+            patch.object(relay, "topology", return_value=layout),
+            patch.object(relay, "this_host", return_value="fixture"),
+            patch.object(
+                relay,
+                "server_secrets",
+                side_effect=AssertionError("stage reads secrets"),
+            ),
+            patch.object(relay, "admin_ssh", return_value=b"") as transport,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            relay.stage(argparse.Namespace())
+        self.assertIn('bash "$d/stage.sh"', transport.call_args.args[1])
+        with tarfile.open(
+            fileobj=io.BytesIO(transport.call_args.kwargs["input"])
+        ) as archive:
+            self.assertNotIn("credential", archive.getnames())
+            self.assertNotIn("relay.pem", archive.getnames())
+            self.assertEqual(
+                archive.extractfile("stage.sh").read(),
+                (ROOT / "relay/server/stage.sh").read_bytes(),
+            )
+
 
 class RelayPolicyTests(unittest.TestCase):
     def test_nftables_package_actions_are_denied_only_while_a_marker_exists(self):

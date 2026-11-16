@@ -552,6 +552,9 @@ gateway-e2e-provider-fallback-isolated $candidate:
 relay-provision:
     python3 scripts/relay.py provision
 
+relay-stage:
+    python3 scripts/relay.py stage
+
 # Install this host's relay tunnel and the route its gateway publishes on /relay.
 relay-install-client *args:
     python3 scripts/relay.py install-client {{ args }}
