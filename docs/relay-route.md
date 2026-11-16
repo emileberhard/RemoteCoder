@@ -145,8 +145,8 @@ configuration.
 
 `just relay-stage` on the configured provisioner installs conntrack, iptables and the
 maintenance owner without applying firewall rules or restarting relay services.
-It temporarily denies package-managed service actions during installation and
-restores the normal relay policy on exit.
+The staging APT process and its descendants deny package-managed service actions;
+unrelated package processes retain the normal relay policy.
 It stages the scoped base firewall, HAProxy startup guard and stop-preserving
 nftables drop-in for their next service start, enables boot recovery and starts
 the recovery path watcher with the marker absent. The watcher invokes recovery

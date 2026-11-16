@@ -98,12 +98,15 @@ exec /usr/bin/install "${args[@]}"
 printf 'apt-get %s\n' "$*" >> "$TEST_LOG"
 if [[ "$*" == *conntrack* && "$*" != *haproxy* ]]; then
     test "${NEEDRESTART_MODE:-}" = l
+    test "${REMOTE_CODER_RELAY_STAGE_PACKAGES:-}" = 1
     set +e
     /usr/sbin/policy-rc.d nftables restart
     nft_result=$?
     set -e
     test "$nft_result" -eq 101
     printf 'package action nftables restart denied\n' >> "$TEST_LOG"
+    /usr/bin/env -u REMOTE_CODER_RELAY_STAGE_PACKAGES /usr/sbin/policy-rc.d nftables restart
+    printf 'concurrent nftables restart permitted\n' >> "$TEST_LOG"
     if [[ "${TEST_FAIL:-}" == apt ]]; then exit 1; fi
     for name in conntrack iptables-legacy ip6tables-legacy; do
         if [[ "${TEST_FAIL:-}" != "missing:$name" ]]; then
@@ -264,6 +267,7 @@ esac
                 "systemctl is-active remote-coder-relay-maintenance.timer",
                 "apt-get install -y -qq --no-upgrade --no-install-recommends conntrack iptables",
                 "package action nftables restart denied",
+                "concurrent nftables restart permitted",
                 "systemctl enable --no-reload --quiet remote-coder-relay-maintenance-recover.service remote-coder-relay-maintenance-recover.path",
                 "systemctl daemon-reload",
                 "systemctl start remote-coder-relay-maintenance-recover.path",
@@ -309,12 +313,21 @@ esac
         self.assertIn("Maintenance timer is not disabled", result.stderr)
         self.assertFalse(any(line.startswith("apt-get ") for line in calls))
 
-    def test_stage_restores_package_policy_after_apt_failure(self):
+    def test_stage_keeps_normal_package_policy_after_apt_failure(self):
         result, _ = self.run_installer(failure="apt", script="stage.sh")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(
             (self.root / "local/lib/remote-coder-relay/policy-rc.d").read_bytes(),
             (SERVER / "policy-rc.d").read_bytes(),
+        )
+        self.assertEqual(
+            [
+                path.name
+                for path in (self.root / "local/lib/remote-coder-relay").glob(
+                    "policy-rc.d*"
+                )
+            ],
+            ["policy-rc.d"],
         )
 
     def test_stage_refuses_missing_drain_executables(self):

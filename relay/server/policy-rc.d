@@ -1,5 +1,9 @@
 #!/bin/sh
 
+if [ "${REMOTE_CODER_RELAY_STAGE_PACKAGES:-}" = 1 ]; then
+    exit 101
+fi
+
 if [ "${1:-}" = --quiet ]; then
     shift
 fi
