@@ -453,9 +453,21 @@ mod tests {
             let expected_state = if let Some(result) = steer_reply {
                 let request: Value = serde_json::from_str(&control.recv().await.unwrap()).unwrap();
                 assert_eq!(request["method"], "turn/steer");
+                let mut params = request["params"].clone();
+                let context = params
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("additionalContext")
+                    .unwrap();
                 assert_eq!(
-                    request["params"],
+                    params,
                     json!({"threadId":"frozen-thread","expectedTurnId":"expected","clientUserMessageId":"stable-message","input":[{"type":"text","text":"live input"}]})
+                );
+                assert!(
+                    context["remote_coder_conversation_links"]["value"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("&thread=frozen-thread")
                 );
                 let success = result.is_ok();
                 gateway
