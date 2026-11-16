@@ -128,7 +128,7 @@ backend tinyproxy
                         ["/usr/sbin/nft", "list", "ruleset"]
                     )
                     fixture = RelayInstallerTests(
-                        "test_stage_installs_recovery_without_activating_relay_services"
+                        "test_stage_denies_pending_nftables_restart_and_preserves_live_services"
                     )
                     fixture.setUp()
                     fixture.fake("nft", "exit 99")

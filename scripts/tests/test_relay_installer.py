@@ -98,6 +98,18 @@ exec /usr/bin/install "${args[@]}"
 printf 'apt-get %s\n' "$*" >> "$TEST_LOG"
 if [[ "$*" == *conntrack* && "$*" != *haproxy* ]]; then
     test "${NEEDRESTART_MODE:-}" = l
+    set +e
+    /usr/sbin/policy-rc.d nftables restart
+    nft_result=$?
+    set -e
+    test "$nft_result" -eq 101
+    printf 'package action nftables restart denied\n' >> "$TEST_LOG"
+    if [[ "${TEST_FAIL:-}" == apt ]]; then exit 1; fi
+    for name in conntrack iptables-legacy ip6tables-legacy; do
+        if [[ "${TEST_FAIL:-}" != "missing:$name" ]]; then
+            /usr/bin/install -m 0755 /usr/bin/true "/usr/sbin/$name"
+        fi
+    done
 fi
 test -x /usr/sbin/policy-rc.d
 set +e
@@ -242,7 +254,7 @@ esac
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         return result, log.read_text().splitlines() if log.exists() else []
 
-    def test_stage_installs_recovery_without_activating_relay_services(self):
+    def test_stage_denies_pending_nftables_restart_and_preserves_live_services(self):
         result, calls = self.run_installer(script="stage.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
@@ -250,7 +262,8 @@ esac
             [
                 "systemctl is-enabled remote-coder-relay-maintenance.timer",
                 "systemctl is-active remote-coder-relay-maintenance.timer",
-                "apt-get install -y -qq --no-upgrade --no-install-recommends conntrack",
+                "apt-get install -y -qq --no-upgrade --no-install-recommends conntrack iptables",
+                "package action nftables restart denied",
                 "systemctl enable --no-reload --quiet remote-coder-relay-maintenance-recover.service remote-coder-relay-maintenance-recover.path",
                 "systemctl daemon-reload",
                 "systemctl start remote-coder-relay-maintenance-recover.path",
@@ -295,6 +308,27 @@ esac
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Maintenance timer is not disabled", result.stderr)
         self.assertFalse(any(line.startswith("apt-get ") for line in calls))
+
+    def test_stage_restores_package_policy_after_apt_failure(self):
+        result, _ = self.run_installer(failure="apt", script="stage.sh")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            (self.root / "local/lib/remote-coder-relay/policy-rc.d").read_bytes(),
+            (SERVER / "policy-rc.d").read_bytes(),
+        )
+
+    def test_stage_refuses_missing_drain_executables(self):
+        for name in ("conntrack", "iptables-legacy", "ip6tables-legacy"):
+            with self.subTest(name=name):
+                for executable in ("conntrack", "iptables-legacy", "ip6tables-legacy"):
+                    (self.root / "sbin" / executable).unlink(missing_ok=True)
+                result, _ = self.run_installer(
+                    failure=f"missing:{name}", script="stage.sh"
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    f"Missing maintenance dependency: /usr/sbin/{name}", result.stderr
+                )
 
     def test_install_reapply_changes_and_recovery(self):
         result, first = self.run_installer()
