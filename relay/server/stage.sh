@@ -34,7 +34,17 @@ if [[ ! -L "$policy" ]]; then
     ln -s "$relay_policy" "$policy"
 fi
 
-apt-get install -y -qq --no-upgrade --no-install-recommends conntrack >/dev/null
+install -m 0755 "$src/policy-rc.d" "$relay_policy.restore"
+printf '#!/bin/sh\nexit 101\n' > "$relay_policy.next"
+chmod 0755 "$relay_policy.next"
+trap 'mv -f "$relay_policy.restore" "$relay_policy"' EXIT
+mv -f "$relay_policy.next" "$relay_policy"
+apt-get install -y -qq --no-upgrade --no-install-recommends conntrack iptables >/dev/null
+mv -f "$relay_policy.restore" "$relay_policy"
+trap - EXIT
+for executable in /usr/sbin/conntrack /usr/sbin/iptables-legacy /usr/sbin/ip6tables-legacy; do
+    [[ -x "$executable" ]] || { echo "Missing maintenance dependency: $executable" >&2; exit 1; }
+done
 
 for name in maintenance-startup maintenance-recover maintenance-prepare; do
     install -m 0755 "$src/$name" "/usr/local/lib/remote-coder-relay/$name"
