@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -329,6 +330,49 @@ esac
             ],
             ["policy-rc.d"],
         )
+
+    def test_unrelated_package_action_is_unaffected_while_apt_is_running(self):
+        self.fake(
+            "apt-get",
+            r"""
+touch /tmp/fixture/apt-ready
+for i in {1..500}; do
+    [[ ! -e /tmp/fixture/apt-continue ]] || break
+    sleep 0.01
+done
+test -e /tmp/fixture/apt-continue
+test "${REMOTE_CODER_RELAY_STAGE_PACKAGES:-}" = 1
+for name in conntrack iptables-legacy ip6tables-legacy; do
+    /usr/bin/install -m 0755 /usr/bin/true "/usr/sbin/$name"
+done
+""",
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            stage = pool.submit(self.run_installer, script="stage.sh")
+            try:
+                deadline = time.monotonic() + 5
+                while not (self.shared / "apt-ready").exists():
+                    self.assertFalse(stage.done(), "stage exited before APT was ready")
+                    self.assertLess(time.monotonic(), deadline, "APT did not start")
+                    time.sleep(0.01)
+                environment = os.environ.copy()
+                environment.pop("REMOTE_CODER_RELAY_STAGE_PACKAGES", None)
+                environment["DPKG_ROOT"] = str(self.root)
+                action = subprocess.run(
+                    [
+                        "/bin/sh",
+                        str(self.root / "local/lib/remote-coder-relay/policy-rc.d"),
+                        "nftables",
+                        "restart",
+                    ],
+                    env=environment,
+                    check=False,
+                )
+                self.assertEqual(action.returncode, 0)
+            finally:
+                (self.shared / "apt-continue").touch()
+            result, _ = stage.result(timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_stage_refuses_missing_drain_executables(self):
         for name in ("conntrack", "iptables-legacy", "ip6tables-legacy"):
