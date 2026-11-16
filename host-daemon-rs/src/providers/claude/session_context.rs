@@ -26,39 +26,60 @@ When the user says goodbye, asks to hang up or asks whether the call ended, \
 call end_voice_call at once without writing anything; the voice has already \
 said goodbye.";
 
-pub(crate) fn hooks(executable: &Path, mcp_config: &Path) -> Value {
-    json!([{"hooks":[{
-        "type":"command", "command":executable, "timeout":10,
-        "args":["claude-session-context", "--mcp-config", mcp_config]
-    }]}])
+pub(crate) fn conversation_hooks(executable: &Path, mcp_config: &Path) -> Value {
+    json!([{"hooks":[
+        {"type":"command", "command":executable, "timeout":10, "args":["claude-session-context"]},
+        links_hook(executable, mcp_config),
+    ]}])
 }
 
-pub(crate) async fn run(mcp_config: &Path) -> i32 {
-    let links = super::runtime_callback::post(
-        mcp_config,
-        "/mcp/session-context",
-        &json!({}),
-        Duration::from_secs(2),
-    )
-    .await;
-    let links = links
-        .as_ref()
-        .and_then(|response| response["conversationLinks"].as_str());
-    match writeln!(std::io::stdout(), "{}", output(links)) {
+pub(crate) fn job_hooks(executable: &Path, mcp_config: &Path) -> Value {
+    json!([{"hooks":[links_hook(executable, mcp_config)]}])
+}
+
+fn links_hook(executable: &Path, mcp_config: &Path) -> Value {
+    json!({
+        "type":"command", "command":executable, "timeout":10,
+        "args":["claude-conversation-links", "--mcp-config", mcp_config]
+    })
+}
+
+pub(crate) fn run() -> i32 {
+    match writeln!(std::io::stdout(), "{}", output()) {
         Ok(()) => 0,
         Err(_) => 1,
     }
 }
 
-fn output(conversation_links: Option<&str>) -> Value {
-    let context = match conversation_links {
-        Some(links) => format!("{REMOTE_CODER_CONTEXT}\n{links}"),
-        None => REMOTE_CODER_CONTEXT.to_owned(),
+pub(crate) async fn run_conversation_links(mcp_config: &Path) -> i32 {
+    let response = super::runtime_callback::post(
+        mcp_config,
+        "/mcp/conversation-links",
+        &json!({}),
+        Duration::from_secs(2),
+    )
+    .await;
+    let Some(links) = response
+        .as_ref()
+        .and_then(|response| response["conversationLinks"].as_str())
+    else {
+        return 0;
     };
+    match writeln!(std::io::stdout(), "{}", hook_output(links)) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
+fn hook_output(context: &str) -> Value {
     json!({"hookSpecificOutput":{
         "hookEventName":"SessionStart",
         "additionalContext":context,
     }})
+}
+
+fn output() -> Value {
+    hook_output(REMOTE_CODER_CONTEXT)
 }
 
 #[cfg(test)]
@@ -67,31 +88,30 @@ mod tests {
 
     #[test]
     fn every_session_start_receives_the_context_from_the_gateway_executable() {
-        let hooks = hooks(
-            Path::new("/fixture path/gateway"),
-            Path::new("/private path/mcp.json"),
-        );
-        assert!(hooks[0].get("matcher").is_none());
-        assert_eq!(hooks[0]["hooks"][0]["command"], "/fixture path/gateway");
+        let executable = Path::new("/fixture path/gateway");
+        let config = Path::new("/private path/mcp.json");
+        let links = json!([
+            "claude-conversation-links",
+            "--mcp-config",
+            "/private path/mcp.json"
+        ]);
+        let conversation = conversation_hooks(executable, config);
+        assert!(conversation[0].get("matcher").is_none());
+        let hooks = conversation[0]["hooks"].as_array().unwrap();
+        assert_eq!(hooks.len(), 2);
+        assert_eq!(hooks[0]["command"], "/fixture path/gateway");
+        assert_eq!(hooks[0]["args"], json!(["claude-session-context"]));
+        assert_eq!(hooks[1]["args"], links);
+        let job = job_hooks(executable, config);
+        assert_eq!(job[0]["hooks"].as_array().unwrap().len(), 1);
+        assert_eq!(job[0]["hooks"][0]["args"], links);
         assert_eq!(
-            hooks[0]["hooks"][0]["args"],
-            json!([
-                "claude-session-context",
-                "--mcp-config",
-                "/private path/mcp.json"
-            ])
-        );
-        assert_eq!(
-            output(None)["hookSpecificOutput"]["hookEventName"],
+            output()["hookSpecificOutput"]["hookEventName"],
             "SessionStart"
         );
         assert_eq!(
-            output(None)["hookSpecificOutput"]["additionalContext"],
+            output()["hookSpecificOutput"]["additionalContext"],
             REMOTE_CODER_CONTEXT
-        );
-        assert_eq!(
-            output(Some("links"))["hookSpecificOutput"]["additionalContext"],
-            format!("{REMOTE_CODER_CONTEXT}\nlinks")
         );
     }
 }

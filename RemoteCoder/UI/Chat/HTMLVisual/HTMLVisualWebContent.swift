@@ -379,7 +379,9 @@ private final class HTMLVisualBridge: NSObject, WKScriptMessageHandlerWithReply 
         case "settled": onEvent(.settled)
         case "link":
             guard let raw = value["url"] as? String, raw.utf8.count <= 4096,
-                  let url = URL(string: raw), ["http", "https", "mailto", "tel", "file", "remotecoder"].contains(url.scheme?.lowercased() ?? ""),
+                  let url = URL(string: raw),
+                  ["http", "https", "mailto", "tel", "file"].contains(url.scheme?.lowercased() ?? "")
+                    || RemoteCoderDeepLinks.conversation(from: url) != nil,
                   url.host != origin.host else { return }
             open(.link(url))
         case "open":

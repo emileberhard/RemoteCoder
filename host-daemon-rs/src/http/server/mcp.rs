@@ -142,7 +142,9 @@ pub(super) async fn mcp_notification_hook(
     StatusCode::NO_CONTENT.into_response()
 }
 
-pub(super) async fn mcp_session_context(McpRuntime { gateway, identity }: McpRuntime) -> Response {
+pub(super) async fn mcp_conversation_links(
+    McpRuntime { gateway, identity }: McpRuntime,
+) -> Response {
     match gateway.conversation_links(&identity.thread_id).await {
         Ok(links) => Json(json!({"conversationLinks": links})).into_response(),
         Err(error) => {
@@ -374,11 +376,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_context_links_only_the_runtime_that_owns_the_token() {
+    async fn conversation_links_name_only_the_runtime_that_owns_the_token() {
         let harness = LanHarness::start().await;
         let token = harness.gateway.mcp_tokens().mint("claude_root", "session");
         let (status, response) =
-            notification_request(&harness, "/mcp/session-context", &token, json!({})).await;
+            notification_request(&harness, "/mcp/conversation-links", &token, json!({})).await;
         assert_eq!(status, 200);
         let links = response["conversationLinks"].as_str().unwrap();
         let host = harness.gateway.host_identity().await.unwrap().host_id;
@@ -386,7 +388,7 @@ mod tests {
             "\nThis conversation: remotecoder://chat/conversation?host={host}&thread=claude_root"
         )), "{links}");
         let (status, _) =
-            notification_request(&harness, "/mcp/session-context", OPERATOR, json!({})).await;
+            notification_request(&harness, "/mcp/conversation-links", OPERATOR, json!({})).await;
         assert_eq!(status, 401);
     }
 

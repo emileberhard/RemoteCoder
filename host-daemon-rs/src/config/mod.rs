@@ -66,7 +66,9 @@ pub(crate) enum Command {
         session_id: String,
     },
     #[command(hide = true)]
-    ClaudeSessionContext {
+    ClaudeSessionContext,
+    #[command(hide = true)]
+    ClaudeConversationLinks {
         #[arg(long)]
         mcp_config: PathBuf,
     },

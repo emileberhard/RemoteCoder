@@ -2154,13 +2154,20 @@ The iOS side is in `RemoteCoder/AGENTS.md`; both paths are in
   `isSynthetic` skills and local command output stay out of user bubbles.
 - Agents get conversation links from the gateway, never from rediscovery.
   `src/gateway/conversation_links.rs` renders one block: the default to link
-  any conversation the agent points to, the link format, every active cluster
-  host's ID and this conversation's own link. The Claude hook fetches it from
-  `/mcp/session-context` with its runtime token and appends it to the static
-  context; a failed callback leaves the static context alone. Codex gets it as
-  the `remote_coder_conversation_links` entry the gateway adds to each forwarded
-  `turn/start` and `turn/steer` `additionalContext`, which Codex records only
-  when the value changes.
+  any conversation the agent mentions, the link format, every active cluster
+  host's ID and this conversation's own link. Claude conversation and job
+  runtimes run a second SessionStart hook, `claude-conversation-links`, that
+  fetches it from `/mcp/conversation-links` with the runtime token and adds
+  nothing when the callback fails; jobs get only this hook, and read-only
+  runtimes have no token and no block. Codex gets it as the
+  `remote_coder_conversation_links` `additionalContext` entry on every
+  `turn/start` and `turn/steer` the gateway sends, forwarded or internal.
+  Codex records an entry only when it differs from the previous input's, so an
+  input without it (a voice-only realtime handoff inside Codex) makes the next
+  one record it again. Keep the block a pure function of identity, active
+  membership and thread: Codex fingerprints an identified input with its
+  `additionalContext`, so a volatile value would reject a retried send as
+  different input.
   - Voice delegations carry `<realtime_delegation>` with `<input>` and
     `<transcript_delta>`, and replay strips that envelope.
   - A handoff binds only when the CLI echoes its exact input UUID, so an earlier

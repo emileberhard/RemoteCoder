@@ -335,10 +335,11 @@ reports the first height whenever parsing finishes.
 
 Navigation permits the initial simulated load, same-document link anchors and
 any subframe navigation. Other main-frame and popup navigation is cancelled. A trusted click on an HTTP,
-HTTPS, mail, telephone, `file:` or `remotecoder:` link is passed to the app's
-`openURL` action rather than navigating the visual; destinations are bounded to
-4,096 bytes, `file:` links resolve through the same host-file path as Markdown
-links, and `remotecoder:` links open the app's own deep links.
+HTTPS, mail, telephone, `file:` or RemoteCoder conversation link is passed to
+the app's `openURL` action rather than navigating the visual; destinations are
+bounded to 4,096 bytes and `file:` links resolve through the same host-file path
+as Markdown links. Other `remotecoder:` deep links stay blocked, because a
+visual must never start Voice Mode or other app actions.
 
 Embedded content opens through the same viewer as the rest of the transcript
 ([Remote files](remote-files.md#embedded-files)). A trusted tap on an image, or

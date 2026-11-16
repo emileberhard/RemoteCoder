@@ -593,8 +593,12 @@ fn the_mcp_token_travels_in_a_private_file_never_in_argv() {
         "^mcp__remotecoder__notify_user$"
     );
     assert_eq!(
-        settings["hooks"]["SessionStart"][0]["hooks"][0]["args"],
-        json!(["claude-session-context", "--mcp-config", access.config_path])
+        settings["hooks"]["SessionStart"][0]["hooks"][1]["args"],
+        json!([
+            "claude-conversation-links",
+            "--mcp-config",
+            access.config_path
+        ])
     );
     assert_eq!(
         fs::metadata(&settings_path).unwrap().permissions().mode() & 0o777,
@@ -616,9 +620,11 @@ fn the_mcp_token_travels_in_a_private_file_never_in_argv() {
         &fs::read_to_string(runtime_settings_path(&delegated.config_path)).unwrap(),
     )
     .unwrap();
-    assert!(
-        delegated_settings["hooks"].get("SessionStart").is_none(),
-        "a delegated job's parent is not a chat or voice listener"
+    assert_eq!(
+        delegated_settings["hooks"]["SessionStart"][0]["hooks"],
+        json!([{"type":"command", "command":settings["hooks"]["SessionStart"][0]["hooks"][1]["command"],
+            "timeout":10, "args":["claude-conversation-links", "--mcp-config", delegated.config_path]}]),
+        "a delegated job gets conversation links but no chat or voice context"
     );
     assert!(delegated_settings["hooks"].get("PreToolUse").is_some());
     drop(delegated);

@@ -105,12 +105,17 @@ fn main() -> Result<()> {
                 )),
         );
     }
-    if let Some(config::Command::ClaudeSessionContext { mcp_config }) = &args.command {
+    if let Some(config::Command::ClaudeSessionContext) = &args.command {
+        std::process::exit(providers::claude::session_context::run());
+    }
+    if let Some(config::Command::ClaudeConversationLinks { mcp_config }) = &args.command {
         std::process::exit(
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?
-                .block_on(providers::claude::session_context::run(mcp_config)),
+                .block_on(providers::claude::session_context::run_conversation_links(
+                    mcp_config,
+                )),
         );
     }
     #[cfg(target_os = "macos")]

@@ -396,10 +396,15 @@ impl ClaudeSupervisor {
                     &request.session_uuid,
                 ),
             }});
-            if launch.job().is_none() {
-                settings["hooks"]["SessionStart"] =
-                    crate::providers::claude::session_context::hooks(&executable, &config_path);
-            }
+            settings["hooks"]["SessionStart"] = match launch.job() {
+                None => crate::providers::claude::session_context::conversation_hooks(
+                    &executable,
+                    &config_path,
+                ),
+                Some(_) => {
+                    crate::providers::claude::session_context::job_hooks(&executable, &config_path)
+                }
+            };
             write_private_file(&runtime_settings_path(&config_path), &settings.to_string())?;
             write_private_file(&config_path, &config.to_string())
         })();

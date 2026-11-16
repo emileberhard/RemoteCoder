@@ -811,6 +811,7 @@ impl Gateway {
         self.admit_native(method, &mut params)
             .await
             .map_err(|error| super::external_providers::admission_failure(&error))?;
+        self.add_conversation_links(method, &mut params).await;
         self.send_control_call(method, params).await
     }
 

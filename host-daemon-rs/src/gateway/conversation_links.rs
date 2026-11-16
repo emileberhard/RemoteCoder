@@ -27,7 +27,7 @@ fn render(this_host: &str, hosts: &[(String, String)], thread: &str) -> String {
         .collect::<Vec<_>>()
         .join("; ");
     format!(
-        "RemoteCoder conversation links: whenever you mention another conversation or session, such as one you found, started or delegated to, link it unless the user asks otherwise. \
+        "RemoteCoder conversation links: link every conversation or session you mention unless the user asks otherwise. \
 A link is remotecoder://chat/conversation?host=<host id>&thread=<thread id>. The thread id is a Codex session's id, claude_ followed by a Claude session's id, or exactly the thread id a RemoteCoder tool returned. \
 Host ids: {hosts}.\nThis conversation: {}",
         conversation_url(this_host, thread)
