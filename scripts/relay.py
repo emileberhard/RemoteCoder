@@ -34,6 +34,14 @@ TUNNEL_USER = "relay-tunnel"
 PROXY_USER = "relay"
 TINYPROXY_PORT = 8888
 CLIENT_RECORD = "/etc/remote-coder-relay/client.json"
+MAINTENANCE_FILES = (
+    "policy-rc.d", "maintenance-fence-check", "dpkg-maintenance.conf",
+    "maintenance-firewall.nft", "maintenance-startup", "maintenance-recover",
+    "maintenance-prepare", "maintenance_state.py", "maintenance_drain.py",
+    "maintenance_updates.py", "haproxy-maintenance.conf", "nftables-maintenance.conf",
+    "remote-coder-relay-maintenance-recover.service", "remote-coder-relay-maintenance-recover.path",
+    "remote-coder-relay-maintenance.service", "remote-coder-relay-maintenance.timer",
+)
 
 
 class RelayError(Exception):
@@ -109,10 +117,35 @@ def tracked_tunnel_keys(hosts: dict) -> dict[str, str]:
     return keys
 
 
-def provision(_: argparse.Namespace) -> None:
+def provisioner() -> dict:
     layout = topology()
     if this_host() != layout["server"]["provisioner"]:
         raise RelayError(f"only {layout['server']['provisioner']} provisions the relay; it owns the relay key and credential")
+    return layout
+
+
+def send_server_files(address: str, files: dict[str, bytes], script: str) -> None:
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as archive:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            info.mode = 0o600
+            archive.addfile(info, io.BytesIO(content))
+    command = f'''set -euo pipefail; d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT; tar -x -C "$d"; bash "$d/{script}" "$d"'''
+    output = admin_ssh(address, command, input=payload.getvalue())
+    sys.stdout.write(output.decode())
+
+
+def stage(_: argparse.Namespace) -> None:
+    address = provisioner()["server"]["address"]
+    files = {name: (RELAY / "server" / name).read_bytes() for name in (*MAINTENANCE_FILES, "nftables.conf", "stage.sh")}
+    send_server_files(address, files, "stage.sh")
+    print(f"relay maintenance staged at {address}; timer remains disabled")
+
+
+def provision(_: argparse.Namespace) -> None:
+    layout = provisioner()
     address = layout["server"]["address"]
     key, certificate, credential = server_secrets(layout["server"]["certificateName"])
     hosts = layout["hosts"]
@@ -139,22 +172,7 @@ def provision(_: argparse.Namespace) -> None:
         "sshd.conf": (RELAY / "server" / "sshd-remote-coder-relay.conf").read_text().replace(
             "@PERMIT_LISTEN@", " ".join(f"127.0.0.1:{entry['port']}" for entry in hosts.values())).encode(),
         "unattended-upgrades.conf": (RELAY / "server" / "unattended-upgrades.conf").read_bytes(),
-        "policy-rc.d": (RELAY / "server" / "policy-rc.d").read_bytes(),
-        "maintenance-fence-check": (RELAY / "server" / "maintenance-fence-check").read_bytes(),
-        "dpkg-maintenance.conf": (RELAY / "server" / "dpkg-maintenance.conf").read_bytes(),
-        "maintenance-firewall.nft": (RELAY / "server" / "maintenance-firewall.nft").read_bytes(),
-        "maintenance-startup": (RELAY / "server" / "maintenance-startup").read_bytes(),
-        "maintenance-recover": (RELAY / "server" / "maintenance-recover").read_bytes(),
-        "maintenance-prepare": (RELAY / "server" / "maintenance-prepare").read_bytes(),
-        "maintenance_state.py": (RELAY / "server" / "maintenance_state.py").read_bytes(),
-        "maintenance_drain.py": (RELAY / "server" / "maintenance_drain.py").read_bytes(),
-        "maintenance_updates.py": (RELAY / "server" / "maintenance_updates.py").read_bytes(),
-        "haproxy-maintenance.conf": (RELAY / "server" / "haproxy-maintenance.conf").read_bytes(),
-        "nftables-maintenance.conf": (RELAY / "server" / "nftables-maintenance.conf").read_bytes(),
-        "remote-coder-relay-maintenance-recover.service": (RELAY / "server" / "remote-coder-relay-maintenance-recover.service").read_bytes(),
-        "remote-coder-relay-maintenance-recover.path": (RELAY / "server" / "remote-coder-relay-maintenance-recover.path").read_bytes(),
-        "remote-coder-relay-maintenance.service": (RELAY / "server" / "remote-coder-relay-maintenance.service").read_bytes(),
-        "remote-coder-relay-maintenance.timer": (RELAY / "server" / "remote-coder-relay-maintenance.timer").read_bytes(),
+        **{name: (RELAY / "server" / name).read_bytes() for name in MAINTENANCE_FILES},
         "config-activation.sh": (RELAY / "server" / "config-activation.sh").read_bytes(),
         "authorized_keys": authorized_keys.encode(),
         "credential": credential.encode(),
@@ -163,16 +181,7 @@ def provision(_: argparse.Namespace) -> None:
         "remote-coder-relay-hosts.service": (RELAY / "server" / "remote-coder-relay-hosts.service").read_bytes(),
         "apply.sh": (RELAY / "server" / "apply.sh").read_bytes(),
     }
-    payload = io.BytesIO()
-    with tarfile.open(fileobj=payload, mode="w") as archive:
-        for name, content in files.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            info.mode = 0o600
-            archive.addfile(info, io.BytesIO(content))
-    output = admin_ssh(address, 'set -euo pipefail; d="$(mktemp -d)"; trap \'rm -rf "$d"\' EXIT; tar -x -C "$d"; bash "$d/apply.sh" "$d"',
-                       input=payload.getvalue())
-    sys.stdout.write(output.decode())
+    send_server_files(address, files, "apply.sh")
     print(f"relay provisioned at {address}; proxy pin {spki_sha256(certificate)}")
 
 
@@ -337,6 +346,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("provision", help="configure the relay server from the operator topology (run on its configured provisioner)").set_defaults(run=provision)
+    commands.add_parser("stage", help="stage relay maintenance for a fenced boot without activating services").set_defaults(run=stage)
     install = commands.add_parser("install-client", help="install this host's tunnel and gateway relay file")
     install.add_argument("--record-from-stdin", action="store_true",
                          help=f"read {CLIENT_RECORD} from stdin instead of over relay admin SSH, for a host without the admin key")
