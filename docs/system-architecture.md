@@ -2538,8 +2538,9 @@ host and call ownership checks. Unrepresentable tiers such as `flex` remain
 unknown to the Fast control and are omitted on unrelated edits; observed state
 does not overwrite the remembered user preference. `conversation/settings/update` omits an
 unknown tier, sends `fast` or `ultrafast` for an accelerated tier, and sends
-explicit null for Standard. The typed speed preference carries a legacy
-`fastModeEnabled` projection for existing clients. The gateway
+explicit null for Standard. Conversation metadata keeps the
+legacy `fastModeEnabled` encoding for Standard and Fast. Ultrafast adds
+`speed: "ultrafast"` alongside the Boolean projection. The gateway
 preserves that omission/null distinction for both future and active settings. A newer explicit selection for an unloaded Claude thread
 survives until its next turn, while legacy metadata cannot override a known
 server model. Metadata synchronization merges against the current local state

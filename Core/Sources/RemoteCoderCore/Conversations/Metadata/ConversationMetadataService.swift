@@ -114,7 +114,8 @@ actor ConversationMetadataService {
             let settings = notification.threadSettings
             let reasoning = settings.effort.map { "effort-\($0.rawValue)" } ?? "automatic"
             let observed = ConversationMetadata(sessionID: notification.threadId, modelID: settings.model,
-                reasoningSelectionID: reasoning, fastModeEnabled: settings.fastModeSelection, speed: settings.speedSelection,
+                reasoningSelectionID: reasoning, fastModeEnabled: settings.fastModeSelection,
+                speed: settings.speedSelection == .ultrafast ? .ultrafast : nil,
                 updatedAt: observedAt)
             let acknowledgedRevision = document.acknowledged[notification.threadId]?.serverRevision
             if document.observed?[notification.threadId]?.metadata.selection != observed.selection
@@ -141,7 +142,7 @@ actor ConversationMetadataService {
             let selection = ConversationMetadataSelection(sessionID: sessionID,
                 modelID: modelID.trimmingCharacters(in: .whitespacesAndNewlines),
                 reasoningSelectionID: reasoningSelectionID.trimmingCharacters(in: .whitespacesAndNewlines),
-                fastModeEnabled: preference?.isAccelerated, speed: preference, source: source)
+                fastModeEnabled: preference?.isAccelerated, speed: preference == .ultrafast ? .ultrafast : nil, source: source)
             guard !selection.modelID.isEmpty, !selection.reasoningSelectionID.isEmpty else { return }
             if document.pending[sessionID]?.mutation.selection == selection {
                 try await persist()
