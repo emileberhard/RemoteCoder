@@ -533,10 +533,10 @@ struct ChatSettingsTests {
         #expect(model.fastModeSelection == false)
         var differentModel = context
         differentModel.model = astra.id
-        #expect(await model.incomingVoiceConversationSpeedState(for: differentModel).remembered == true)
+        #expect(await model.incomingVoiceConversationSpeedState(for: differentModel).remembered == .fast)
         var explicitChoice = context
         explicitChoice.speedState = .selection(.standard)
-        #expect(await model.incomingVoiceConversationSpeedState(for: explicitChoice).remembered == false)
+        #expect(await model.incomingVoiceConversationSpeedState(for: explicitChoice).remembered == .standard)
     }
 
     @Test func incomingReadCannotPublishOldOffAfterFastEditAndNavigation() async throws {

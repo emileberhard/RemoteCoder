@@ -162,6 +162,22 @@ final class ReasoningPickerUITests: XCTestCase {
     }
 
     @MainActor
+    func testHoldSelectsUltrafastWithoutReleasingAsATap() throws {
+        let app = try launchReasoningDraft()
+        let speed = app.buttons["conversation-fast-mode-toggle"]
+        XCTAssertTrue(speed.waitForExistence(timeout: 5))
+        guard speed.label == "Speed" else { throw XCTSkip("Requires a Codex model that advertises Ultrafast") }
+        if speed.value as? String == "Ultrafast" { speed.tap() }
+        speed.press(forDuration: 0.45)
+        XCTAssertEqual(speed.value as? String, "Ultrafast")
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        speed.tap()
+        XCTAssertEqual(speed.value as? String, "Fast")
+        speed.tap()
+        XCTAssertEqual(speed.value as? String, "Standard")
+    }
+
+    @MainActor
     private func launchReasoningDraft() throws -> XCUIApplication {
         let app = launchDraft()
         let control = trigger(in: app)
