@@ -51,7 +51,7 @@ extension CodexAppServerV2 {
 
     struct ThreadExtra: Codable, Equatable, Sendable {
         let serviceTier: String?
-        private let hasServiceTier: Bool
+        let hasServiceTier: Bool
 
         init(serviceTier: String?) {
             self.serviceTier = serviceTier

@@ -379,6 +379,26 @@ struct SessionMetadataTests {
         #expect(await fixture.remote.entries["chat"]?.reasoningSelectionID == "effort-medium")
     }
 
+    @Test func aLegacyGatewayAcknowledgementKeepsUltrafastPendingUntilUpgrade() async throws {
+        let fixture = Fixture()
+        defer { await fixture.close() }
+        await fixture.remote.setSupportsSpeed(false)
+        await fixture.service.upsert(sessionID: "chat", modelID: "gpt-6.2-sol",
+            reasoningSelectionID: "effort-high", speed: .ultrafast, source: .selection)
+        await fixture.service.sync()
+        #expect(await fixture.service.metadata(for: "chat")?.rememberedSpeed == .ultrafast)
+        let pending = try #require(try await fixture.store.load().pending["chat"])
+        #expect(await fixture.remote.entries["chat"]?.mutationID == pending.mutation.mutationID)
+        #expect(await fixture.service.status.error != nil)
+
+        await fixture.remote.setSupportsSpeed(true)
+        await fixture.service.sync()
+        #expect(try await fixture.store.load().pending.isEmpty)
+        #expect(await fixture.remote.entries["chat"]?.speed == .ultrafast)
+        #expect(await fixture.remote.entries["chat"]?.serverRevision == 1)
+        #expect(await fixture.service.status.error == nil)
+    }
+
     @Test func lostAcknowledgementRetriesTheSameMutationWithoutApplyingTwice() async throws {
         let fixture = Fixture()
         defer { await fixture.close() }
@@ -483,6 +503,7 @@ private actor MetadataRemoteFixture: ConversationMetadataRemote {
     private var isHoldingRead = false
     private var snapshotRevision = 0
     private var supportsValidator = true
+    private var supportsSpeed = true
     private var forcedSnapshot: ConversationMetadataSnapshot?
     private(set) var requestedRevisions: [String?] = []
     private var isHoldingUpdate = false
@@ -501,6 +522,7 @@ private actor MetadataRemoteFixture: ConversationMetadataRemote {
     func failReads(_ value: Bool) { readsFail = value }
 
     func useLegacyResponses() { supportsValidator = false }
+    func setSupportsSpeed(_ value: Bool) { supportsSpeed = value }
     func forceSnapshot(_ snapshot: ConversationMetadataSnapshot?) { forcedSnapshot = snapshot }
     func holdUpdates() { isHoldingUpdate = true }
     func holdReads() { isHoldingRead = true }
@@ -529,7 +551,14 @@ private actor MetadataRemoteFixture: ConversationMetadataRemote {
         waiters.forEach { $0.resume() }
         if isHoldingUpdate { await withCheckedContinuation { pendingUpdates.append($0) } }
         let current = entries[mutation.selection.sessionID]
-        if let current, current.mutationID == mutation.mutationID { return current }
+        if var current, current.mutationID == mutation.mutationID {
+            if supportsSpeed, current.speed == nil, let speed = mutation.selection.speed {
+                current.speed = speed
+                entries[current.sessionID] = current
+                snapshotRevision += 1
+            }
+            return current
+        }
         guard (current?.serverRevision ?? 0) == mutation.expectedRevision else {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .secondsSince1970
@@ -538,6 +567,7 @@ private actor MetadataRemoteFixture: ConversationMetadataRemote {
                 data: .object(["kind": .string("metadataConflict"), "retryable": .bool(false), "current": current])))
         }
         var record = mutation.selection.localMetadata(updatedAt: .now)
+        if !supportsSpeed { record.speed = nil }
         record.serverRevision = mutation.expectedRevision + 1
         record.mutationID = mutation.mutationID
         entries[record.sessionID] = record

@@ -2344,7 +2344,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
            target.realtimeVoice.conversationContext?.realtimeSessionID == context.realtimeSessionID,
            !hadPendingSettings, pendingSettings[context.threadID] == nil,
            settingsSelectionRevision == settingsRevision, voiceConversationSettings == priorVoiceSettings,
-           let extra = read.thread.extra {
+           let extra = read.thread.extra, extra.hasServiceTier {
             refreshed.speedState = refreshed.speedState.reading(extra)
             acceptThreadTierReadback(extra, threadID: context.threadID, selectionRevision: settingsRevision)
             target.realtimeVoice.acceptConversationReadback(threadID: context.threadID,
@@ -2390,9 +2390,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
                 updated.model = reportedModel
                 updated.effort = response.thread.reasoningEffort?.rawValue
             }
-            let reportsTier = response.thread.extra.map {
-                $0.fastModeSelection != nil || $0.serviceTier != nil
-            } ?? false
+            let reportsTier = response.thread.extra?.hasServiceTier == true
             if let extra = response.thread.extra, reportsTier {
                 updated.speedState = updated.speedState.reading(extra)
                 acceptThreadTierReadback(extra, threadID: context.threadID, selectionRevision: settingsRevision)

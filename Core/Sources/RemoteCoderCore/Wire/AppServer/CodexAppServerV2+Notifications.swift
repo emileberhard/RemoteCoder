@@ -9,7 +9,7 @@ extension CodexAppServerV2 {
             let model: String
             let effort: ReasoningEffort?
             let serviceTier: String?
-            private let reportsServiceTier: Bool
+            let reportsServiceTier: Bool
 
             private enum CodingKeys: String, CodingKey { case model, effort, serviceTier }
 

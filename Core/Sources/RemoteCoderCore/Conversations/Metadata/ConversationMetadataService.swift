@@ -259,6 +259,7 @@ actor ConversationMetadataService {
                 try await persist()
                 // Snapshot identifiers, not values. A newer local edit can arrive
                 // at any await and must not be acknowledged by an older response.
+                var needsUpdatedGateway = false
                 for id in document.pending.keys.sorted() {
                     try Task.checkCancellation()
                     guard !isRetired else { return }
@@ -269,6 +270,11 @@ actor ConversationMetadataService {
                         let applied = try await remote.updateRemoteMetadata(pending.mutation)
                         try Task.checkCancellation()
                         guard !isRetired else { return }
+                        if let requestedSpeed = pending.mutation.selection.speed, applied.speed != requestedSpeed,
+                           document.pending[id]?.mutation.mutationID == pending.mutation.mutationID {
+                            needsUpdatedGateway = true
+                            continue
+                        }
                         acknowledge(applied, for: id)
                         if document.observed?[id] == observed { document.observed?[id] = nil }
                         if document.pending[id]?.mutation.mutationID == pending.mutation.mutationID {
@@ -289,7 +295,8 @@ actor ConversationMetadataService {
                         try await persist()
                     }
                 }
-                status.error = refreshError
+                status.error = needsUpdatedGateway
+                    ? "The gateway needs an update to sync the Ultrafast preference." : refreshError
                 publishStatus()
             } catch is CancellationError { return }
             catch {

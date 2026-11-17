@@ -1532,7 +1532,9 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             await metadataService.observeSettings(notification, observedAt: .now)
             guard !isRetired else { return }
             let reportedSpeed = notification.threadSettings.speedSelection
+            let reportsTier = notification.threadSettings.reportsServiceTier
             let shown = screenShowing(notification.threadId)
+            let previousSpeed = shown?.speedState ?? .readback(nil, remembered: nil)
             guard screens.allSatisfy({ $0.pendingSettings[notification.threadId] == nil }),
                   let model = modelCatalog.option(id: notification.threadSettings.model, threadID: notification.threadId,
                                           modelProvider: shown?.activeModelProvider,
@@ -1540,20 +1542,17 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             let reasoning = notification.threadSettings.effort.flatMap { ReasoningEffort(rawValue: $0.rawValue) }
                 .map(ReasoningSelection.effort) ?? .automatic
             if let shown {
-                shown.pickerSelection.observe(model: model, reasoning: reasoning, reportedSpeed: reportedSpeed)
+                shown.pickerSelection.observe(model: model, reasoning: reasoning,
+                    speedState: reportsTier ? previousSpeed.observing(reportedSpeed) : previousSpeed)
                 shown.refreshReasoningVisibility()
             }
             let voiceSettings = primaryScreen?.voiceConversationSettings
-            let voiceState = voiceSettings?.threadId == notification.threadId
-                ? voiceSettings?.speedState.observing(reportedSpeed)
-                : (shown.map { $0.speedState.observing(reportedSpeed) }
-                    ?? ConversationSpeedState.readback(reportedSpeed, remembered: nil))
-            if let voiceState {
-                realtimeVoice.applyConversationSettings(
-                    ConversationSettingsUpdate(threadID: notification.threadId, model: model,
-                        reasoning: reasoning, speedState: voiceState),
-                    hostID: hostID)
-            }
+            let voiceSpeed = (voiceSettings?.threadId == notification.threadId ? voiceSettings?.speedState : nil)
+                ?? previousSpeed
+            realtimeVoice.applyConversationSettings(
+                ConversationSettingsUpdate(threadID: notification.threadId, model: model,
+                    reasoning: reasoning, speedState: reportsTier ? voiceSpeed.observing(reportedSpeed) : voiceSpeed),
+                hostID: hostID)
         case .threadName(let notification):
             await conversationList.recordThreadName(threadID: notification.threadId, name: notification.threadName)
         case .queueChanged(let threadID):

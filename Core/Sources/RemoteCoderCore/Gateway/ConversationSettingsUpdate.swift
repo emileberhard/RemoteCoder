@@ -60,7 +60,7 @@ enum ConversationSpeedState: Equatable, Sendable {
     }
 
     func reading(_ extra: CodexAppServerV2.ThreadExtra?) -> Self {
-        guard let extra else { return self }
+        guard let extra, extra.hasServiceTier else { return self }
         return observing(extra.speedSelection)
     }
 

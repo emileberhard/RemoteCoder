@@ -50,12 +50,12 @@ struct ConversationSettingsSelectionTests {
 
     @Test func observingBumpsTheRevisionOnlyWhenTheChoiceChanged() {
         var selection = fresh()
-        selection.observe(model: Self.codex, reasoning: .effort(.high), reportedSpeed: .fast)
+        selection.observe(model: Self.codex, reasoning: .effort(.high), speedState: selection.fastMode.observing(.fast))
         #expect(selection.revision == 1)
-        selection.observe(model: Self.codex, reasoning: .effort(.high), reportedSpeed: .fast)
+        selection.observe(model: Self.codex, reasoning: .effort(.high), speedState: selection.fastMode.observing(.fast))
         #expect(selection.revision == 1)
         #expect(selection.fastMode == .readback(.fast, remembered: nil))
-        selection.observe(model: Self.codex, reasoning: .effort(.high), reportedSpeed: .standard)
+        selection.observe(model: Self.codex, reasoning: .effort(.high), speedState: selection.fastMode.observing(.standard))
         #expect(selection.revision == 2)
     }
 
@@ -81,6 +81,8 @@ struct ConversationSettingsSelectionTests {
         ])
         #expect(selection.restore(from: thread, saved: nil, resolveOption: resolve) == .thread)
         #expect(selection.speedSelection == .ultrafast)
+        let absent = try JSONDecoder().decode(CodexAppServerV2.ThreadExtra.self, from: Data("{}".utf8))
+        #expect(selection.fastMode.reading(absent) == selection.fastMode)
         let update = ConversationSettingsUpdate(threadID: thread.id, model: Self.codex,
             reasoning: .effort(.low), speedState: selection.fastMode)
         #expect(update.serviceTier == .set(.ultrafast))

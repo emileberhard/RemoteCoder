@@ -134,7 +134,7 @@ struct ModelOption: Identifiable, Hashable, Sendable {
             acceptsImages: true,
             provider: provider,
             modelProvider: modelProvider,
-            isListed: false, supportsUltrafast: provider == .codex && reportedSpeed == .ultrafast
+            isListed: false
         )
     }
 

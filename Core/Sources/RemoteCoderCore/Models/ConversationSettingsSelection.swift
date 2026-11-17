@@ -79,12 +79,11 @@ struct ConversationSettingsSelection: Equatable {
         availability = .ready
     }
 
-    mutating func observe(model: ModelOption, reasoning: ReasoningSelection, reportedSpeed: ConversationSpeed?) {
-        let observed = fastMode.observing(reportedSpeed)
-        if self.model != model || self.reasoning != reasoning || !fastMode.hasSameChoice(as: observed) {
+    mutating func observe(model: ModelOption, reasoning: ReasoningSelection, speedState: ConversationSpeedState) {
+        if self.model != model || self.reasoning != reasoning || !fastMode.hasSameChoice(as: speedState) {
             revision &+= 1
         }
-        assign(model: model, reasoning: reasoning, fastMode: observed)
+        assign(model: model, reasoning: reasoning, fastMode: speedState)
         availability = .ready
     }
 
@@ -109,7 +108,7 @@ struct ConversationSettingsSelection: Equatable {
 
     @discardableResult
     mutating func acceptTierReadback(_ extra: CodexAppServerV2.ThreadExtra?, expectedRevision: UInt64) -> Bool {
-        guard revision == expectedRevision, let extra else { return false }
+        guard revision == expectedRevision, let extra, extra.hasServiceTier else { return false }
         fastMode = fastMode.reading(extra)
         return true
     }

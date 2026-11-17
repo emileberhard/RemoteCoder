@@ -25,6 +25,7 @@ struct ConversationSpeedControl: View {
 
     var body: some View {
         control
+            .id(model)
             .opacity(available ? 1 : 0.35)
             .disabled(!available)
             .onChange(of: isEnabled) { if !isEnabled { cancelContact() } }
@@ -114,11 +115,14 @@ struct ConversationSpeedControl: View {
             .contentShape(.rect)
     }
 
+    #if os(iOS)
     private var choices: [TapHoldButton.AccessibilityAction] {
         ConversationSpeed.allCases.filter(model.supportsSpeed).map { choice in
             .init(name: choice.label) { select(choice) }
         }
     }
+
+    #endif
 
     private func tap() {
         if speed == .fast || (ultrafast && !model.supportsFastMode) {
