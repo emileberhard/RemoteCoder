@@ -117,7 +117,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
         guard !ending else { return }
         ending = true
         guard let engine, ready, activePlayer != nil else { cancel(); return }
-        engine.notifyWhenPlayersFinished { [weak self] _ in
+        engine.notifyWhenPlayersFinished { @Sendable [weak self] _ in
             Task { @MainActor in self?.cancel() }
             return .leaveEngineRunning
         }
