@@ -56,7 +56,7 @@ enum ConversationProjection {
 
         fileprivate struct Entry: Sendable {
             let stamp: UInt64
-            let rows: [ChatStreamItem]
+            let rows: [Row]
             let messages: [ChatMessage]
             let timelines: [JobTimeline]
             let forkBoundaries: [UUID: ForkBoundary]
@@ -66,6 +66,19 @@ enum ConversationProjection {
             let userContentIDs: Set<String>
             let presentationRowIDs: Set<String>
             let visualPlacements: [String: VisualPlacement]
+        }
+
+        fileprivate struct Row: Sendable {
+            var item: ChatStreamItem
+            var ordinal: Int64? = nil
+            var date: Date? = nil
+            var endsVoiceCall = false
+
+            func startsAfter(_ other: Self) -> Bool {
+                if let ordinal, let otherOrdinal = other.ordinal { return ordinal > otherOrdinal }
+                if let date, let otherDate = other.date { return date > otherDate }
+                return false
+            }
         }
 
         fileprivate struct EditCandidate: Sendable {
@@ -86,6 +99,7 @@ enum ConversationProjection {
             let inline: InlineMessageContent?
             let replies: [QuestionReply]?
             let visualReplies: [HTMLVisualReply]
+            let voiceMessages: [RealtimeVoiceMessagePresentation]
         }
 
         fileprivate var revision: UInt64?
@@ -163,7 +177,7 @@ enum ConversationProjection {
         var retainedUserIDs = Set<String>()
         var entries: [String: Memo.Entry] = [:]
         var projectedTurnCount = 0
-        var rows: [ChatStreamItem] = []
+        var rows: [Memo.Row] = []
         var messages: [ChatMessage] = []
         var timelines: [JobTimeline] = []
         var forkBoundaries: [UUID: ForkBoundary] = [:]
@@ -172,7 +186,7 @@ enum ConversationProjection {
         var prompts = state.questionPrompts
         let pendingQuestion = prompts.values.filter(\.isPending).min { ($0.record?.ordinal ?? 0) < ($1.record?.ordinal ?? 0) }
         let threadID = state.threadID ?? state.conversationID.uuidString
-        if let edge = state.window?.olderEdge { rows.append(.historyEdge(edge)) }
+        if let edge = state.window?.olderEdge { rows.append(Memo.Row(item: .historyEdge(edge))) }
         for turnID in state.order {
             guard let turn = state.turns[turnID], let stamp = state.turns.stamp(of: turnID) else { continue }
             let entry: Memo.Entry
@@ -186,12 +200,12 @@ enum ConversationProjection {
             retainedUserIDs.formUnion(entry.userContentIDs)
             presentationRowIDs.formUnion(entry.presentationRowIDs)
             if entry.hasQuestions || state.compaction?.turnID == turnID {
-                for row in entry.rows {
-                    switch row {
+                for var row in entry.rows {
+                    switch row.item {
                     case .question(let local):
                         let prompt = prompts[local.itemID] ?? local
                         prompts[prompt.itemID] = prompt
-                        rows.append(.question(prompt))
+                        row.item = .question(prompt)
                     case .compaction(var marker):
                         if let current = state.compaction, current.turnID == turnID,
                            current.itemID == marker.compaction.itemID {
@@ -204,9 +218,10 @@ enum ConversationProjection {
                             }
                             marker.compaction.turnFinished = current.turnFinished || canonical.turnFinished
                         }
-                        rows.append(.compaction(marker))
-                    default: rows.append(row)
+                        row.item = .compaction(marker)
+                    default: break
                     }
+                    rows.append(row)
                 }
             } else {
                 rows.append(contentsOf: entry.rows)
@@ -228,11 +243,18 @@ enum ConversationProjection {
         // row when that exact item arrives; never pin an off-page item to the tail.
         if let current = state.compaction, current.itemID == nil, let requestID = current.requestID,
            state.window?.newer == nil {
-            rows.append(.compaction(CompactionMarker(id: "compaction-request-\(requestID)", compaction: current)))
+            rows.append(Memo.Row(item: .compaction(CompactionMarker(id: "compaction-request-\(requestID)", compaction: current))))
         }
-        if let edge = state.window?.newerEdge { rows.append(.historyEdge(edge)) }
+        if let edge = state.window?.newerEdge { rows.append(Memo.Row(item: .historyEdge(edge))) }
+        for index in rows.indices where rows[index].endsVoiceCall {
+            let end = rows[index]
+            if let insertion = rows[..<index].firstIndex(where: { $0.startsAfter(end) }) {
+                rows.remove(at: index)
+                rows.insert(end, at: insertion)
+            }
+        }
         return ConversationSnapshot(conversationID: state.conversationID, ownerID: state.ownerID, threadID: state.threadID,
-                                    revision: state.revision, messages: messages, timelines: timelines, items: rows,
+                                    revision: state.revision, messages: messages, timelines: timelines, items: rows.map(\.item),
                                     lastTurnCompletedAt: state.lastTurnCompletedAt,
                                     forkBoundaries: forkBoundaries, editBases: editBases, questionPrompts: prompts, questionCoverage: state.questions?.coverage ?? .unavailable, pendingQuestion: pendingQuestion, compaction: state.compaction,
                                     visualReplies: HTMLVisualReplyIndex(messages: messages, includesNewest: state.hasVerifiedNewestHistory),
@@ -242,7 +264,7 @@ enum ConversationProjection {
 
     private static func projectTurn(_ turn: ConversationState.Turn, stamp: UInt64, previous: Memo.Entry?, state: ConversationState, threadID: String,
                                     deliveries: [UUID: Memo.DeliveryInput], userContents: inout [String: Memo.UserContent]) -> Memo.Entry {
-        var rows: [ChatStreamItem] = []
+        var rows: [Memo.Row] = []
         var messages: [ChatMessage] = []
         var timelines: [JobTimeline] = []
         var forkBoundaries: [UUID: ForkBoundary] = [:]
@@ -271,14 +293,21 @@ enum ConversationProjection {
         let jobID = GatewayNotificationRouting.jobID(threadID: threadID, turnID: turnID)
         let showsTurn = state.showsTurn(turn)
         let showsLiveTail = turn.isActive && state.window?.newer == nil
-        if showsTurn, turn.hasDiscardedLiveItems { rows.append(.historyEdge(HistoryEdge(kind: .reload(turnID: turnID), cursor: nil))) }
+        if showsTurn, turn.hasDiscardedLiveItems {
+            rows.append(Memo.Row(item: .historyEdge(HistoryEdge(kind: .reload(turnID: turnID), cursor: nil))))
+        }
         var events: [JobTimelineEvent] = []
+        var firstEvent: ConversationState.Item?
         var queuedSteers: [ChatMessage] = []
         var precedingBoundary: (id: String, date: Date)?
         var userCount = 0
         var hasReply = false
         var hasCompaction = false
         var endsWithRunningCompaction = false
+
+        func append(_ item: ChatStreamItem, from record: ConversationState.Item?) {
+            rows.append(Memo.Row(item: item, ordinal: record?.position, date: record?.date))
+        }
 
         func flush(before next: Date?, terminal: Bool) {
             guard !events.isEmpty || (terminal && showsLiveTail && !endsWithRunningCompaction) else { return }
@@ -295,13 +324,28 @@ enum ConversationProjection {
                 isLive: active, isExpanded: state.expandedTimelineAnchors.contains(id)
                     || events.contains { state.expandedTimelineAnchors.contains($0.id) }, events: events)
             timelines.append(timeline)
-            rows.append(.timeline(timeline))
+            append(.timeline(timeline), from: firstEvent)
             events.removeAll(keepingCapacity: true)
+            firstEvent = nil
         }
 
         for (index, id) in ids.enumerated() {
             guard let record = turn.items[id] else { continue }
-            if var message = message(record, threadID: threadID, turnID: turnID, wasSteered: userCount > 0, userContents: &userContents) {
+            let projectedMessage = message(record, threadID: threadID, turnID: turnID,
+                wasSteered: userCount > 0, userContents: &userContents)
+            if record.localMessage == nil, let voiceMessages = userContents[id]?.voiceMessages {
+                for (offset, voice) in voiceMessages.enumerated() {
+                    let endsCall = if case .transcriptTail = voice { true } else { false }
+                    let eventID = endsCall && offset == 0 ? "\(jobID)-\(id)" : "\(jobID)-\(id)-voice-\(offset)"
+                    guard let event = ConversationItemPresentation.voiceActivity(voice, id: eventID,
+                        sequence: index, timestamp: record.date) else { continue }
+                    flush(before: record.date, terminal: false)
+                    let activity = ChatStreamItem.activity(event)
+                    rows.append(Memo.Row(item: activity, ordinal: record.position, date: record.date, endsVoiceCall: endsCall))
+                    precedingBoundary = (activity.id, record.date ?? .distantPast)
+                }
+            }
+            if var message = projectedMessage {
                 if message.wasSteered, record.isLocal {
                     message.delivery = steerDelivery(deliveries[message.id]?.status, turnIsActive: turn.isActive)
                     message.deliveryError = deliveries[message.id]?.error
@@ -333,12 +377,12 @@ enum ConversationProjection {
                     // A question is content the user acts on, not a reply bubble.
                     let prompt = QuestionPrompt(itemID: record.value.id, turnID: turnID, date: record.date,
                         questions: questions.map(QuestionPrompt.Question.init))
-                    rows.append(.question(prompt))
+                    append(.question(prompt), from: record)
                     hasQuestions = true
                     precedingBoundary = (ChatStreamItem.questionRowID(itemID: prompt.itemID), message.date)
                     continue
                 }
-                rows.append(.message(message))
+                append(.message(message), from: record)
                 if message.role == .codex { hasReply = true }
                 precedingBoundary = (message.id.uuidString, boundaryDate)
                 if message.role == .codex, let canonicalTurnID = message.canonicalTurnID,
@@ -354,7 +398,7 @@ enum ConversationProjection {
                 let image = ViewedMedia(itemID: itemID, index: 0, path: received?.path ?? path,
                                         caption: URL(fileURLWithPath: path).lastPathComponent)
                 flush(before: record.date, terminal: false)
-                rows.append(.viewedMedia(image))
+                append(.viewedMedia(image), from: record)
                 precedingBoundary = (image.rowID, record.date ?? .distantPast)
                 endsWithRunningCompaction = false
             } else if case .contextCompaction(let itemID) = record.value {
@@ -366,12 +410,13 @@ enum ConversationProjection {
                 else { phase = turn.isActive ? .running : .unconfirmed }
                 let marker = CompactionMarker(id: "compaction-\(jobID)-\(itemID)",
                     compaction: ConversationCompaction(turnID: turnID, itemID: itemID, phase: phase, turnFinished: turn.terminal))
-                rows.append(.compaction(marker))
+                append(.compaction(marker), from: record)
                 precedingBoundary = (marker.id, record.date ?? .distantPast)
                 hasCompaction = true
                 endsWithRunningCompaction = !record.completed
             } else if let event = record.activity ?? ConversationItemPresentation.event(
                 jobID: jobID, sequence: index, timestamp: record.date, item: record.value, completed: record.completed) {
+                if events.isEmpty { firstEvent = record }
                 events.append(event)
                 endsWithRunningCompaction = false
                 if let publication = record.value.publishedVisual {
@@ -380,7 +425,7 @@ enum ConversationProjection {
                         flush(before: record.date, terminal: false)
                         let visual = PublishedVisual(itemID: record.value.id,
                             turnID: ConversationState.isLocalTurnID(turnID) ? nil : turnID, publication: publication)
-                        rows.append(.publishedVisual(visual))
+                        append(.publishedVisual(visual), from: record)
                         precedingBoundary = (visual.rowID, record.date ?? .distantPast)
                     }
                 }
@@ -389,22 +434,23 @@ enum ConversationProjection {
                     for (index, entry) in media.enumerated() {
                         let viewed = ViewedMedia(itemID: record.value.id, index: index, path: entry.path,
                                                  caption: entry.name ?? tool)
-                        rows.append(.viewedMedia(viewed))
+                        append(.viewedMedia(viewed), from: record)
                         precedingBoundary = (viewed.rowID, record.date ?? .distantPast)
                     }
                 }
             }
         }
         flush(before: nil, terminal: true)
+        let isOnlyCallEnd = !rows.isEmpty && rows.allSatisfy(\.endsVoiceCall)
         if showsTurn,
-           let outcome = outcome(of: turn, hasReply: hasReply || (hasCompaction && timelines.isEmpty)) {
-            rows.append(.turnOutcome(outcome))
+           let outcome = outcome(of: turn, hasReply: hasReply || isOnlyCallEnd || (hasCompaction && timelines.isEmpty)) {
+            rows.append(Memo.Row(item: .turnOutcome(outcome), date: turn.completedAt))
         }
         for message in queuedSteers {
             messages.append(message)
-            rows.append(.message(message))
+            rows.append(Memo.Row(item: .message(message)))
         }
-        let presentationRowIDs = Set(rows.map(\.id)).union(timelines.flatMap {
+        let presentationRowIDs = Set(rows.map(\.item.id)).union(timelines.flatMap {
             $0.events.map { ChatStreamItem.activityRowID(eventID: $0.id) }
         })
         let isFinished = !ConversationState.isLocalTurnID(turnID) && turn.terminal && !turn.isActive
@@ -470,14 +516,15 @@ enum ConversationProjection {
                                     cache: inout [String: Memo.UserContent]) -> Memo.UserContent {
         if let cached = cache[id], cached.source == content, cached.parsesVoice == parsesVoice { return cached }
         var attachments: [MessageAttachment] = []
+        var voiceMessages: [RealtimeVoiceMessagePresentation] = []
         let parts = content.enumerated().compactMap { index, input -> String? in
             switch input {
             case .text(let value, _):
-                if parsesVoice {
-                    switch RealtimeVoiceMessagePresentation.parse(value) {
-                    case .request(let input): return input
+                if parsesVoice, let voice = RealtimeVoiceMessagePresentation.parse(value) {
+                    voiceMessages.append(voice)
+                    switch voice {
+                    case .request(let input, _): return input
                     case .transcriptTail: return nil
-                    case nil: break
                     }
                 }
                 return value
@@ -502,7 +549,8 @@ enum ConversationProjection {
             text = QuestionReply.displayText(entries.map(\.reply))
         }
         let result = Memo.UserContent(source: content, parsesVoice: parsesVoice, text: text, attachments: attachments,
-            inline: prepared.inline.map(InlineMessageContent.init), replies: replies, visualReplies: prepared.visualReplies)
+            inline: prepared.inline.map(InlineMessageContent.init), replies: replies, visualReplies: prepared.visualReplies,
+            voiceMessages: voiceMessages)
         cache[id] = result
         return result
     }

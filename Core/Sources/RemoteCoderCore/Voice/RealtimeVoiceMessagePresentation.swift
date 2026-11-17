@@ -1,7 +1,7 @@
 import Foundation
 
 enum RealtimeVoiceMessagePresentation {
-    case request(String)
+    case request(input: String, transcript: String)
     case transcriptTail(String)
 
     static func parse(_ text: String) -> Self? {
@@ -12,9 +12,18 @@ enum RealtimeVoiceMessagePresentation {
         parser.delegate = fields
         guard parser.parse(), let input = fields.values["input"],
               !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let transcript = fields.values["transcript_delta"] ?? ""
         switch fields.values["source"] {
-        case nil: return .request(input)
-        case "transcript_tail_flush": return .transcriptTail(fields.values["transcript_delta"] ?? "")
+        case nil:
+            let excerpt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lastLine = excerpt.lastIndex(of: "\n").map { excerpt.index(after: $0) } ?? excerpt.startIndex
+            let lastUtterance = excerpt[lastLine...]
+            let spokenRequest = lastUtterance.hasPrefix("user:")
+                && lastUtterance.dropFirst("user:".count).trimmingCharacters(in: .whitespaces) == input
+                    .trimmingCharacters(in: .whitespaces)
+            return .request(input: input, transcript: spokenRequest
+                ? excerpt[..<lastLine].trimmingCharacters(in: .whitespacesAndNewlines) : excerpt)
+        case "transcript_tail_flush": return .transcriptTail(transcript)
         default: return nil
         }
     }

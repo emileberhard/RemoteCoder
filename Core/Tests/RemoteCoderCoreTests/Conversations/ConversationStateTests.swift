@@ -75,18 +75,31 @@ struct ConversationStateTests: ConversationHistoryFixtures {
     }
 
     @Test func voiceHandoffsDisplayTheirInputAndKeepTheCanonicalEnvelope() throws {
-        let envelope = "<realtime_delegation><input>Compare a &lt; b &amp;&amp; c &gt; d</input><transcript_delta>user: compare them</transcript_delta></realtime_delegation>"
+        let envelope = """
+        <realtime_delegation><input>Compare a &lt; b &amp;&amp; c &gt; d</input><transcript_delta>user: compare them
+        assistant: Which values?
+        user:  Compare a &lt; b &amp;&amp; c &gt; d
+        </transcript_delta></realtime_delegation>
+        """
         let item = CodexAppServerV2.ThreadItem.userMessage(id: "handoff", content: [.text(text: envelope, textElements: [])])
         var state = ConversationState(conversationID: UUID(), threadID: "thread")
         state.apply(try event("item/completed", item: item, ordinal: 1))
-        #expect(ConversationProjection.project(state).messages.map(\.text) == ["Compare a < b && c > d"])
         if case .userMessage(_, let content, _) = state.turns["turn"]?.items["handoff"]?.value,
            case .text(let stored, _) = content.first {
             #expect(stored == envelope)
         } else { Issue.record("The canonical handoff must remain intact") }
         var restored = ConversationState(conversationID: state.conversationID, threadID: "thread")
         restored.restore(state.checkpoint)
-        #expect(ConversationProjection.project(restored).messages.map(\.text) == ["Compare a < b && c > d"])
+        for conversation in [state, restored] {
+            let snapshot = ConversationProjection.project(conversation)
+            #expect(snapshot.messages.map(\.text) == ["Compare a < b && c > d"])
+            guard case .activity(let activity) = snapshot.items.first else {
+                Issue.record("Expected the transcript immediately before the voice request")
+                continue
+            }
+            #expect(activity.title == "Voice transcript")
+            #expect(activity.details.map(\.value) == ["user: compare them\nassistant: Which values?"])
+        }
     }
 
     @Test func voiceTranscriptFlushBecomesAnActivityInsteadOfAnInstructionBubble() throws {
@@ -105,9 +118,82 @@ struct ConversationStateTests: ConversationHistoryFixtures {
         for state in [live, replay] {
             let snapshot = ConversationProjection.project(state)
             #expect(snapshot.messages.isEmpty)
-            let activity = try #require(snapshot.timelines.first?.events.first)
+            guard case .activity(let activity) = snapshot.items.first else {
+                Issue.record("Expected a standalone voice end row")
+                continue
+            }
             #expect(activity.title == "Voice conversation ended")
             #expect(activity.details.map(\.value) == ["user: Hello\nassistant: How's it going?"])
+        }
+    }
+
+    @Test func hangupInsideAnActiveTurnKeepsActivityGroupIDsDistinct() throws {
+        let envelope = "<realtime_delegation><source>transcript_tail_flush</source><input>Call ended</input><transcript_delta>user: Goodbye</transcript_delta></realtime_delegation>"
+        let hangup = CodexAppServerV2.ThreadItem.userMessage(id: "end", content: [.text(text: envelope, textElements: [])])
+        var live = ConversationState(conversationID: UUID(), threadID: "thread")
+        live.apply(try lifecycle("turn/started", turnID: "work", status: "inProgress"))
+        live.apply(try itemEvent("item/completed", tool("before", status: .completed), turnID: "work", ordinal: 1))
+        live.apply(try itemEvent("item/completed", hangup, turnID: "work", ordinal: 2))
+        let active = ConversationProjection.project(live)
+        live.apply(try itemEvent("item/completed", tool("after", status: .completed), turnID: "work", ordinal: 3))
+        live.apply(try itemEvent("item/completed", .agentMessage(id: "reply", text: "Done"), turnID: "work", ordinal: 4))
+        live.apply(try lifecycle("turn/completed", turnID: "work", status: "completed"))
+        for snapshot in [active, ConversationProjection.project(live)] {
+            #expect(snapshot.timelines.count == 2)
+            #expect(Set(snapshot.items.map(\.id)).count == snapshot.items.count)
+        }
+    }
+
+    @Test(arguments: [true, false])
+    func hangupsStayBetweenSteersInLiveAndReopenedHistory(hasOrdinals: Bool) throws {
+        func user(_ id: String, _ text: String) -> CodexAppServerV2.ThreadItem {
+            .userMessage(id: id, content: [.text(text: text, textElements: [])])
+        }
+
+        func hangup(_ id: String, _ spoken: String) -> CodexAppServerV2.ThreadItem {
+            user(id, """
+            <realtime_delegation><source>transcript_tail_flush</source><input>Call ended</input>
+            <transcript_delta>\(spoken)</transcript_delta></realtime_delegation>
+            """)
+        }
+
+        let records: [(turn: String, item: CodexAppServerV2.ThreadItem)] = [
+            ("work", user("prompt", "Start the task")),
+            ("first-call", hangup("first-end", "assistant: Reconnecting")),
+            ("work", user("steer", "Any progress?")),
+            ("work", .agentMessage(id: "reply", text: "Done")),
+            ("second-call", hangup("second-end", "user: Thanks"))
+        ]
+        var live = ConversationState(conversationID: UUID(), threadID: "thread")
+        live.apply(try lifecycle("turn/started", turnID: "work", status: "inProgress"))
+        let wire = try records.enumerated().map { offset, record in
+            let timestamp = 1000 * (offset + 1)
+            let ordinal = hasOrdinals ? offset + 1 : nil
+            live.apply(try GatewayEventFixture.item("item/completed", item: record.item,
+                threadID: "thread", turnID: record.turn, ordinal: ordinal, startedAtMs: timestamp, completedAtMs: timestamp))
+            if record.turn != "work" {
+                live.apply(try lifecycle("turn/completed", turnID: record.turn, status: "completed"))
+            }
+            return CodexAppServerV2.ThreadItemsListResponse.Entry(turnId: record.turn, item: record.item,
+                startedAtOrdinal: ordinal.map(Int64.init), startedAtMs: Int64(timestamp),
+                completedAtMs: Int64(timestamp), isComplete: true)
+        }
+        live.apply(try lifecycle("turn/completed", turnID: "work", status: "completed"))
+        var replay = ConversationState(conversationID: live.conversationID, threadID: "thread")
+        replay.merge(.fixture(wire: wire.reversed(), turns: [
+            summary("second-call", status: .completed), summary("first-call", status: .completed),
+            summary("work", status: .completed)
+        ]))
+        for conversation in [live, replay] {
+            let entries = ConversationProjection.project(conversation).items.compactMap { item -> String? in
+                switch item {
+                case .message(let message): return message.text
+                case .activity(let event): return event.details.first?.value
+                case .turnOutcome: return "Unexpected turn outcome"
+                default: return nil
+                }
+            }
+            #expect(entries == ["Start the task", "assistant: Reconnecting", "Any progress?", "Done", "user: Thanks"])
         }
     }
 

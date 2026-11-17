@@ -490,6 +490,7 @@ struct HistoryServiceTests {
         case .message(let message): "\(message.role == .user ? "user" : "assistant"):\(message.text)"
         case .question(let prompt): "question:\(prompt.itemID)"
         case .timeline(let timeline): "timeline:\(timeline.events.map(\.title).joined(separator: ","))"
+        case .activity(let event): "activity:\(event.title)"
         case .historyEdge(let edge): "edge:\(edge.id)"
         case .turnOutcome(let outcome): "outcome:\(outcome.turnID)"
         case .viewedMedia(let media): "viewed-media:\(media.path)"

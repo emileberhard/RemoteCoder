@@ -2606,9 +2606,11 @@ runtime context and CLI model-change echoes never become visible user input or
 phantom active turns. Text and voice share the same progress instructions and
 agent process; leaving voice stops the output route without interrupting work.
 The shared conversation projection displays a native voice delegation's input
-without its wire envelope. A transcript-tail flush becomes a “Voice conversation
-ended” activity with transcript details. The original provider item remains in
-the canonical checkpoint; malformed envelopes and local authored text stay intact.
+with its spoken excerpt in an expandable row. A transcript-tail flush becomes an
+expandable “Voice conversation ended” row. The projection assembles hang-ups
+using their recorded item positions across turn boundaries. The original
+provider item remains in the canonical checkpoint. Malformed envelopes and
+local authored text stay intact.
 Claude handoffs use escaped fields and pass native tail flushes through once
 as querying synthetic CLI context. Live and replay omit that internal user
 record, while the provider file and voice history retain the transcript.

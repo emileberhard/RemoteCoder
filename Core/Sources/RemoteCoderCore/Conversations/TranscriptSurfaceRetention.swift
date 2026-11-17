@@ -54,7 +54,7 @@ final class TranscriptSurfaceRetention {
         case .timeline(let timeline): !timeline.isLive
         case .compaction(let marker): !marker.compaction.isActive
         case .historyEdge: historyEdgeStatus != .loading
-        case .turnOutcome, .viewedMedia, .publishedVisual: true
+        case .turnOutcome, .viewedMedia, .publishedVisual, .activity: true
         }
     }
 

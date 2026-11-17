@@ -915,6 +915,9 @@ private struct TranscriptContentView<QuestionContent: View, BottomBar: View>: Vi
         case .question(let prompt):
             questionCard(prompt)
             .frame(maxWidth: .infinity, alignment: .leading)
+        case .activity(let event):
+            TimelineEventRow(event: event, isLast: true)
+                .accessibilityIdentifier(item.id)
         case .timeline(let timeline):
             #if os(macOS)
             let toggle = { [actions = nativePresentation.actions] in
@@ -1492,7 +1495,7 @@ struct TranscriptRow: Identifiable, Equatable {
 
     var isReadingTarget: Bool {
         switch kind {
-        case .activity, .content(.message), .content(.question), .content(.compaction), .content(.publishedVisual): true
+        case .activity, .content(.activity), .content(.message), .content(.question), .content(.compaction), .content(.publishedVisual): true
         default: false
         }
     }

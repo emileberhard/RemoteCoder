@@ -22,22 +22,7 @@ enum ConversationItemPresentation {
         }
 
         switch item {
-        case .userMessage(let id, let content, let clientID):
-            guard clientID == nil else { return nil }
-            let transcripts = content.compactMap { input -> String? in
-                guard case .text(let text, _) = input,
-                      case .transcriptTail(let transcript) = RealtimeVoiceMessagePresentation.parse(text) else { return nil }
-                return transcript
-            }
-            guard !transcripts.isEmpty else { return nil }
-            let transcript = transcripts.joined(separator: "\n\n")
-            return JobTimelineEvent(
-                id: "\(jobID)-\(id)", sequence: sequence, kind: .status,
-                title: "Voice conversation ended", subtitle: nil, timestamp: timestamp,
-                details: transcript.isEmpty ? [] : [detail("Transcript", transcript, limit: 8192)]
-            )
-
-        case .agentMessage:
+        case .userMessage, .agentMessage:
             return nil
 
         case .hookPrompt(let id, let fragments):
@@ -326,6 +311,26 @@ enum ConversationItemPresentation {
                 details: [detail("payload", prettyJSON(payload), limit: 2400)]
             )
         }
+    }
+
+    static func voiceActivity(_ voice: RealtimeVoiceMessagePresentation, id: String,
+                              sequence: Int, timestamp: Date?) -> JobTimelineEvent? {
+        let title: String
+        let transcript: String
+        switch voice {
+        case .request(_, let excerpt):
+            guard !excerpt.isEmpty else { return nil }
+            title = "Voice transcript"
+            transcript = excerpt
+        case .transcriptTail(let tail):
+            title = "Voice conversation ended"
+            transcript = tail
+        }
+        return JobTimelineEvent(id: id, sequence: sequence, kind: .status, title: title,
+            subtitle: nil, timestamp: timestamp,
+            details: transcript.isEmpty ? [] : [
+                JobTimelineEventDetail(id: "\(id)-transcript", label: "Transcript", value: clamp(transcript, limit: 8192))
+            ])
     }
 
 

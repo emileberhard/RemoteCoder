@@ -16,9 +16,10 @@ struct RealtimeVoiceMessagePresentationTests {
     }
 
     @Test func wellFormedEnvelopesYieldTheRequestOrTheFlushedTail() {
-        if case .request(let input)? = RealtimeVoiceMessagePresentation.parse(
+        if case .request(let input, let transcript)? = RealtimeVoiceMessagePresentation.parse(
             "<realtime_delegation><input>Example</input></realtime_delegation>") {
             #expect(input == "Example")
+            #expect(transcript.isEmpty)
         } else {
             Issue.record("Expected a voice request")
         }

@@ -31,13 +31,15 @@ enum GatewayEventFixture {
     }
 
     static func item(_ method: String, item: CodexAppServerV2.ThreadItem, threadID: String, turnID: String,
-                     ordinal: Int, startedAtMs: Int, completedAtMs: Int) throws -> TurnScopedGatewayEvent {
+                     ordinal: Int?, startedAtMs: Int, completedAtMs: Int) throws -> TurnScopedGatewayEvent {
         let raw = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(item))
-        return try turn(method, params: [
+        var params: [String: JSONValue] = [
             "threadId": .string(threadID), "turnId": .string(turnID), "item": raw,
-            "startedAtOrdinal": .number(Double(ordinal)), "startedAtMs": .number(Double(startedAtMs)),
+            "startedAtMs": .number(Double(startedAtMs)),
             "completedAtMs": .number(Double(completedAtMs))
-        ])
+        ]
+        params["startedAtOrdinal"] = ordinal.map { .number(Double($0)) }
+        return try turn(method, params: params)
     }
 
     static func delta(_ text: String, threadID: String, turnID: String, itemID: String) throws -> TurnScopedGatewayEvent {

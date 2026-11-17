@@ -4,6 +4,7 @@ enum ChatStreamItem: Identifiable, Sendable, Equatable {
     case message(ChatMessage)
     case question(QuestionPrompt)
     case timeline(JobTimeline)
+    case activity(JobTimelineEvent)
     case historyEdge(HistoryEdge)
     case turnOutcome(TurnOutcome)
     case viewedMedia(ViewedMedia)
@@ -22,6 +23,8 @@ enum ChatStreamItem: Identifiable, Sendable, Equatable {
             return Self.questionRowID(itemID: prompt.itemID)
         case .timeline(let timeline):
             return "timeline-\(timeline.id)"
+        case .activity(let event):
+            return Self.activityRowID(eventID: event.id)
         case .turnOutcome(let outcome):
             return "outcome-\(outcome.turnID)"
         case .viewedMedia(let media):

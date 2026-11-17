@@ -23,6 +23,7 @@ extension ConversationSearchLocation {
                 case .viewedMedia(let media) where media.itemID == itemId: return Reveal(rowID: item.id)
                 case .publishedVisual(let visual) where visual.itemID == itemId: return Reveal(rowID: item.id)
                 case .compaction(let marker) where marker.compaction.itemID == itemId: return Reveal(rowID: item.id)
+                case .activity(let event) where event.id == eventID: return Reveal(rowID: item.id)
                 case .timeline(let group):
                     if let eventID, group.events.contains(where: { $0.id == eventID }) {
                         return Reveal(rowID: ChatStreamItem.activityRowID(eventID: eventID), groupToExpand: group.isExpanded ? nil : group.id)
