@@ -13,8 +13,8 @@ struct ConversationSpeedControl: View {
     let symbolHeight: CGFloat
     var haptics: HapticService = .shared
 
-    private var available: Bool { model.supportsFastMode || model.supportsUltrafast }
-    private var ultrafast: Bool { speed == .ultrafast && model.supportsUltrafast }
+    private var available: Bool { model.supportsFastMode || model.supportsUltrafast || ultrafast }
+    private var ultrafast: Bool { speed == .ultrafast }
     private var useMotion: Bool { !reduceMotion && scenePhase == .active }
     private var value: String { available ? (speed?.label ?? "Unknown") : "Unavailable" }
 
@@ -77,7 +77,7 @@ struct ConversationSpeedControl: View {
         } else {
             Button(action: tap) { artwork }
                 .buttonStyle(ResponsiveButtonStyle(feedback: nil))
-                .accessibilityLabel("Fast mode")
+                .accessibilityLabel(ultrafast ? "Speed" : "Fast mode")
                 .accessibilityValue(value)
                 .accessibilityIdentifier("conversation-fast-mode-toggle")
         }

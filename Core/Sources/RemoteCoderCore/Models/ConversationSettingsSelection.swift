@@ -30,11 +30,11 @@ struct ConversationSettingsSelection: Equatable {
     var fastModeSelection: Bool? { fastMode.selection?.isAccelerated }
 
     var speedSelection: ConversationSpeed? {
-        fastMode.selection.map { model?.supportsSpeed($0) == false ? .standard : $0 }
+        fastMode.displayedSpeed(for: model)
     }
 
     var serviceTierOverride: CodexAppServerV2.ServiceTierOverride? {
-        fastMode.selection?.tierOverride(for: model)
+        fastMode.tierOverride(for: model)
     }
 
     var unavailableMessage: String? {

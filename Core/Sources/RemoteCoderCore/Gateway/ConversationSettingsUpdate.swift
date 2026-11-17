@@ -43,6 +43,16 @@ enum ConversationSpeedState: Equatable, Sendable {
         }
     }
 
+    func displayedSpeed(for model: ModelOption?) -> ConversationSpeed? {
+        if case .readback(.ultrafast, _) = self { return .ultrafast }
+        return selection.map { model?.supportsSpeed($0) == false ? .standard : $0 }
+    }
+
+    func tierOverride(for model: ModelOption?) -> CodexAppServerV2.ServiceTierOverride? {
+        if case .readback(.ultrafast, _) = self, model?.supportsUltrafast != true { return nil }
+        return selection?.tierOverride(for: model)
+    }
+
     /// A native readback may change the state's origin without changing the
     /// requested tier or the user's remembered preference.
     func hasSameChoice(as other: Self) -> Bool {
@@ -70,11 +80,17 @@ enum ConversationSpeedState: Equatable, Sendable {
     func changingModel(from current: ModelOption?, to next: ModelOption) -> Self {
         guard case .readback(let value, let remembered) = self else { return self }
         let preference = remembered ?? value
-        if let preference, current?.supportsSpeed(preference) == true, !next.supportsSpeed(preference) {
-            return .readback(value, remembered: preference)
+        if value == .ultrafast, current?.id != next.id, !next.supportsUltrafast {
+            return .readback(.standard, remembered: preference)
         }
-        if let preference, current?.supportsSpeed(preference) == false, next.supportsSpeed(preference) {
-            return .readback(preference, remembered: remembered)
+        if let preference {
+            let capability: ConversationSpeed = preference == .standard ? .fast : preference
+            if current?.supportsSpeed(capability) == true, !next.supportsSpeed(capability) {
+                return .readback(value, remembered: preference)
+            }
+            if current?.supportsSpeed(capability) == false, next.supportsSpeed(capability) {
+                return .readback(preference, remembered: remembered)
+            }
         }
         return self
     }
@@ -105,7 +121,7 @@ struct ConversationSettingsUpdate: Encodable, Sendable, Equatable {
         self.model = model.id
         effort = reasoning.effort?.rawValue
         self.speedState = speedState
-        serviceTier = speedState.selection?.tierOverride(for: model)
+        serviceTier = speedState.tierOverride(for: model)
     }
 
     private enum CodingKeys: String, CodingKey {

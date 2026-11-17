@@ -44,7 +44,7 @@ struct VoiceCallSettingsBar: View {
 
     private var speed: ConversationSpeed? {
         if let bound {
-            return bound.speedState.selection.map { selectedModel?.supportsSpeed($0) == false ? .standard : $0 }
+            return bound.speedState.displayedSpeed(for: selectedModel)
         }
         return screen.speedSelection
     }

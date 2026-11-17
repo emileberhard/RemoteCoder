@@ -49,11 +49,12 @@ final class TurnDispatcher {
             } else {
                 resolved = model
             }
+            let admittedSpeed = changedRoute ? .readback(speed, remembered: speed) : speedState.reading(thread.extra)
             return Self(model: resolved,
                 reasoning: !changedRoute && reasoning == .automatic ? .automatic
                     : effort.map(ReasoningSelection.effort) ?? (changedRoute ? .automatic : reasoning),
-                serviceTier: speed?.tierOverride(for: resolved) ?? (changedRoute ? .clear : serviceTier),
-                speedState: changedRoute ? .readback(speed, remembered: speed) : speedState.reading(thread.extra),
+                serviceTier: speed == nil ? (changedRoute ? .clear : serviceTier) : admittedSpeed.tierOverride(for: resolved),
+                speedState: admittedSpeed,
                 workingDirectory: workingDirectory, selectionRevision: selectionRevision)
         }
     }

@@ -84,8 +84,9 @@ struct ConversationSettingsSelectionTests {
         let update = ConversationSettingsUpdate(threadID: thread.id, model: Self.codex,
             reasoning: .effort(.low), speedState: selection.fastMode)
         #expect(update.serviceTier == .set(.ultrafast))
+        #expect(selection.fastMode.tierOverride(for: Self.otherCodex) == nil)
         let unsupported = selection.fastMode.changingModel(from: Self.codex, to: Self.otherCodex)
-            .observing(.standard)
+        #expect(unsupported.tierOverride(for: Self.otherCodex) == .clear)
         #expect(unsupported.remembered == .ultrafast)
         #expect(unsupported.changingModel(from: Self.otherCodex, to: Self.codex).selection == .ultrafast)
     }
