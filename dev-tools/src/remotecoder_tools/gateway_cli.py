@@ -334,7 +334,7 @@ async def cmd_turn(args: argparse.Namespace) -> int:
                 model=args.model.strip(), cwd=args.cwd, approval_policy=args.approval_policy.strip(),
                 sandbox=args.sandbox, network_access=not args.no_network_access,
                 timeout_s=args.timeout, input_items=input_items, effort=args.effort,
-                service_tier="priority" if args.service_tier == "fast" else None,
+                service_tier={"standard": None, "fast": "priority", "ultrafast": "ultrafast"}[args.service_tier],
                 exclude_turns=False, purpose=args.purpose, on_event=show,
                 on_thread=thread_started, on_turn=turn_started,
             )
@@ -876,8 +876,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_turn_flags(s)
     s.add_argument(
-        "--service-tier", choices=["standard", "fast"], default="standard",
-        help="Codex service tier for this dispatch; standard clears inherited Fast mode (default: standard)",
+        "--service-tier", choices=["standard", "fast", "ultrafast"], default="standard",
+        help="Codex service tier for this dispatch; standard clears an inherited tier (default: standard)",
     )
     s.add_argument(
         "--purpose",
