@@ -272,6 +272,11 @@ actor ConversationMetadataService {
                         guard !isRetired else { return }
                         if let requestedSpeed = pending.mutation.selection.speed, applied.speed != requestedSpeed,
                            document.pending[id]?.mutation.mutationID == pending.mutation.mutationID {
+                            if document.acknowledged[id] != applied {
+                                acknowledge(applied, for: id)
+                                revision += 1
+                                try await persist()
+                            }
                             needsUpdatedGateway = true
                             continue
                         }
