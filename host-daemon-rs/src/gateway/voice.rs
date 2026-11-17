@@ -395,7 +395,7 @@ impl Gateway {
             "includeStartupContext": false,
             "transport": { "type": "webrtc", "sdp": sdp },
             "version": "v3",
-            "model": "gpt-live-1-codex",
+            "model": "gpt-live-1.1-codex",
         });
         if !initial_items.is_empty() {
             realtime_params["initialItems"] = serde_json::to_value(&initial_items)?;

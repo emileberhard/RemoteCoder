@@ -3,7 +3,7 @@
 One originating gateway owns each call and its existing Codex or Claude agent.
 `self` rings RemoteCoder through PushKit/LiveCommunicationKit. An E.164 number
 uses the configured carrier host's 46elks carrier worker. Both use the existing subscription-backed
-GPT Live V3 WebRTC path (`gpt-live-1-codex`), with normal two-way handoffs and
+GPT Live V3 WebRTC path (`gpt-live-1.1-codex`), with normal two-way handoffs and
 automatic agent progress/results. No extra backend agent or API-key fallback.
 
 ## Owners
