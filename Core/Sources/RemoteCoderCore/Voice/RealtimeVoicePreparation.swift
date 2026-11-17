@@ -29,7 +29,7 @@ final class RealtimeVoicePreparation {
         let model: ModelOption
         let effort: String?
         let serviceTier: CodexAppServerV2.ServiceTierOverride?
-        let fastMode: FastModeState
+        let fastMode: ConversationSpeedState
         let settingsRevision: UInt64
         let hadPendingSettings: Bool
         let cwd: String
@@ -120,7 +120,7 @@ final class RealtimeVoicePreparation {
                 model: contextModel.id,
                 effort: contextEffort,
                 cwd: start.cwd,
-                fastModeState: contextFastMode,
+                speedState: contextFastMode,
                 history: RealtimeVoiceConversationHistory.merged(
                     chatMessages: chatMessages, voiceMessages: storedVoiceMessages
                 )

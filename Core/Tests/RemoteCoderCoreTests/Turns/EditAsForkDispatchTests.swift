@@ -95,7 +95,7 @@ struct EditAsForkDispatchTests {
         let conversationID = UUID()
         let draft = try #require(await fixture.drafts.draft(for: .newChat(UUID())))
         fixture.drafts.setNewChatSetup(NewChatSetup(workingDirectory: "/repo", modelID: "gpt-6.1-sol", reasoning: .automatic,
-                                                    fastMode: nil, forkPoint: point), in: draft)
+                                                    speed: nil, forkPoint: point), in: draft)
         fixture.drafts.setText(text, in: draft)
         let outgoing = try #require(fixture.drafts.beginSending(draft))
         let session = await fixture.conversations.session(conversationID: conversationID, threadID: nil)

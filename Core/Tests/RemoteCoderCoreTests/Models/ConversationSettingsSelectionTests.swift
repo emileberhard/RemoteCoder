@@ -7,7 +7,7 @@ struct ConversationSettingsSelectionTests {
     private static let codex = ModelOption(
         id: "gpt-a", displayName: "GPT A", reasoningEfforts: [.low, .high], supportsFastMode: true,
         supportsDaybreakBlue: false,
-        acceptsImages: true, provider: .codex, modelProvider: nil, isListed: true)
+        acceptsImages: true, provider: .codex, modelProvider: nil, isListed: true, supportsUltrafast: true)
     private static let otherCodex = ModelOption(
         id: "gpt-b", displayName: "GPT B", reasoningEfforts: [.low, .high], supportsFastMode: false,
         supportsDaybreakBlue: false,
@@ -21,27 +21,27 @@ struct ConversationSettingsSelectionTests {
         try #require(ClaudeModelCatalog.model(for: id))
     }
 
-    private func resolve(_ modelID: String, _ effort: String?, _ fastMode: Bool) -> ModelOption? {
+    private func resolve(_ modelID: String, _ effort: String?, _ reportedSpeed: ConversationSpeed?) -> ModelOption? {
         [Self.codex, Self.otherCodex].first { $0.id == modelID } ?? ClaudeModelCatalog.model(for: modelID)
     }
 
     @Test func choosingBumpsTheRevisionAndChoosingForAConversationMakesItReady() {
         var selection = fresh()
         selection.beginLoading()
-        selection.choose(model: Self.otherCodex, reasoning: .effort(.high), fastMode: .selection(true))
+        selection.choose(model: Self.otherCodex, reasoning: .effort(.high), fastMode: .selection(.fast))
         #expect(selection.revision == 1)
         #expect(selection.model == Self.otherCodex)
         #expect(selection.reasoning == .effort(.high))
-        #expect(selection.fastMode == .selection(true))
+        #expect(selection.fastMode == .selection(.fast))
         #expect(selection.isLoading)
-        selection.chooseForConversation(model: Self.codex, reasoning: .automatic, fastMode: .selection(false))
+        selection.chooseForConversation(model: Self.codex, reasoning: .automatic, fastMode: .selection(.standard))
         #expect(selection.revision == 2)
         #expect(selection.isReady)
     }
 
     @Test func adoptingAndRestoringNeverBumpTheRevision() {
         var selection = fresh()
-        selection.adopt(model: Self.otherCodex, reasoning: .effort(.low), fastMode: .selection(false))
+        selection.adopt(model: Self.otherCodex, reasoning: .effort(.low), fastMode: .selection(.standard))
         selection.adoptModel(Self.codex)
         selection.restore(model: Self.otherCodex, reasoning: .automatic, fastMode: .selection(nil))
         #expect(selection.revision == 0)
@@ -50,28 +50,44 @@ struct ConversationSettingsSelectionTests {
 
     @Test func observingBumpsTheRevisionOnlyWhenTheChoiceChanged() {
         var selection = fresh()
-        selection.observe(model: Self.codex, reasoning: .effort(.high), reportedFastMode: true)
+        selection.observe(model: Self.codex, reasoning: .effort(.high), reportedSpeed: .fast)
         #expect(selection.revision == 1)
-        selection.observe(model: Self.codex, reasoning: .effort(.high), reportedFastMode: true)
+        selection.observe(model: Self.codex, reasoning: .effort(.high), reportedSpeed: .fast)
         #expect(selection.revision == 1)
-        #expect(selection.fastMode == .readback(true, remembered: nil))
-        selection.observe(model: Self.codex, reasoning: .effort(.high), reportedFastMode: false)
+        #expect(selection.fastMode == .readback(.fast, remembered: nil))
+        selection.observe(model: Self.codex, reasoning: .effort(.high), reportedSpeed: .standard)
         #expect(selection.revision == 2)
     }
 
     @Test func aTierReadbackIsAcceptedOnlyForTheRevisionItWasReadAt() {
         var selection = fresh()
         let extra = CodexAppServerV2.ThreadExtra(serviceTier: "priority")
-        selection.choose(model: Self.codex, reasoning: .automatic, fastMode: .readback(nil, remembered: true))
+        selection.choose(model: Self.codex, reasoning: .automatic, fastMode: .readback(nil, remembered: .fast))
         let staleRevision = selection.acceptTierReadback(extra, expectedRevision: 0)
         #expect(!staleRevision)
         let missingTier = selection.acceptTierReadback(nil, expectedRevision: 1)
         #expect(!missingTier)
-        #expect(selection.fastMode == .readback(nil, remembered: true))
+        #expect(selection.fastMode == .readback(nil, remembered: .fast))
         let accepted = selection.acceptTierReadback(extra, expectedRevision: 1)
         #expect(accepted)
-        #expect(selection.fastMode.selection == extra.fastModeSelection)
-        #expect(selection.fastMode.remembered == true)
+        #expect(selection.fastMode.selection == extra.speedSelection)
+        #expect(selection.fastMode.remembered == .fast)
+    }
+
+    @Test func ultrafastReadbackSurvivesReasoningChangesAndRestoresAcrossModels() throws {
+        var selection = fresh()
+        let thread = try ThreadFixture.basic("thread-1", updatedAt: 1000, fields: [
+            "model": Self.codex.id, "reasoningEffort": "high", "extra": ["serviceTier": "ultrafast"]
+        ])
+        #expect(selection.restore(from: thread, saved: nil, resolveOption: resolve) == .thread)
+        #expect(selection.speedSelection == .ultrafast)
+        let update = ConversationSettingsUpdate(threadID: thread.id, model: Self.codex,
+            reasoning: .effort(.low), speedState: selection.fastMode)
+        #expect(update.serviceTier == .set(.ultrafast))
+        let unsupported = selection.fastMode.changingModel(from: Self.codex, to: Self.otherCodex)
+            .observing(.standard)
+        #expect(unsupported.remembered == .ultrafast)
+        #expect(unsupported.changingModel(from: Self.otherCodex, to: Self.codex).selection == .ultrafast)
     }
 
     @Test func loadingFailsOnlyWhileLoading() {
@@ -89,18 +105,18 @@ struct ConversationSettingsSelectionTests {
 
     @Test func aRecentCodexSelectionKeepsOnlyTheRememberedTier() throws {
         var selection = fresh()
-        selection.showRecent(model: Self.codex, reasoning: .effort(.low), fastMode: .selection(true))
-        #expect(selection.fastMode == .readback(nil, remembered: true))
-        selection.showRecent(model: try claude(ClaudeModelCatalog.opusModelID), reasoning: .automatic, fastMode: .selection(false))
-        #expect(selection.fastMode == .selection(false))
+        selection.showRecent(model: Self.codex, reasoning: .effort(.low), fastMode: .selection(.fast))
+        #expect(selection.fastMode == .readback(nil, remembered: .fast))
+        selection.showRecent(model: try claude(ClaudeModelCatalog.opusModelID), reasoning: .automatic, fastMode: .selection(.standard))
+        #expect(selection.fastMode == .selection(.standard))
         #expect(selection.isReady)
     }
 
     @Test func onlyClaudeOpusSendsTheFastTier() throws {
         var selection = fresh()
-        selection.choose(model: try claude(ClaudeModelCatalog.opusModelID), reasoning: .automatic, fastMode: .selection(true))
+        selection.choose(model: try claude(ClaudeModelCatalog.opusModelID), reasoning: .automatic, fastMode: .selection(.fast))
         #expect(selection.serviceTierOverride == .set(.fast))
-        selection.choose(model: try claude(ClaudeModelCatalog.sonnetModelID), reasoning: .automatic, fastMode: .selection(true))
+        selection.choose(model: try claude(ClaudeModelCatalog.sonnetModelID), reasoning: .automatic, fastMode: .selection(.fast))
         #expect(selection.serviceTierOverride == .clear)
     }
 
@@ -119,7 +135,7 @@ struct ConversationSettingsSelectionTests {
         #expect(selection.restore(from: thread, saved: saved, resolveOption: resolve) == .thread)
         #expect(selection.model == Self.otherCodex)
         #expect(selection.reasoning == .automatic)
-        #expect(selection.fastMode == .readback(nil, remembered: true))
+        #expect(selection.fastMode == .readback(nil, remembered: .fast))
         #expect(selection.revision == 0)
     }
 
@@ -140,7 +156,7 @@ struct ConversationSettingsSelectionTests {
         #expect(selection.restore(from: thread, saved: saved, resolveOption: resolve) == .savedSelection)
         #expect(selection.model == (try claude(ClaudeModelCatalog.sonnetModelID)))
         #expect(selection.reasoning == .effort(.high))
-        #expect(selection.fastMode == .selection(false))
+        #expect(selection.fastMode == .selection(.standard))
     }
 
     @Test(arguments: [

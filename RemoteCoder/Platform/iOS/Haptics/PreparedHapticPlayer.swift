@@ -27,6 +27,23 @@ extension HapticAccent {
                     .init(parameterID: .hapticSharpness, value: 0.85)
                 ], relativeTime: 0.035)
             ], parameters: [])
+        case .speedBoost:
+            return try CHHapticPattern(events: [
+                CHHapticEvent(eventType: .hapticContinuous, parameters: [
+                    .init(parameterID: .hapticIntensity, value: 0.42),
+                    .init(parameterID: .hapticSharpness, value: 0.26)
+                ], relativeTime: 0, duration: 0.084),
+                CHHapticEvent(eventType: .hapticTransient, parameters: [
+                    .init(parameterID: .hapticIntensity, value: 0.93),
+                    .init(parameterID: .hapticSharpness, value: 0.83)
+                ], relativeTime: 0.084)
+            ], parameterCurves: [
+                .init(parameterID: .hapticIntensityControl, controlPoints: [
+                    .init(relativeTime: 0, value: 0.25),
+                    .init(relativeTime: 0.042, value: 0.56),
+                    .init(relativeTime: 0.084, value: 1)
+                ], relativeTime: 0)
+            ])
         case .seat:
             return try CHHapticPattern(events: [
                 CHHapticEvent(eventType: .hapticTransient, parameters: [
@@ -68,7 +85,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
     func prepare(canPlay: @escaping @MainActor () -> Bool) {
         self.canPlay = canPlay
         guard !ending, canPlay() else { return }
-        for event in [HapticEvent.buttonPress, .selection, .commit, .sliderStep, .sliderGrab, .lift, .sliderMinimum, .sliderMaximum, .sliderRelease, .sliderSettle] {
+        for event in [HapticEvent.buttonPress, .selection, .commit, .sliderStep, .sliderGrab, .lift, .sliderMinimum, .sliderMaximum, .sliderRelease, .sliderSettle, .speedBoost] {
             native.prepare(event.recipe)
         }
         prepareCustomEngine()
@@ -95,7 +112,7 @@ final class PreparedHapticPlayer: HapticInteractionPlaying {
         native.play(event)
     }
 
-    /// Let the finite seating accent finish before releasing its engine.
+    /// Let the finite accent finish before releasing its engine.
     func finish() {
         guard !ending else { return }
         ending = true

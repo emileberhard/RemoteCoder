@@ -55,7 +55,7 @@ struct AccountIsolationTests {
         let source = try #require(workspace.selectedScreen)
         #expect(await source.prepareDraft())
         source.selectModel(try CodexModelFixtures.option(CodexModelFixtures.astraID), for: nil)
-        source.selectFastMode(fastMode, for: nil)
+        source.selectSpeed(ConversationSpeed(accelerated: fastMode), for: nil)
         source.input = "Keep this prompt"
         let attachment = ComposerAttachment.text("Keep this attachment")
         source.composerAttachments = [attachment]

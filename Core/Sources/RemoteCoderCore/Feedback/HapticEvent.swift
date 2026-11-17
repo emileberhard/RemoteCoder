@@ -2,7 +2,7 @@ import Foundation
 
 /// Meaning, not a screen-specific vibration. This catalog owns every recipe.
 enum HapticEvent: String, CaseIterable, Sendable {
-    case buttonPress, iconPress, selection, toggleOn, toggleOff
+    case buttonPress, iconPress, selection, toggleOn, toggleOff, speedBoost
     case lift, sliderGrab, sliderStep, sliderMinimum, sliderMaximum, sliderRelease, sliderSettle
     case commit, copied, disclosure, success, warning, error, refused, photoCapture
 
@@ -14,6 +14,7 @@ enum HapticEvent: String, CaseIterable, Sendable {
         case .sliderStep: .impact(.rigid, intensity: 0.5)
         case .toggleOn: .impact(.rigid, intensity: 0.85)
         case .toggleOff: .impact(.soft, intensity: 1)
+        case .speedBoost: .impact(.rigid, intensity: 1)
         case .lift: .impact(.rigid, intensity: 1)
         case .sliderGrab: .impact(.soft, intensity: 0.75)
         case .sliderMinimum: .impact(.rigid, intensity: 0.7)
@@ -36,6 +37,7 @@ enum HapticEvent: String, CaseIterable, Sendable {
         switch self {
         case .lift: .lift
         case .sliderSettle: .seat
+        case .speedBoost: .speedBoost
         default: nil
         }
     }
@@ -51,9 +53,9 @@ enum HapticRecipe: Equatable {
     case selection, success, warning, error
 }
 
-/// Two short, haptics-only accents. Native impacts remain the cold/error fallback.
+/// Short, haptics-only accents. Native impacts remain the cold/error fallback.
 enum HapticAccent: CaseIterable, Hashable {
-    case lift, seat
+    case lift, seat, speedBoost
 }
 
 /// Remote occurrences are host-qualified; repeated explicit local actions have no key.

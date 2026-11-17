@@ -42,9 +42,11 @@ struct VoiceCallSettingsBar: View {
         bound?.reasoningSelection ?? screen.reasoningSelection
     }
 
-    private var fastMode: Bool? {
-        if let bound { return bound.fastMode }
-        return screen.fastModeSelection
+    private var speed: ConversationSpeed? {
+        if let bound {
+            return bound.speedState.selection.map { selectedModel?.supportsSpeed($0) == false ? .standard : $0 }
+        }
+        return screen.speedSelection
     }
 
     var body: some View {
@@ -64,9 +66,9 @@ struct VoiceCallSettingsBar: View {
                 guard let bound else { return }
                 screen.selectReasoning(selection, for: bound.threadId)
             }),
-            fastMode: Binding(get: { fastMode }, set: { enabled in
+            speed: Binding(get: { speed }, set: { speed in
                 guard let bound else { return }
-                if let enabled { screen.selectFastMode(enabled, for: bound.threadId) }
+                if let speed { screen.selectSpeed(speed, for: bound.threadId) }
             })
         ) {
             EmptyView()

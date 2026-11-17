@@ -101,6 +101,7 @@ actor ConversationMetadataService {
         let preference = document.acknowledged[sessionID] ?? document.legacy?[sessionID]
         guard var observed = document.observed?[sessionID]?.metadata else { return preference }
         observed.fastModeEnabled = preference?.fastModeEnabled
+        observed.speed = preference?.speed
         return observed
     }
 
@@ -113,7 +114,8 @@ actor ConversationMetadataService {
             let settings = notification.threadSettings
             let reasoning = settings.effort.map { "effort-\($0.rawValue)" } ?? "automatic"
             let observed = ConversationMetadata(sessionID: notification.threadId, modelID: settings.model,
-                reasoningSelectionID: reasoning, fastModeEnabled: settings.fastModeSelection, updatedAt: observedAt)
+                reasoningSelectionID: reasoning, fastModeEnabled: settings.fastModeSelection, speed: settings.speedSelection,
+                updatedAt: observedAt)
             let acknowledgedRevision = document.acknowledged[notification.threadId]?.serverRevision
             if document.observed?[notification.threadId]?.metadata.selection != observed.selection
                 || document.observed?[notification.threadId]?.acknowledgedRevision != acknowledgedRevision {
@@ -127,19 +129,19 @@ actor ConversationMetadataService {
         } catch { failed(error) }
     }
 
-    func upsert(sessionID: String, modelID: String, reasoningSelectionID: String, fastModeEnabled: Bool?,
+    func upsert(sessionID: String, modelID: String, reasoningSelectionID: String, speed: ConversationSpeed?,
                 source: ConversationMetadata.Source) async {
         guard !isRetired else { return }
         do {
             try await load()
             guard !isRetired else { return }
-            let rememberedFastMode = document.pending[sessionID]?.metadata.fastModeEnabled
-                ?? document.acknowledged[sessionID]?.fastModeEnabled
-                ?? document.legacy?[sessionID]?.fastModeEnabled
+            let preference = speed ?? document.pending[sessionID]?.metadata.rememberedSpeed
+                ?? document.acknowledged[sessionID]?.rememberedSpeed
+                ?? document.legacy?[sessionID]?.rememberedSpeed
             let selection = ConversationMetadataSelection(sessionID: sessionID,
                 modelID: modelID.trimmingCharacters(in: .whitespacesAndNewlines),
                 reasoningSelectionID: reasoningSelectionID.trimmingCharacters(in: .whitespacesAndNewlines),
-                fastModeEnabled: fastModeEnabled ?? rememberedFastMode, source: source)
+                fastModeEnabled: preference?.isAccelerated, speed: preference, source: source)
             guard !selection.modelID.isEmpty, !selection.reasoningSelectionID.isEmpty else { return }
             if document.pending[sessionID]?.mutation.selection == selection {
                 try await persist()
@@ -339,7 +341,7 @@ actor ConversationMetadataService {
                         observations[id] = nil
                     } else if current.modelID == observed.metadata.modelID
                         && current.reasoningSelectionID == observed.metadata.reasoningSelectionID
-                        && current.fastModeEnabled == observed.metadata.fastModeEnabled {
+                        && current.rememberedSpeed == observed.metadata.rememberedSpeed {
                         observations[id] = nil
                     } else if observed.acknowledgedRevision == nil, let revision = current.serverRevision {
                         observed.acknowledgedRevision = revision

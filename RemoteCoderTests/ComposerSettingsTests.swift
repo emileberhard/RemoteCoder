@@ -27,7 +27,7 @@ struct ComposerSettingsTests {
         let option = try CodexModelFixtures.option(CodexModelFixtures.lunaID)
         model.applyConversationSettings(ConversationSettingsUpdate(
             threadID: "failed-thread", model: option, reasoning: .effort(.medium),
-            fastModeState: .selection(false)
+            speedState: .selection(.standard)
         ))
         #expect(model.isUpdatingSettings(for: "failed-thread"))
         #expect(!model.isUpdatingSettings(for: "other-thread"))

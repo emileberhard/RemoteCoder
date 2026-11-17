@@ -9,14 +9,17 @@ struct NewChatSetup: Codable, Equatable, Sendable {
     let workingDirectory: String?
     let modelID: String?
     let reasoning: String
-    let fastMode: Bool?
+    private let fastMode: Bool?
+    private let selectedSpeed: ConversationSpeed?
+    var speed: ConversationSpeed? { selectedSpeed ?? fastMode.map(ConversationSpeed.init(accelerated:)) }
     let forkPoint: ForkPoint?
 
-    init(workingDirectory: String?, modelID: String?, reasoning: ReasoningSelection, fastMode: Bool?, forkPoint: ForkPoint?) {
+    init(workingDirectory: String?, modelID: String?, reasoning: ReasoningSelection, speed: ConversationSpeed?, forkPoint: ForkPoint?) {
         self.workingDirectory = workingDirectory
         self.modelID = modelID
         self.reasoning = reasoning.id
-        self.fastMode = fastMode
+        fastMode = speed?.isAccelerated
+        selectedSpeed = speed == .ultrafast ? speed : nil
         self.forkPoint = forkPoint
     }
 

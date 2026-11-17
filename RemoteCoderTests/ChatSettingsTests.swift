@@ -30,7 +30,7 @@ struct ChatSettingsTests {
             reasoningSelectionID: reasoning.id, fastModeEnabled: true, source: .selection, updatedAt: .now))
         #expect(screen.selectedModel?.supportsDaybreakBlue == true)
         #expect(screen.reasoningSelection == reasoning)
-        #expect(screen.fastModeState == .readback(nil, remembered: true))
+        #expect(screen.speedState == .readback(nil, remembered: .fast))
 
         let replacement = CodexModelFixtures.wireModel(removesModel ? CodexModelFixtures.astraID : modelID,
             name: "Current discovery", efforts: ["low", "medium", "high"], cyberPrograms: ["standard"])
@@ -42,7 +42,7 @@ struct ChatSettingsTests {
         #expect(screen.selectedModel?.isListed == !removesModel)
         #expect(screen.selectedModel?.supportsDaybreakBlue == false)
         #expect(screen.reasoningSelection == reasoning)
-        #expect(screen.fastModeState == .readback(nil, remembered: true))
+        #expect(screen.speedState == .readback(nil, remembered: .fast))
         if removesModel {
             #expect(screen.selectedModel?.reasoningEfforts == (reasoning.effort.map { [$0] } ?? []))
         }
@@ -68,7 +68,7 @@ struct ChatSettingsTests {
         #expect(screen.selectedModel?.isListed == true)
         #expect(screen.selectedModel?.supportsDaybreakBlue == true)
         #expect(screen.reasoningSelection == reasoning)
-        #expect(screen.fastModeState == .readback(nil, remembered: true))
+        #expect(screen.speedState == .readback(nil, remembered: .fast))
         screen.input = "Continue after the model returned"
         #expect(await fixture.workspace.send(from: screen))
         try #require(await waitUntil { await gateway.requests("turn/start").count == 2 })
@@ -120,7 +120,7 @@ struct ChatSettingsTests {
         let astra = try CodexModelFixtures.option(CodexModelFixtures.astraID)
         model.selectModel(astra, for: nil)
         model.selectReasoning(.effort(.xhigh), for: nil)
-        model.selectFastMode(true, for: nil)
+        model.selectSpeed(.fast, for: nil)
         let thread = try fixture.thread("claude_existing", updatedAt: 100)
         let saved = ConversationMetadata(sessionID: thread.id, modelID: "opus",
             reasoningSelectionID: "effort-low", fastModeEnabled: false, updatedAt: .now)
@@ -365,7 +365,7 @@ struct ChatSettingsTests {
         let astra = try CodexModelFixtures.option(CodexModelFixtures.astraID)
         let spark = try CodexModelFixtures.option(CodexModelFixtures.sparkID)
         model.selectModel(astra, for: nil)
-        model.selectFastMode(true, for: nil)
+        model.selectSpeed(.fast, for: nil)
         fixture.defaults.set(defaultModel, forKey: NewChatDefaults.modelDefaultKey)
         model.startNewConversation()
         model.selectDefaultModel(for: .codex)
@@ -375,7 +375,7 @@ struct ChatSettingsTests {
         #expect(model.serviceTierOverride == .clear)
         model.selectModel(astra, for: nil)
         #expect(model.fastModeEnabled)
-        model.selectFastMode(false, for: nil)
+        model.selectSpeed(.standard, for: nil)
         model.selectModel(spark, for: nil)
         model.selectModel(astra, for: nil)
         #expect(!model.fastModeEnabled)
@@ -417,7 +417,7 @@ struct ChatSettingsTests {
         model.selectReasoning(.effort(.medium), for: thread.id)
         #expect(model.fastModeSelection == nil)
         #expect(model.serviceTierOverride == nil)
-        model.selectFastMode(false, for: thread.id)
+        model.selectSpeed(.standard, for: thread.id)
         #expect(model.fastModeSelection == false)
         #expect(model.serviceTierOverride == .clear)
     }
@@ -469,10 +469,10 @@ struct ChatSettingsTests {
         model.startNewConversation()
         model.resumeConversation(thread)
         #expect(model.fastModeSelection == nil)
-        #expect(model.fastModeState.remembered == true)
+        #expect(model.speedState.remembered == .fast)
         #expect(model.restorePendingConversationSettings(for: thread.id))
         #expect(model.fastModeSelection == false)
-        #expect(model.fastModeState.remembered == true)
+        #expect(model.speedState.remembered == .fast)
         model.selectModel(astra, for: thread.id)
         #expect(model.fastModeSelection == true)
         #expect(model.serviceTierOverride == .set(.fast))
@@ -496,10 +496,10 @@ struct ChatSettingsTests {
         model.resumeConversation(thread)
         #expect(model.selectedModel == spark)
         #expect(model.fastModeSelection == nil)
-        #expect(model.fastModeState.remembered == true)
+        #expect(model.speedState.remembered == .fast)
         model.selectReasoning(.effort(.medium), for: thread.id)
         #expect(model.fastModeSelection == nil)
-        #expect(model.fastModeState.remembered == true)
+        #expect(model.speedState.remembered == .fast)
         model.selectModel(astra, for: thread.id)
         #expect(model.fastModeSelection == true)
         #expect(model.serviceTierOverride == .set(.fast))
@@ -518,7 +518,7 @@ struct ChatSettingsTests {
             .save(SessionMetadataLocalState(acknowledged: [threadID: saved]))
         let model = try #require(fixture.workspace.selectedScreen)
         model.selectModel(astra, for: nil)
-        model.selectFastMode(false, for: nil)
+        model.selectSpeed(.standard, for: nil)
         model.setActiveSessionID("different-visible-thread")
         let callID = UUID()
         let push = AgentCallPush(callId: callID, hostId: fixture.mini.id,
@@ -528,15 +528,15 @@ struct ChatSettingsTests {
             cwd: "/repo", model: spark.id, effort: "medium")
         let context = try status.voiceContext(for: push, at: .now)
         #expect(context.fastModeSelection == nil)
-        let remembered = await model.incomingVoiceFastModeState(for: context)
-        #expect(remembered == .readback(nil, remembered: true))
+        let remembered = await model.incomingVoiceConversationSpeedState(for: context)
+        #expect(remembered == .readback(nil, remembered: .fast))
         #expect(model.fastModeSelection == false)
         var differentModel = context
         differentModel.model = astra.id
-        #expect(await model.incomingVoiceFastModeState(for: differentModel).remembered == true)
+        #expect(await model.incomingVoiceConversationSpeedState(for: differentModel).remembered == true)
         var explicitChoice = context
-        explicitChoice.fastModeState = .selection(false)
-        #expect(await model.incomingVoiceFastModeState(for: explicitChoice).remembered == false)
+        explicitChoice.speedState = .selection(.standard)
+        #expect(await model.incomingVoiceConversationSpeedState(for: explicitChoice).remembered == false)
     }
 
     @Test func incomingReadCannotPublishOldOffAfterFastEditAndNavigation() async throws {
@@ -567,13 +567,13 @@ struct ChatSettingsTests {
                 ownsCall: { true }, readThread: { _ in try await suspended.read() }).context
         }
         await suspended.waitUntilStarted()
-        model.selectFastMode(true, for: thread.id)
+        model.selectSpeed(.fast, for: thread.id)
         model.setActiveSessionID("other-thread")
         #expect(await waitUntil { !model.isUpdatingSettings(for: thread.id) })
         await suspended.complete(with: .init(thread))
         let result = await read.value
         #expect(result.fastModeSelection == nil)
-        #expect(result.fastModeState.remembered == true)
+        #expect(result.speedState.remembered == .fast)
     }
 
     @Test func incomingFullReadReplacesRingingAcknowledgementAfterNavigation() async throws {
@@ -597,7 +597,7 @@ struct ChatSettingsTests {
         model.setActiveSessionID(thread.id)
         controller.bindIncomingSettingsOwner(push: push, model: model.target, deviceID: "test")
         controller.applyConversationSettings(ConversationSettingsUpdate(threadID: thread.id,
-            model: astra, reasoning: .effort(.medium), fastModeState: .selection(true)),
+            model: astra, reasoning: .effort(.medium), speedState: .selection(.fast)),
             hostID: model.hostID)
         model.setActiveSessionID("other-thread")
         await model.target.apply(gatewayEvent: try settingsEvent(threadID: thread.id, model: astra.id,
@@ -656,8 +656,8 @@ struct ChatSettingsTests {
         let published = controller.publishConversationContext(prepared)
         #expect(published.fastModeSelection == false)
         #expect(published.effort == "high")
-        #expect(published.fastModeState.remembered == true)
-        #expect(controller.conversationContext?.fastModeState.remembered == true)
+        #expect(published.speedState.remembered == .fast)
+        #expect(controller.conversationContext?.speedState.remembered == .fast)
     }
 
     @Test(arguments: [
@@ -685,7 +685,7 @@ struct ChatSettingsTests {
         model.setActiveSessionID(thread.id)
         controller.bindIncomingSettingsOwner(push: push, model: model.target, deviceID: "test")
         controller.applyConversationSettings(ConversationSettingsUpdate(threadID: thread.id,
-            model: astra, reasoning: .effort(.medium), fastModeState: .selection(true)),
+            model: astra, reasoning: .effort(.medium), speedState: .selection(.fast)),
             hostID: model.hostID)
         let context = try status.voiceContext(for: push, at: .now)
         let readResponse = CodexAppServerV2.ThreadReadResponse(thread)
@@ -726,7 +726,7 @@ struct ChatSettingsTests {
         model.setActiveSessionID(thread.id)
         controller.bindIncomingSettingsOwner(push: push, model: model.target, deviceID: "test")
         controller.applyConversationSettings(ConversationSettingsUpdate(threadID: thread.id,
-            model: fable, reasoning: .effort(.xhigh), fastModeState: .readback(nil, remembered: nil)),
+            model: fable, reasoning: .effort(.xhigh), speedState: .readback(nil, remembered: nil)),
             hostID: model.hostID)
         model.setActiveSessionID("other-thread")
         let context = try status.voiceContext(for: push, at: .now)
@@ -741,7 +741,7 @@ struct ChatSettingsTests {
             hostID: model.hostID))
         if newerEditDuringAnswer {
             controller.applyConversationSettings(ConversationSettingsUpdate(threadID: thread.id,
-                model: fable, reasoning: .effort(.max), fastModeState: .readback(nil, remembered: nil)),
+                model: fable, reasoning: .effort(.max), speedState: .readback(nil, remembered: nil)),
                 hostID: model.hostID)
         }
         let answered = controller.publishIncomingAnswerContext(published,
@@ -775,9 +775,9 @@ struct ChatSettingsTests {
         let model = try #require(fixture.workspace.selectedScreen)
         let astra = try CodexModelFixtures.option(CodexModelFixtures.astraID)
         model.selectModel(astra, for: nil)
-        model.selectFastMode(!savedFast, for: nil)
+        model.selectSpeed(ConversationSpeed(accelerated: !savedFast), for: nil)
         model.setActiveSessionID("previous-b")
-        #expect(model.fastModeState.remembered == !savedFast)
+        #expect(model.speedState.remembered == ConversationSpeed(accelerated: !savedFast))
         var thread = try fixture.thread("uncached-a", updatedAt: 100)
         thread.model = astra.id
         try await ConversationMetadataStore(hostID: fixture.mini.id, storage: fixture.temporaryStorage.storage).save(.init(acknowledged: [
@@ -787,17 +787,17 @@ struct ChatSettingsTests {
         model.resumeConversation(thread)
         #expect(model.isLoadingConversationSettings)
         #expect(model.fastModeSelection == nil)
-        #expect(model.fastModeState.remembered == nil)
+        #expect(model.speedState.remembered == nil)
         try #require(await waitUntil { model.loadingTranscriptID == nil && model.areConversationSettingsReady })
         #expect(model.fastModeSelection == nil)
-        #expect(model.fastModeState.remembered == savedFast)
+        #expect(model.speedState.remembered == ConversationSpeed(accelerated: savedFast))
         await model.target.apply(gatewayEvent: try settingsEvent(threadID: thread.id,
             model: astra.id, effort: "medium", tier: nil))
         #expect(model.areConversationSettingsReady)
         #expect(model.fastModeSelection == false)
-        #expect(model.fastModeState.remembered == savedFast)
+        #expect(model.speedState.remembered == ConversationSpeed(accelerated: savedFast))
         model.selectReasoning(.effort(.high), for: thread.id)
-        #expect(model.fastModeState.remembered == savedFast)
+        #expect(model.speedState.remembered == ConversationSpeed(accelerated: savedFast))
         #expect(try await ConversationMetadataStore(hostID: fixture.mini.id, storage: fixture.temporaryStorage.storage)
             .load().acknowledged[thread.id]?.fastModeEnabled == savedFast)
     }
@@ -831,14 +831,14 @@ struct ChatSettingsTests {
         model.selectModel(spark, for: thread.id)
         #expect(model.fastModeSelection == true)
         #expect(model.serviceTierOverride == .clear)
-        #expect(model.fastModeState.remembered == true)
+        #expect(model.speedState.remembered == .fast)
         var reopened = thread
         reopened.model = spark.id
         reopened.extra = .init(serviceTier: nil)
         model.restorePicker(from: reopened, saved: ConversationMetadata(
             sessionID: thread.id, modelID: spark.id, reasoningSelectionID: "automatic",
             fastModeEnabled: true, source: .selection, updatedAt: .now))
-        #expect(model.fastModeState.remembered == true)
+        #expect(model.speedState.remembered == .fast)
         model.selectModel(astra, for: thread.id)
         #expect(model.fastModeSelection == true)
         #expect(model.serviceTierOverride == .set(.fast))
@@ -864,7 +864,7 @@ struct ChatSettingsTests {
         #expect(model.serviceTierOverride == nil)
         model.selectReasoning(.effort(.medium), for: thread.id)
         #expect(model.fastModeSelection == nil)
-        #expect(model.fastModeState.remembered == savedFast)
+        #expect(model.speedState.remembered == ConversationSpeed(accelerated: savedFast))
         #expect(model.serviceTierOverride == nil)
         model.selectModel(astra, for: thread.id)
         #expect(model.fastModeSelection == savedFast)
@@ -878,7 +878,7 @@ struct ChatSettingsTests {
         let model = try #require(fixture.workspace.selectedScreen)
         let astra = try CodexModelFixtures.option(CodexModelFixtures.astraID)
         model.selectModel(astra, for: nil)
-        model.selectFastMode(true, for: nil)
+        model.selectSpeed(.fast, for: nil)
         model.selectReasoning(.effort(.medium), for: nil)
         model.setActiveSessionID("restored-tier")
         let revision = model.settingsSelectionRevision
@@ -887,23 +887,23 @@ struct ChatSettingsTests {
             model: astra.id, effort: "medium", tier: "fast"))
         let selectedRevision = model.settingsSelectionRevision
         #expect(selectedRevision == revision)
-        #expect(model.fastModeState == .readback(true, remembered: true))
+        #expect(model.speedState == .readback(.fast, remembered: .fast))
         await model.target.apply(gatewayEvent: try settingsEvent(threadID: "restored-tier",
             model: astra.id, effort: "medium", tier: "fast"))
         #expect(model.settingsSelectionRevision == selectedRevision)
 
         await model.target.apply(gatewayEvent: try settingsEvent(threadID: "restored-tier",
             model: astra.id, effort: "medium", tier: "flex"))
-        let unknown = model.fastModeState
-        #expect(unknown == .readback(nil, remembered: true))
+        let unknown = model.speedState
+        #expect(unknown == .readback(nil, remembered: .fast))
         #expect(model.settingsSelectionRevision != selectedRevision)
 
         let unknownRevision = model.settingsSelectionRevision
         await model.target.apply(gatewayEvent: try settingsEvent(threadID: "restored-tier",
             model: astra.id, effort: "medium", tier: "future"))
         #expect(model.settingsSelectionRevision == unknownRevision)
-        #expect(model.fastModeState.hasSameChoice(as: unknown))
-        #expect(!model.fastModeState.hasSameChoice(as: .selection(false)))
+        #expect(model.speedState.hasSameChoice(as: unknown))
+        #expect(!model.speedState.hasSameChoice(as: .selection(.standard)))
     }
 
     @Test(arguments: [false, true], ["flex", "future"])
@@ -916,7 +916,7 @@ struct ChatSettingsTests {
         let model = try #require(fixture.workspace.selectedScreen)
         let astra = try CodexModelFixtures.option(CodexModelFixtures.astraID)
         model.selectModel(astra, for: nil)
-        model.selectFastMode(previousFast, for: nil)
+        model.selectSpeed(ConversationSpeed(accelerated: previousFast), for: nil)
         model.setActiveSessionID("live-tier")
         let event = try #require(GatewayNotificationRouting.route(GatewayEventFixture.notification(
             method: "thread/settings/updated", params: .object([
@@ -946,7 +946,7 @@ struct ChatSettingsTests {
         model.restorePicker(from: thread, saved: nil)
         #expect(model.fastModeSelection == nil)
         let dispatchRevision = model.settingsSelectionRevision
-        model.selectFastMode(true, for: nil)
+        model.selectSpeed(.fast, for: nil)
         model.setActiveSessionID(thread.id)
         #expect(!model.acceptThreadTierReadback(.init(serviceTier: nil), threadID: thread.id,
             selectionRevision: dispatchRevision))
@@ -965,7 +965,7 @@ struct ChatSettingsTests {
         let model = try #require(fixture.workspace.selectedScreen)
         let astra = try CodexModelFixtures.option(CodexModelFixtures.astraID)
         model.selectModel(astra, for: nil)
-        model.selectFastMode(capturedFast, for: nil)
+        model.selectSpeed(ConversationSpeed(accelerated: capturedFast), for: nil)
         model.setActiveSessionID("resume-tier")
         let revision = model.settingsSelectionRevision
         #expect(model.acceptThreadTierReadback(.init(serviceTier: tier), threadID: "resume-tier",
@@ -982,7 +982,7 @@ struct ChatSettingsTests {
         defer { fixture.workspace.teardown(); await fixture.cleanUp() }
         let model = try #require(fixture.workspace.selectedScreen)
         model.selectModel(try CodexModelFixtures.option(CodexModelFixtures.astraID), for: nil)
-        model.selectFastMode(false, for: nil)
+        model.selectSpeed(.standard, for: nil)
         model.setActiveSessionID("visible")
         #expect(model.forkServiceTier(for: "visible") == .clear)
         #expect(model.forkServiceTier(for: "drawer-thread") == nil)
@@ -1003,7 +1003,7 @@ struct ChatSettingsTests {
         await screen.target.refreshCodexModels()
         screen.selectModel(try CodexModelFixtures.option(CodexModelFixtures.solID), for: nil)
         screen.selectReasoning(.effort(.medium), for: nil)
-        screen.selectFastMode(fastMode, for: nil)
+        screen.selectSpeed(ConversationSpeed(accelerated: fastMode), for: nil)
         screen.selectWorkingDirectory("/repo")
         return screen
     }
@@ -1043,7 +1043,7 @@ struct ChatSettingsTests {
         let preparation = Task { try await screen.prepareRealtimeVoiceConversation() }
         await gateway.waitForHeldThreadStart()
         screen.selectReasoning(.effort(.high), for: nil)
-        screen.selectFastMode(false, for: nil)
+        screen.selectSpeed(.standard, for: nil)
         await gateway.releaseHeldThreadStart()
         let context = try await preparation.value
 

@@ -105,6 +105,15 @@ struct ModelOption: Identifiable, Hashable, Sendable {
     let provider: AgentProvider
     let modelProvider: CodexAppServerV2.ModelProvider?
     let isListed: Bool
+    var supportsUltrafast = false
+
+    func supportsSpeed(_ speed: ConversationSpeed) -> Bool {
+        switch speed {
+        case .standard: true
+        case .fast: supportsFastMode
+        case .ultrafast: supportsUltrafast
+        }
+    }
 
     var pickerTitle: String {
         modelProvider.map { "\(displayName) · \($0.name)" } ?? displayName
@@ -115,17 +124,17 @@ struct ModelOption: Identifiable, Hashable, Sendable {
     }
 
     static func unlisted(id: String, modelProvider: CodexAppServerV2.ModelProvider?, reportedEffort: ReasoningEffort?,
-                         reportedFastMode: Bool, provider: AgentProvider = .codex) -> ModelOption {
+                         reportedSpeed: ConversationSpeed?, provider: AgentProvider = .codex) -> ModelOption {
         ModelOption(
             id: id,
             displayName: modelProvider == nil ? id : readableName(of: id),
             reasoningEfforts: reportedEffort.map { [$0] } ?? [],
-            supportsFastMode: reportedFastMode,
+            supportsFastMode: reportedSpeed == .fast,
             supportsDaybreakBlue: false,
             acceptsImages: true,
             provider: provider,
             modelProvider: modelProvider,
-            isListed: false
+            isListed: false, supportsUltrafast: provider == .codex && reportedSpeed == .ultrafast
         )
     }
 

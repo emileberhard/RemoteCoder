@@ -46,16 +46,20 @@ extension CodexAppServerV2 {
 
     enum ServiceTier: String, Codable, Sendable, Hashable {
         case fast
+        case ultrafast
         case flex
 
         init?(wireValue: String) {
             self.init(rawValue: wireValue == "priority" ? "fast" : wireValue)
         }
 
-        static func fastModeSelection(for wireValue: String?) -> Bool? {
-            guard let wireValue else { return false }
-            if wireValue == "default" { return false }
-            return Self(wireValue: wireValue) == .fast ? true : nil
+        static func speedSelection(for wireValue: String?) -> ConversationSpeed? {
+            guard let wireValue, wireValue != "default" else { return .standard }
+            return switch Self(wireValue: wireValue) {
+            case .fast: .fast
+            case .ultrafast: .ultrafast
+            case .flex, nil: nil
+            }
         }
 
         init(from decoder: Decoder) throws {

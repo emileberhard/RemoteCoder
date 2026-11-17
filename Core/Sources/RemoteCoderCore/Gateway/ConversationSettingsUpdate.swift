@@ -1,16 +1,43 @@
 import Foundation
 
-enum FastModeState: Equatable, Sendable {
-    case selection(Bool?)
-    case readback(Bool?, remembered: Bool?)
+enum ConversationSpeed: String, Codable, CaseIterable, Sendable {
+    case standard, fast, ultrafast
 
-    var selection: Bool? {
+    init(accelerated: Bool) {
+        self = accelerated ? .fast : .standard
+    }
+
+    var isAccelerated: Bool { self != .standard }
+
+    var label: String {
+        switch self {
+        case .standard: "Standard"
+        case .fast: "Fast"
+        case .ultrafast: "Ultrafast"
+        }
+    }
+
+    func tierOverride(for model: ModelOption?) -> CodexAppServerV2.ServiceTierOverride {
+        guard model?.supportsSpeed(self) == true else { return .clear }
+        return switch self {
+        case .standard: .clear
+        case .fast: .set(.fast)
+        case .ultrafast: .set(.ultrafast)
+        }
+    }
+}
+
+enum ConversationSpeedState: Equatable, Sendable {
+    case selection(ConversationSpeed?)
+    case readback(ConversationSpeed?, remembered: ConversationSpeed?)
+
+    var selection: ConversationSpeed? {
         switch self {
         case .selection(let value), .readback(let value, _): value
         }
     }
 
-    var remembered: Bool? {
+    var remembered: ConversationSpeed? {
         switch self {
         case .selection(let value), .readback(_, let value): value
         }
@@ -24,29 +51,30 @@ enum FastModeState: Equatable, Sendable {
 
     func reading(_ extra: CodexAppServerV2.ThreadExtra?) -> Self {
         guard let extra else { return self }
-        return observing(extra.fastModeSelection)
+        return observing(extra.speedSelection)
     }
 
-    func observing(_ value: Bool?) -> Self {
+    func observing(_ value: ConversationSpeed?) -> Self {
         .readback(value, remembered: remembered)
     }
 
-    func restoringPreference(_ value: Bool?) -> Self {
+    func restoringPreference(_ value: ConversationSpeed?) -> Self {
         guard remembered == nil, let value else { return self }
         return .readback(selection, remembered: value)
     }
 
-    func choosing(_ value: Bool) -> Self {
+    func choosing(_ value: ConversationSpeed) -> Self {
         .selection(value)
     }
 
     func changingModel(from current: ModelOption?, to next: ModelOption) -> Self {
         guard case .readback(let value, let remembered) = self else { return self }
-        if current?.supportsFastMode == true, !next.supportsFastMode {
-            return .readback(value, remembered: remembered ?? value)
+        let preference = remembered ?? value
+        if let preference, current?.supportsSpeed(preference) == true, !next.supportsSpeed(preference) {
+            return .readback(value, remembered: preference)
         }
-        if current?.supportsFastMode == false, next.supportsFastMode {
-            return .readback(remembered ?? value, remembered: remembered)
+        if let preference, current?.supportsSpeed(preference) == false, next.supportsSpeed(preference) {
+            return .readback(preference, remembered: remembered)
         }
         return self
     }
@@ -67,17 +95,17 @@ struct ConversationSettingsUpdate: Encodable, Sendable, Equatable {
     let threadId: String
     let model: String
     let effort: String?
-    let fastModeState: FastModeState
+    let speedState: ConversationSpeedState
     let serviceTier: CodexAppServerV2.ServiceTierOverride?
     let summary = DispatchPolicy.reasoningSummary
 
     init(threadID: String, model: ModelOption, reasoning: ReasoningSelection,
-         fastModeState: FastModeState) {
+         speedState: ConversationSpeedState) {
         threadId = threadID
         self.model = model.id
         effort = reasoning.effort?.rawValue
-        self.fastModeState = fastModeState
-        serviceTier = fastModeState.selection.map { $0 && model.supportsFastMode ? .set(.fast) : .clear }
+        self.speedState = speedState
+        serviceTier = speedState.selection?.tierOverride(for: model)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -88,15 +116,15 @@ struct ConversationSettingsUpdate: Encodable, Sendable, Equatable {
         effort.flatMap(ReasoningEffort.init(rawValue:)).map(ReasoningSelection.effort) ?? .automatic
     }
 
-    var fastMode: Bool? { fastModeState.selection }
+    var fastMode: Bool? { speedState.selection?.isAccelerated }
 
     func matchesThreadSelection(_ thread: CodexAppServerV2.Thread) -> Bool {
         guard thread.id == threadId, thread.model == model, let effort,
               thread.reasoningEffort?.rawValue == effort else { return false }
         return switch serviceTier {
         case nil: true
-        case .clear: thread.extra?.fastModeSelection == false
-        case .set(let tier): tier == .fast && thread.extra?.fastModeSelection == true
+        case .clear: thread.extra?.speedSelection == .standard
+        case .set(let tier): CodexAppServerV2.ServiceTier.speedSelection(for: tier.rawValue).map { $0 == thread.extra?.speedSelection } == true
         }
     }
 }

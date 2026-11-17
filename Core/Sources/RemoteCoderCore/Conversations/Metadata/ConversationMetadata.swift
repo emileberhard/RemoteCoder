@@ -6,26 +6,29 @@ struct ConversationMetadata: Codable, Hashable, Sendable {
     var modelID: String
     var reasoningSelectionID: String
     var fastModeEnabled: Bool? = nil
+    var speed: ConversationSpeed? = nil
     var source: Source? = nil
     var updatedAt: Date
     var serverRevision: UInt64? = nil
     var mutationID: String? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case sessionID, modelID, reasoningSelectionID, fastModeEnabled, source, updatedAt, serverRevision
+        case sessionID, modelID, reasoningSelectionID, fastModeEnabled, speed, source, updatedAt, serverRevision
         case mutationID = "mutationId"
     }
 
+    var rememberedSpeed: ConversationSpeed? { speed ?? fastModeEnabled.map(ConversationSpeed.init(accelerated:)) }
+
     var selection: ConversationMetadataSelection {
         ConversationMetadataSelection(sessionID: sessionID, modelID: modelID,
-            reasoningSelectionID: reasoningSelectionID, fastModeEnabled: fastModeEnabled, source: source)
+            reasoningSelectionID: reasoningSelectionID, fastModeEnabled: fastModeEnabled, speed: speed, source: source)
     }
 }
 
 extension ConversationMetadata {
     init(_ record: ConversationMetadataRecord) {
         self.init(sessionID: record.sessionID, modelID: record.modelID, reasoningSelectionID: record.reasoningSelectionID,
-            fastModeEnabled: record.fastModeEnabled, source: record.source, updatedAt: record.updatedAt,
+            fastModeEnabled: record.fastModeEnabled, speed: record.speed, source: record.source, updatedAt: record.updatedAt,
             serverRevision: record.serverRevision, mutationID: record.mutationID)
     }
 }
@@ -33,7 +36,7 @@ extension ConversationMetadata {
 extension ConversationMetadataSelection {
     func localMetadata(updatedAt: Date) -> ConversationMetadata {
         ConversationMetadata(sessionID: sessionID, modelID: modelID, reasoningSelectionID: reasoningSelectionID,
-            fastModeEnabled: fastModeEnabled, source: source, updatedAt: updatedAt)
+            fastModeEnabled: fastModeEnabled, speed: speed, source: source, updatedAt: updatedAt)
     }
 }
 

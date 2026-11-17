@@ -408,7 +408,7 @@ fileprivate struct ChatWindowActionContext {
             if let turn = screen.composerStopState.readyTurn { screen.stopTurn(turn) }
         case .focusComposer: focusComposer()
         case .attachFile: attachFile()
-        case .toggleFastMode: screen.selectFastMode(screen.fastModeSelection != true, for: screen.activeSessionID)
+        case .toggleFastMode: screen.selectSpeed(screen.speedSelection == .fast ? .standard : .fast, for: screen.activeSessionID)
         case .togglePin:
             if let address = screen.openAddress {
                 if workspace.isPinned(address) {

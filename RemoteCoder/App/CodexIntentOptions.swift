@@ -156,14 +156,11 @@ enum CodexIntentFastMode: String, AppEnum, Sendable {
         .off: "Off",
     ]
 
-    var isEnabled: Bool {
+    var speed: ConversationSpeed {
         switch self {
-        case .appDefault:
-            return NewChatDefaults.fastModeEnabled()
-        case .on:
-            return true
-        case .off:
-            return false
+        case .appDefault: NewChatDefaults.speed()
+        case .on: .fast
+        case .off: .standard
         }
     }
 }

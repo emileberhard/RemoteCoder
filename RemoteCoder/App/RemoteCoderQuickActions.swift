@@ -57,10 +57,11 @@ struct RemoteCoderVoiceChatIntent: AudioRecordingIntent, LiveActivityIntent {
         get throws {
             guard audioVisualMode == .audio else { throw VoiceModeConfigurationError.videoCall }
             let model = try destination.model
+            let speed = (fastMode ?? .appDefault).speed
             return RemoteCoderVoiceConfiguration(
                 modelID: model.id == CodexModelEntity.appDefaultID ? nil : model.id,
                 reasoningSelectionID: reasoning?.selectionID,
-                fastModeEnabled: (fastMode ?? .appDefault).isEnabled
+                fastModeEnabled: speed.isAccelerated, speed: speed == .ultrafast ? speed.rawValue : nil
             )
         }
     }

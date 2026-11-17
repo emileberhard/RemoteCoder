@@ -38,7 +38,7 @@ struct TargetModelCatalogTests {
         #expect(catalog.configured(id: "claude-mythos-5-2").model?.id == "mythos")
         preferences.setClaudeModelVisible(false, id: "mythos")
         #expect(catalog.options(for: .claude).map(\.id) == ["relay/other"])
-        #expect(catalog.option(id: "mythos", threadID: "claude_existing", modelProvider: nil, effort: nil, fastMode: false)?.isListed == true)
+        #expect(catalog.option(id: "mythos", threadID: "claude_existing", modelProvider: nil, effort: nil, reportedSpeed: nil)?.isListed == true)
     }
 
     @Test func anExistingConversationOffersOnlyModelsOfItsModelProvider() async throws {
@@ -52,8 +52,8 @@ struct TargetModelCatalogTests {
         }
         await service.refresh()
         let catalog = TargetModelCatalog(service: service, preferences: ModelPickerPreferences(defaults: defaults), defaults: defaults)
-        let external = try #require(catalog.option(id: "relay/model-a", threadID: "t", modelProvider: nil, effort: nil, fastMode: false))
-        let native = try #require(catalog.option(id: CodexModelFixtures.solID, threadID: "t", modelProvider: nil, effort: nil, fastMode: false))
+        let external = try #require(catalog.option(id: "relay/model-a", threadID: "t", modelProvider: nil, effort: nil, reportedSpeed: nil))
+        let native = try #require(catalog.option(id: CodexModelFixtures.solID, threadID: "t", modelProvider: nil, effort: nil, reportedSpeed: nil))
 
         #expect(external.pickerTitle == "Model A · Relay")
         #expect(native.pickerTitle == "GPT-6.1 Sol")
@@ -72,9 +72,9 @@ struct TargetModelCatalogTests {
         let service = CodexModelCatalogService(directory: .temporaryDirectory) { _ in throw URLError(.notConnectedToInternet) }
         let catalog = TargetModelCatalog(service: service, preferences: ModelPickerPreferences(defaults: defaults), defaults: defaults)
         let external = try #require(catalog.option(id: "copilot/gemini-4-argon", threadID: "t",
-            modelProvider: .external(id: "copilot"), effort: "high", fastMode: false))
+            modelProvider: .external(id: "copilot"), effort: "high", reportedSpeed: nil))
         let native = try #require(catalog.option(id: "copilot/gemini-4-argon", threadID: "t",
-            modelProvider: .native, effort: nil, fastMode: false))
+            modelProvider: .native, effort: nil, reportedSpeed: nil))
 
         #expect(external.pickerTitle == "Gemini 4 Argon · Copilot")
         #expect(external.reasoningEfforts == [.high])
@@ -112,22 +112,22 @@ struct TargetModelCatalogTests {
         #expect(!catalog.options(for: .codex).contains(selected))
         #expect(catalog.pickerOptions(including: selected, threadModelProvider: .external(id: "relay")) == [selected])
 
-        let existing = try #require(catalog.option(id: selected.id, threadID: "codex-existing", modelProvider: .external(id: "relay"), effort: "high", fastMode: true))
+        let existing = try #require(catalog.option(id: selected.id, threadID: "codex-existing", modelProvider: .external(id: "relay"), effort: "high", reportedSpeed: .fast))
         #expect(existing.provider == .codex)
         #expect(existing.isListed)
         #expect(existing.pickerTitle == "Model A · Relay")
         #expect(existing.reasoningEfforts == [.low, .medium, .high])
         #expect(!existing.supportsFastMode)
         #expect(!existing.acceptsImages)
-        let wrongRoute = try #require(catalog.option(id: selected.id, threadID: "codex-existing", modelProvider: .external(id: "other"), effort: "high", fastMode: false))
+        let wrongRoute = try #require(catalog.option(id: selected.id, threadID: "codex-existing", modelProvider: .external(id: "other"), effort: "high", reportedSpeed: nil))
         #expect(!wrongRoute.isListed)
         #expect(wrongRoute.modelProvider?.id == "other")
-        let native = try #require(catalog.option(id: CodexModelFixtures.solID, threadID: "claude_existing", modelProvider: .native, effort: nil, fastMode: false))
+        let native = try #require(catalog.option(id: CodexModelFixtures.solID, threadID: "claude_existing", modelProvider: .native, effort: nil, reportedSpeed: nil))
         #expect(!native.isListed)
         #expect(native.provider == .claude)
-        let restored = try #require(catalog.option(id: selected.id, threadID: "claude_existing", modelProvider: .external(id: "relay"), effort: nil, fastMode: false))
+        let restored = try #require(catalog.option(id: selected.id, threadID: "claude_existing", modelProvider: .external(id: "relay"), effort: nil, reportedSpeed: nil))
         #expect(restored == selected)
-        let unknown = try #require(catalog.option(id: "relay/removed", threadID: "claude_existing", modelProvider: .external(id: "relay"), effort: "high", fastMode: false))
+        let unknown = try #require(catalog.option(id: "relay/removed", threadID: "claude_existing", modelProvider: .external(id: "relay"), effort: "high", reportedSpeed: nil))
         #expect(unknown.provider == .claude)
         #expect(unknown.modelProvider?.id == "relay")
         #expect(catalog.pickerOptions(including: unknown, threadModelProvider: .external(id: "relay")).map(\.id) == [selected.id, unknown.id])
@@ -151,7 +151,7 @@ struct TargetModelCatalogTests {
         #expect(catalog.options(for: .claude).map(\.id) == ["fable", "sonnet", "haiku"])
         #expect(catalog.newChatDefault(for: nil, health: nil).model?.id == "fable")
         #expect(catalog.configured(id: "claude-opus-5").model == opus)
-        #expect(catalog.option(id: "claude-opus-5", threadID: "claude_existing", modelProvider: nil, effort: nil, fastMode: false) == opus)
+        #expect(catalog.option(id: "claude-opus-5", threadID: "claude_existing", modelProvider: nil, effort: nil, reportedSpeed: nil) == opus)
         #expect(catalog.pickerOptions(including: opus, threadModelProvider: nil).map(\.id) == ["fable", "sonnet", "haiku", "opus"])
 
         preferences.setClaudeModelVisible(false, id: "fable")

@@ -20,6 +20,14 @@ pub(crate) enum Source {
     Runtime,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Speed {
+    Standard,
+    Fast,
+    Ultrafast,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Selection {
@@ -30,6 +38,8 @@ pub(crate) struct Selection {
     #[serde(rename = "reasoningSelectionID")]
     pub reasoning_selection_id: String,
     pub fast_mode_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed: Option<Speed>,
     pub source: Option<Source>,
 }
 
@@ -294,6 +304,7 @@ mod tests {
                 model_id: model.into(),
                 reasoning_selection_id: "effort-high".into(),
                 fast_mode_enabled: Some(false),
+                speed: None,
                 source: Some(Source::Selection),
             },
             expected_revision: revision,

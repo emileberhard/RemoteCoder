@@ -58,8 +58,10 @@ extension CodexAppServerV2 {
             hasServiceTier = true
         }
 
-        var fastModeSelection: Bool? {
-            hasServiceTier ? ServiceTier.fastModeSelection(for: serviceTier) : nil
+        var fastModeSelection: Bool? { speedSelection?.isAccelerated }
+
+        var speedSelection: ConversationSpeed? {
+            hasServiceTier ? ServiceTier.speedSelection(for: serviceTier) : nil
         }
 
         private enum CodingKeys: String, CodingKey { case serviceTier }

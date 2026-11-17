@@ -81,7 +81,7 @@ struct TargetModelCatalog {
         return service.catalog == nil ? .listNotLoaded : .notOffered
     }
 
-    func option(id: String, threadID: String, modelProvider: ThreadModelProvider?, effort: String?, fastMode: Bool) -> ModelOption? {
+    func option(id: String, threadID: String, modelProvider: ThreadModelProvider?, effort: String?, reportedSpeed: ConversationSpeed?) -> ModelOption? {
         guard !id.isEmpty else { return nil }
         let provider = AgentProvider.provider(forThreadID: threadID)
         if let option = service.catalog?.entry(for: id)?.option {
@@ -91,12 +91,13 @@ struct TargetModelCatalog {
             if let route = modelProvider?.externalID, option.modelProvider?.id == route {
                 return ModelOption(id: option.id, displayName: option.displayName, reasoningEfforts: option.reasoningEfforts,
                     supportsFastMode: option.supportsFastMode, supportsDaybreakBlue: option.supportsDaybreakBlue,
-                    acceptsImages: option.acceptsImages, provider: provider, modelProvider: option.modelProvider, isListed: option.isListed)
+                    acceptsImages: option.acceptsImages, provider: provider, modelProvider: option.modelProvider, isListed: option.isListed,
+                    supportsUltrafast: provider == .codex && option.supportsUltrafast)
             }
         }
         if provider == .claude, modelProvider?.externalID == nil,
            let option = ClaudeModelCatalog.model(for: id, in: service.catalog) { return option }
         return .unlisted(id: id, modelProvider: modelProvider?.modelProvider,
-                         reportedEffort: effort.flatMap(ReasoningEffort.init(rawValue:)), reportedFastMode: fastMode, provider: provider)
+                         reportedEffort: effort.flatMap(ReasoningEffort.init(rawValue:)), reportedSpeed: reportedSpeed, provider: provider)
     }
 }

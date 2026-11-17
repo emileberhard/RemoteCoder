@@ -15,7 +15,7 @@ enum CodexModelFixtures {
     static func wireModels() -> [[String: Any]] {
         [
             wireModel(astraID, name: "GPT-6 Astra", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-                      serviceTiers: ["priority"], isDefault: true),
+                      serviceTiers: ["priority", "ultrafast"], isDefault: true),
             wireModel(solID, name: "GPT-6.1 Sol", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
                       serviceTiers: ["priority"]),
             wireModel(lunaID, name: "GPT-5.6 Luna", efforts: ["low", "medium", "high", "xhigh", "max"],

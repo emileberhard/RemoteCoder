@@ -1531,27 +1531,27 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         case .settings(let notification, _):
             await metadataService.observeSettings(notification, observedAt: .now)
             guard !isRetired else { return }
-            let reportedFastMode = notification.threadSettings.fastModeSelection
+            let reportedSpeed = notification.threadSettings.speedSelection
             let shown = screenShowing(notification.threadId)
             guard screens.allSatisfy({ $0.pendingSettings[notification.threadId] == nil }),
                   let model = modelCatalog.option(id: notification.threadSettings.model, threadID: notification.threadId,
                                           modelProvider: shown?.activeModelProvider,
-                                          effort: notification.threadSettings.effort?.rawValue, fastMode: reportedFastMode == true) else { return }
+                                          effort: notification.threadSettings.effort?.rawValue, reportedSpeed: reportedSpeed) else { return }
             let reasoning = notification.threadSettings.effort.flatMap { ReasoningEffort(rawValue: $0.rawValue) }
                 .map(ReasoningSelection.effort) ?? .automatic
             if let shown {
-                shown.pickerSelection.observe(model: model, reasoning: reasoning, reportedFastMode: reportedFastMode)
+                shown.pickerSelection.observe(model: model, reasoning: reasoning, reportedSpeed: reportedSpeed)
                 shown.refreshReasoningVisibility()
             }
             let voiceSettings = primaryScreen?.voiceConversationSettings
             let voiceState = voiceSettings?.threadId == notification.threadId
-                ? voiceSettings?.fastModeState.observing(reportedFastMode)
-                : (shown.map { $0.fastModeState.observing(reportedFastMode) }
-                    ?? FastModeState.readback(reportedFastMode, remembered: nil))
+                ? voiceSettings?.speedState.observing(reportedSpeed)
+                : (shown.map { $0.speedState.observing(reportedSpeed) }
+                    ?? ConversationSpeedState.readback(reportedSpeed, remembered: nil))
             if let voiceState {
                 realtimeVoice.applyConversationSettings(
                     ConversationSettingsUpdate(threadID: notification.threadId, model: model,
-                        reasoning: reasoning, fastModeState: voiceState),
+                        reasoning: reasoning, speedState: voiceState),
                     hostID: hostID)
             }
         case .threadName(let notification):

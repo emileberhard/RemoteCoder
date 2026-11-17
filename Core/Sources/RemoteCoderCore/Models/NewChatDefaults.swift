@@ -11,7 +11,9 @@ enum NewChatDefaults {
     private static let reasoningSelectionKey = "codex.defaultReasoningSelection"
     private static let fastModeKey = "codex.fastModeEnabled"
 
-    static let syncedKeys: Set<String> = [modelDefaultKey, reasoningDefaultKey, modelIDKey, reasoningSelectionKey, fastModeKey]
+    private static let speedKey = "codex.speed"
+
+    static let syncedKeys: Set<String> = [modelDefaultKey, reasoningDefaultKey, modelIDKey, reasoningSelectionKey, fastModeKey, speedKey]
 
     static func preferredModelID(defaults: UserDefaults = AppStorageScope.current.defaults) -> String? {
         if let fixed = defaults.string(forKey: modelDefaultKey), fixed != lastSelectedValue {
@@ -43,10 +45,20 @@ enum NewChatDefaults {
     }
 
     static func fastModeEnabled(defaults: UserDefaults = AppStorageScope.current.defaults) -> Bool {
-        defaults.bool(forKey: fastModeKey)
+        speed(defaults: defaults).isAccelerated
+    }
+
+    static func speed(defaults: UserDefaults = AppStorageScope.current.defaults) -> ConversationSpeed {
+        let legacy = ConversationSpeed(accelerated: defaults.bool(forKey: fastModeKey))
+        return defaults.string(forKey: speedKey).flatMap(ConversationSpeed.init(rawValue:)) ?? legacy
+    }
+
+    static func recordSpeed(_ speed: ConversationSpeed, defaults: UserDefaults = AppStorageScope.current.defaults) {
+        defaults.set(speed.rawValue, forKey: speedKey)
+        defaults.set(speed.isAccelerated, forKey: fastModeKey)
     }
 
     static func setFastModeEnabled(_ enabled: Bool, defaults: UserDefaults = AppStorageScope.current.defaults) {
-        defaults.set(enabled, forKey: fastModeKey)
+        recordSpeed(ConversationSpeed(accelerated: enabled), defaults: defaults)
     }
 }

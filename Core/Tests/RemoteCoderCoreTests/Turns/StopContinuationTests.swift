@@ -9,17 +9,17 @@ import Testing
 struct StopContinuationTests {
     @Test func unchangedAdmissionPreservesRememberedFastPreferenceWhenTheModelRunsStandard() throws {
         let model = ModelOption.unlisted(id: "standard-model", modelProvider: nil,
-            reportedEffort: .high, reportedFastMode: false)
+            reportedEffort: .high, reportedSpeed: nil)
         let requested = TurnDispatcher.Settings(model: model, reasoning: .effort(.high),
-            serviceTier: .clear, fastModeState: .selection(true), workingDirectory: "/tmp", selectionRevision: 1)
+            serviceTier: .clear, speedState: .selection(.fast), workingDirectory: "/tmp", selectionRevision: 1)
         let thread = try ThreadFixture.wire("native", updatedAt: 1, fields: [
             "model": "standard-model", "extra": ["serviceTier": NSNull()]
         ])
         let admitted = requested.admitted(to: thread)
-        #expect(admitted.fastModeState.selection == false)
-        #expect(admitted.fastModeState.remembered == true)
+        #expect(admitted.speedState.selection == .standard)
+        #expect(admitted.speedState.remembered == .fast)
         let opus = try #require(ClaudeModelCatalog.model(for: "opus"))
-        #expect(admitted.fastModeState.changingModel(from: model, to: opus).selection == true)
+        #expect(admitted.speedState.changingModel(from: model, to: opus).selection == .fast)
     }
 
     @Test func externalClaudeAdmissionRetainsItsHarnessAndCapabilities() throws {
@@ -27,7 +27,7 @@ struct StopContinuationTests {
             supportsFastMode: false, supportsDaybreakBlue: false, acceptsImages: false,
             provider: .claude, modelProvider: .init(id: "relay", name: "Relay"), isListed: true)
         let requested = TurnDispatcher.Settings(model: model, reasoning: .effort(.high),
-            serviceTier: .clear, fastModeState: .selection(false), workingDirectory: "/tmp", selectionRevision: 1)
+            serviceTier: .clear, speedState: .selection(.standard), workingDirectory: "/tmp", selectionRevision: 1)
         let thread = try ThreadFixture.wire("claude_external", updatedAt: 1, fields: [
             "model": "relay/model-a", "modelProvider": "relay", "reasoningEffort": "high"
         ])
@@ -71,7 +71,7 @@ struct StopContinuationTests {
             acceptsImages: true, provider: .codex, modelProvider: nil, isListed: true)
         let requestedModel = threadID == "native-fallback" ? try #require(ClaudeModelCatalog.model(for: "opus")) : nativeModel
         let settings = TurnDispatcher.Settings(model: requestedModel,
-            reasoning: reasoning, serviceTier: .set(.fast), fastModeState: .selection(true),
+            reasoning: reasoning, serviceTier: .set(.fast), speedState: .selection(.fast),
             workingDirectory: "/tmp", selectionRevision: 0)
         let conversationID = UUID()
         let draft = try #require(await fixture.drafts.draft(for: .newChat(conversationID)))
@@ -366,8 +366,8 @@ final class StopFixture: TurnDispatchHost {
     let stops: TurnStops
     let conversations: ConversationSessions
     let drafts: ComposerDraftStore
-    let settings = TurnDispatcher.Settings(model: .unlisted(id: "gpt-6.1-sol", modelProvider: nil, reportedEffort: .medium, reportedFastMode: false),
-        reasoning: .automatic, serviceTier: nil, fastModeState: .selection(false), workingDirectory: "/tmp", selectionRevision: 0)
+    let settings = TurnDispatcher.Settings(model: .unlisted(id: "gpt-6.1-sol", modelProvider: nil, reportedEffort: .medium, reportedSpeed: nil),
+        reasoning: .automatic, serviceTier: nil, speedState: .selection(.standard), workingDirectory: "/tmp", selectionRevision: 0)
     var selectionCurrent = false
     var claudeQueue: Bool? = false
     var admittedSettings: TurnDispatcher.Settings?

@@ -40,7 +40,7 @@ struct AgentCallStatus: Decodable, Sendable {
             model: model,
             effort: effort,
             cwd: cwd,
-            fastModeState: .readback(nil, remembered: nil),
+            speedState: .readback(nil, remembered: nil),
             history: []
         )
     }

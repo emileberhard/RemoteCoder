@@ -30,6 +30,7 @@ struct RemoteCoderVoiceConfiguration: Codable, Equatable, Sendable {
     let modelID: String?
     let reasoningSelectionID: String?
     let fastModeEnabled: Bool
+    var speed: String? = nil
 }
 
 struct RemoteCoderConversationLink: Equatable, Sendable {

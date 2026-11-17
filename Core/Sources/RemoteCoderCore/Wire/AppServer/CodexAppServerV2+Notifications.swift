@@ -21,8 +21,10 @@ extension CodexAppServerV2 {
                 reportsServiceTier = values.contains(.serviceTier)
             }
 
-            var fastModeSelection: Bool? {
-                reportsServiceTier ? ServiceTier.fastModeSelection(for: serviceTier) : nil
+            var fastModeSelection: Bool? { speedSelection?.isAccelerated }
+
+            var speedSelection: ConversationSpeed? {
+                reportsServiceTier ? ServiceTier.speedSelection(for: serviceTier) : nil
             }
         }
         let threadId: String

@@ -143,51 +143,6 @@ struct UnresolvedModelControls: View {
     }
 }
 
-struct ConversationFastModeToggle: View {
-    @Environment(AppThemeStore.self) private var themeStore
-
-    let isAvailable: Bool
-    @Binding var isOn: Bool?
-    let symbolHeight: CGFloat
-
-    private var isEffectivelyOn: Bool { isOn == true && isAvailable }
-
-    private var label: String {
-        guard isAvailable else { return "Fast unavailable" }
-        guard let isOn else { return "Fast status unavailable" }
-        return isOn ? "Fast on" : "Fast off"
-    }
-
-    var body: some View {
-        Toggle(isOn: Binding(get: { isOn == true }, set: { value in
-            guard isAvailable, value != isOn else { return }
-            isOn = value
-            HapticService.shared.play(value ? .toggleOn : .toggleOff)
-        })) {
-            Image(systemName: "bolt.fill")
-                .resizable()
-                .symbolRenderingMode(.monochrome)
-                .scaledToFit()
-                .frame(width: symbolHeight, height: symbolHeight)
-                .overlay(alignment: .topTrailing) {
-                    if isAvailable, isOn == nil {
-                        Text("?").scaledFont(.caption2.bold()).offset(x: 8, y: -3)
-                    }
-                }
-                .frame(minWidth: ControlMetrics.minimumTarget, minHeight: ControlMetrics.minimumTarget)
-                .contentShape(.rect)
-        }
-        .toggleStyle(.button)
-        .buttonStyle(ResponsiveButtonStyle(feedback: nil))
-        .foregroundStyle(isEffectivelyOn ? themeStore.theme.colors.accentTint : Color.secondary)
-        .opacity(isAvailable ? 1 : 0.35)
-        .disabled(!isAvailable)
-        .accessibilityLabel("Fast mode")
-        .accessibilityValue(label)
-        .accessibilityIdentifier("conversation-fast-mode-toggle")
-    }
-}
-
 struct ConversationSettingLabel: View {
     let title: String
     var daybreakBlue = false

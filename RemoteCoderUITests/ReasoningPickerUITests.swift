@@ -139,7 +139,7 @@ final class ReasoningPickerUITests: XCTestCase {
         assertClosed(in: app)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
 
-        let fast = app.switches["conversation-fast-mode-toggle"]
+        let fast = app.buttons["conversation-fast-mode-toggle"]
         let original = fast.value as? String
         fast.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertFalse(app.keyboards.firstMatch.exists)
