@@ -20,6 +20,7 @@ import {
   array,
   type Frame,
   type Host,
+  identifier,
   object,
   optionalString,
   type Provider,
@@ -518,6 +519,8 @@ export class Workspace {
         effort: conversation.header.reasoningEffort ?? "",
         provider: conversation.header.provider,
       });
+    if (conversation?.header.provider === "codex")
+      this.settings.observe(conversation, conversation.header.extra ?? {}, true);
   }
   private async loadNavigationConversation(address: Address, fence: number) {
     try {
@@ -579,7 +582,12 @@ export class Workspace {
     await (this.state.selected ? this.sessions.get(this.state.selected)?.newer() : undefined);
   }
   updateDraft(change: Partial<Draft>, key = this.draftKey) {
-    this.drafts.update(change, key);
+    this.drafts.update(
+      change.fast !== undefined && !("serviceTier" in change)
+        ? { ...change, serviceTier: change.fast ? "fast" : null }
+        : change,
+      key,
+    );
   }
   flushDrafts() {
     this.drafts.flush();
@@ -1056,6 +1064,12 @@ export class Workspace {
       if (notification.method === "preferences/changed") {
         this.preferences.receive(preferenceDocument(params));
         return;
+      }
+      if (notification.method === "thread/settings/updated") {
+        const address = conversationAddress(target, identifier(params.threadId));
+        const conversation = this.sessions.get(address)?.snapshot;
+        if (conversation && conversation.header.provider === "codex")
+          this.settings.observe(conversation, object(params.threadSettings));
       }
       this.sessions.ingest(target, notification);
     } catch (error) {

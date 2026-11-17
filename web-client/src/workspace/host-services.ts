@@ -31,6 +31,7 @@ export type ModelChoice = {
   provider: Provider;
   efforts: string[];
   fast: boolean;
+  ultrafast?: boolean;
   images: boolean;
   defaultEffort: string;
   hiddenUpstream?: boolean;
@@ -451,6 +452,9 @@ export class HostServices {
                 fast:
                   (model.serviceTiers?.some((tier) => tier.id === "fast") ?? false) ||
                   (model.additionalSpeedTiers?.includes("fast") ?? false),
+                ultrafast:
+                  (model.serviceTiers?.some((tier) => tier.id === "ultrafast") ?? false) ||
+                  (model.additionalSpeedTiers?.includes("ultrafast") ?? false),
                 images: model.inputModalities?.includes("image") ?? false,
               })),
             ...(catalog.some((model) => runsOnClaude(model) && !external(model)) ? [] : claudeCatalog),

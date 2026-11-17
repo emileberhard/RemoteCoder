@@ -2,14 +2,22 @@ import { type ExecutionTarget, sameBinding } from "../execution-context";
 import { canonicalModelID, clampedEffort, reasoningEffort } from "../preferences";
 import { type Address, addressKey, object, type Provider } from "../protocol/boundary";
 import nativeModelDefaults from "../protocol/native-model-defaults.json";
-import { blank, type ComposerDraftStore, type Draft } from "./composer-draft-store";
+import {
+  blank,
+  type ComposerDraftStore,
+  type Draft,
+  fastServiceTier,
+  reportedServiceTier,
+  supportedServiceTier,
+} from "./composer-draft-store";
 import type { Conversation } from "./conversation-session";
 import type { HostServices, HostState, ModelChoice } from "./host-services";
 import type { SyncedPreferenceExchange } from "./synced-preference-exchange";
 
-type PickerSettings = Pick<Draft, "model" | "provider" | "effort" | "fast">;
+type PickerSettings = Pick<Draft, "model" | "provider" | "effort" | "fast" | "serviceTier">;
 type PickerUpdate = {
   settings: PickerSettings;
+  serviceTier: string | null | undefined;
   resolve: () => void;
   reject: (error: unknown) => void;
 };
@@ -44,7 +52,9 @@ export class ConversationSettingsSelection {
         reasoning && reasoning !== "last-selected"
           ? reasoning
           : (this.preferences.get("codex.defaultReasoningSelection") ?? "effort-high"),
-      fast: this.preferences.get("codex.fastModeEnabled") ?? false,
+      speed:
+        this.preferences.get("codex.speed") ??
+        (this.preferences.get("codex.fastModeEnabled") ? "fast" : "standard"),
     };
   }
   seedNewDraft() {
@@ -72,11 +82,23 @@ export class ConversationSettingsSelection {
       visible[0];
     const availableEfforts =
       choice?.efforts.filter((effort) => this.preferences.visibleEfforts(provider).has(effort)) ?? [];
+    const speed =
+      provider === "claude"
+        ? this.preferences.get("codex.fastModeEnabled")
+          ? "fast"
+          : "standard"
+        : defaults.speed;
     this.drafts.update({
       provider,
       model: choice?.id ?? "",
       effort: clampedEffort(reasoningEffort(defaults.reasoning) ?? "high", availableEfforts),
-      fast: choice?.fast === true && defaults.fast,
+      fast: speed === "ultrafast" ? choice?.ultrafast === true : choice?.fast === true && speed === "fast",
+      serviceTier:
+        speed === "ultrafast" && choice?.ultrafast
+          ? "ultrafast"
+          : speed === "fast" && choice?.fast
+            ? "fast"
+            : null,
     });
   }
   choices(): ModelChoice[] {
@@ -158,16 +180,27 @@ export class ConversationSettingsSelection {
     const currentChoice = this.choices().find(
       (value) => value.id === current.model && value.provider === current.provider,
     );
+    const rememberedFast =
+      choice.provider === "claude"
+        ? (this.preferences.get("codex.fastModeEnabled") ?? current.fast)
+        : this.preferences.get("codex.speed") === "fast" ||
+          (this.preferences.get("codex.speed") === null &&
+            (this.preferences.get("codex.fastModeEnabled") ?? current.fast));
     await this.applyPickerSettings(
       choice,
       clampedEffort(
         this.reasoningByModel.get(`${choice.provider}:${choice.id}`) ?? current.effort,
         choice.efforts,
       ),
-      choice.fast &&
-        (currentChoice?.fast
-          ? current.fast
-          : (this.preferences.get("codex.fastModeEnabled") ?? current.fast)),
+      current.serviceTier === undefined && this.current().conversation
+        ? undefined
+        : current.serviceTier === "ultrafast" && current.provider === "codex" && choice.provider === "codex"
+          ? current.serviceTier
+          : choice.fast && (currentChoice?.fast ? current.fast : rememberedFast)
+            ? current.serviceTier === "priority"
+              ? "priority"
+              : "fast"
+            : null,
       () => this.preferences.set("codex.defaultModelID", choice.id),
     );
   }
@@ -184,7 +217,7 @@ export class ConversationSettingsSelection {
       const oldest = this.reasoningByModel.keys().next().value;
       if (oldest !== undefined) this.reasoningByModel.delete(oldest);
     }
-    await this.applyPickerSettings(choice, selected, this.current().draft.fast, () =>
+    await this.applyPickerSettings(choice, selected, this.current().draft.serviceTier, () =>
       this.preferences.set("codex.defaultReasoningSelection", selected ? `effort-${selected}` : "automatic"),
     );
   }
@@ -192,9 +225,34 @@ export class ConversationSettingsSelection {
     if (this.isRetired()) return;
     const choice = this.currentModelChoice();
     if (enabled && !choice.fast) throw new Error("The selected model does not support Fast mode");
-    await this.applyPickerSettings(choice, this.current().draft.effort, enabled, () =>
-      this.preferences.set("codex.fastModeEnabled", enabled),
+    await this.applyPickerSettings(choice, this.current().draft.effort, enabled ? "fast" : null, () => {
+      if (choice.provider === "codex") this.preferences.set("codex.speed", enabled ? "fast" : "standard");
+      this.preferences.set("codex.fastModeEnabled", enabled);
+    });
+  }
+  observe(conversation: Conversation, settings: Record<string, unknown>, initial = false) {
+    if (this.pickerSyncs.get(conversation)?.running) return;
+    const key = addressKey(conversation.address);
+    const draft = this.drafts.get(key);
+    if (!draft) return;
+    const tier = Object.hasOwn(settings, "serviceTier")
+      ? reportedServiceTier(settings.serviceTier)
+      : undefined;
+    this.drafts.update(
+      {
+        ...(typeof settings.model === "string" ? { model: settings.model } : {}),
+        ...(typeof settings.effort === "string" || settings.effort === null
+          ? { effort: settings.effort ?? "" }
+          : {}),
+        ...(tier !== undefined
+          ? { serviceTier: tier, fast: fastServiceTier(tier) }
+          : initial
+            ? { serviceTier: undefined }
+            : {}),
+      },
+      key,
     );
+    this.pickerSyncs.delete(conversation);
   }
   private currentModelChoice() {
     const draft = this.current().draft;
@@ -204,11 +262,22 @@ export class ConversationSettingsSelection {
     if (!choice) throw new Error("Choose an available model first");
     return choice;
   }
-  private async applyPickerSettings(choice: ModelChoice, effort: string, fast: boolean, record: () => void) {
+  private async applyPickerSettings(
+    choice: ModelChoice,
+    effort: string,
+    serviceTier: string | null | undefined,
+    record: () => void,
+  ) {
     const conversation = this.current().conversation;
     if (conversation && choice.provider !== conversation.header.provider)
       throw new Error("Start a new conversation to change agent provider");
-    const next = { model: choice.id, provider: choice.provider, effort, fast };
+    const next = {
+      model: choice.id,
+      provider: choice.provider,
+      effort,
+      serviceTier,
+      fast: fastServiceTier(supportedServiceTier(serviceTier, choice)),
+    };
     const key = this.current().draftKey;
     const current = this.current().draft;
     const previous: PickerSettings = {
@@ -216,6 +285,7 @@ export class ConversationSettingsSelection {
       provider: current.provider,
       effort: current.effort,
       fast: current.fast,
+      serviceTier: current.serviceTier,
     };
     record();
     this.drafts.update(next, key);
@@ -238,7 +308,12 @@ export class ConversationSettingsSelection {
     const owner = sync;
     await new Promise<void>((resolve, reject) => {
       owner.pending?.resolve();
-      owner.pending = { settings: next, resolve, reject };
+      owner.pending = {
+        settings: next,
+        serviceTier: supportedServiceTier(serviceTier, choice),
+        resolve,
+        reject,
+      };
       if (!owner.running) void this.flushPickerSettings(conversation, owner);
     });
   }
@@ -255,7 +330,7 @@ export class ConversationSettingsSelection {
               threadId: conversation.address.threadId,
               model: update.settings.model,
               effort: update.settings.effort || null,
-              serviceTier: update.settings.fast ? "fast" : null,
+              serviceTier: update.serviceTier,
               summary: "detailed",
             },
             { timeout: 90000, signal: conversation.controller.signal },

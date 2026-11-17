@@ -1,6 +1,6 @@
 # Synced browser preferences
 
-`Workspace` owns one durable `SyncedPreferences` replica of the ten settings the browser consumes, exchanged through the unchanged gateway `preferences/read`, `preferences/update` and `preferences/changed` contract. One host-default execution context exchanges per physical host; enrollments share that replica. Gateways preserve the other native keys without browser replication. Native owners remain authoritative: `RemoteCoder/AGENTS.md` (Synced preferences), `host-daemon-rs/AGENTS.md` (User preferences), `ChatWorkspaceModel.syncedPreferenceKeys`, `ModelPickerPreferences`, `ModelVisibility`, `ReasoningEffortVisibility` and `NewChatDefaults`.
+`Workspace` owns one durable `SyncedPreferences` replica of the settings the browser consumes, exchanged through the unchanged gateway `preferences/read`, `preferences/update` and `preferences/changed` contract. One host-default execution context exchanges per physical host; enrollments share that replica. Gateways preserve the other native keys without browser replication. Native owners remain authoritative: `RemoteCoder/AGENTS.md` (Synced preferences), `host-daemon-rs/AGENTS.md` (User preferences), `ChatWorkspaceModel.syncedPreferenceKeys`, `ModelPickerPreferences`, `ModelVisibility`, `ReasoningEffortVisibility` and `NewChatDefaults`.
 
 The existing gateway contract supplies conflict ordering, persistence and broadcasts, so the browser adds only a local replica and workspace exchanges. A web-only settings document would split ownership. Add a native key to the typed registry only when a browser feature consumes it; pins, host IDs and credentials must not be inferred into that registry.
 
@@ -31,6 +31,7 @@ Unknown keys remain with their owning client. Values native defaults cannot repr
 | `codex.newChatReasoning` | Fixed `automatic` or `effort-<level>`, or `last-selected`. Legacy bare levels remain readable. |
 | `codex.defaultReasoningSelection` | Last explicit reasoning; absent/unrecognized means high. Clamp to nearest supported visible level, lower on a tie, or automatic if none. |
 | `codex.fastModeEnabled` | Last Fast choice, default false; applied only to models supporting Fast. |
+| `codex.speed` | Codex speed (`standard`, `fast` or `ultrafast`); when absent, use the legacy Fast choice. The browser preserves Ultrafast but its Fast control selects only Fast or Standard. |
 | `appearance.selectedThemeID` | Native theme ID; absent/unrecognized uses Caribbean Sunset in memory. |
 
 Pinned conversations are **not synced preferences**. Their per-host flags use the gateway's conversation marks replica, shared with native clients. Drawer folds/filter, working directories, host/installation identities, notifications and haptics stay device-local. Drawer mode, account nicknames, transcription, automatic speech and realtime voice stay with their existing owners.

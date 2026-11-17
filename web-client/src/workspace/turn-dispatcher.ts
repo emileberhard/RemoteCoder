@@ -19,7 +19,14 @@ import {
 } from "../protocol/boundary";
 import type { UserInput } from "../protocol/generated/v2/UserInput";
 import { appendAttachedFiles } from "./attached-files";
-import { blank, type ComposerDraftStore, type Draft } from "./composer-draft-store";
+import {
+  blank,
+  type ComposerDraftStore,
+  type Draft,
+  fastServiceTier,
+  reportedServiceTier,
+  supportedServiceTier,
+} from "./composer-draft-store";
 import { conversationHeader } from "./conversation-header";
 import type { Conversation, Row } from "./conversation-session";
 import type { ConversationSessions } from "./conversation-sessions";
@@ -182,7 +189,10 @@ export class TurnDispatcher {
             sandbox: "danger-full-access",
             serviceName,
             ...(serviceName === "RemoteCoder" ? { acceptProviderFallback: true } : {}),
-            serviceTier: draft.fast && choice.fast ? "fast" : null,
+            serviceTier: supportedServiceTier(
+              draft.serviceTier === undefined ? (draft.fast ? "fast" : null) : draft.serviceTier,
+              choice,
+            ),
             provider: draft.provider,
             ...(draft.effort ? { config: { model_reasoning_effort: draft.effort } } : {}),
           },
@@ -215,10 +225,21 @@ export class TurnDispatcher {
         !changedRoute && draft.effort === ""
           ? ""
           : (header.reasoningEffort ?? (changedRoute ? "" : draft.effort)),
+      serviceTier:
+        header.extra && Object.hasOwn(header.extra, "serviceTier")
+          ? reportedServiceTier(header.extra.serviceTier)
+          : changedRoute
+            ? undefined
+            : supportedServiceTier(
+                draft.serviceTier === undefined ? (draft.fast ? "fast" : null) : draft.serviceTier,
+                choice,
+              ),
       fast:
         header.extra && Object.hasOwn(header.extra, "serviceTier")
-          ? header.extra.serviceTier === "priority" || header.extra.serviceTier === "fast"
-          : !changedRoute && draft.fast && choice.fast,
+          ? fastServiceTier(reportedServiceTier(header.extra.serviceTier))
+          : !changedRoute &&
+            draft.fast &&
+            (draft.serviceTier === "ultrafast" ? choice.ultrafast === true : choice.fast),
     };
     const address = conversationAddress(host.target, header.id);
     const destinationKey = addressKey(address);
@@ -231,7 +252,8 @@ export class TurnDispatcher {
       latest.provider === draft.provider &&
       latest.model === draft.model &&
       latest.effort === draft.effort &&
-      latest.fast === draft.fast;
+      latest.fast === draft.fast &&
+      latest.serviceTier === draft.serviceTier;
     const latestChoice = (host.choices.status === "ready" ? host.choices.value : []).find(
       (choice) =>
         choice.provider === latest.provider &&
@@ -246,7 +268,11 @@ export class TurnDispatcher {
       {
         ...latest,
         ...(!latestRouteCompatible || settingsUnchanged
-          ? { ...settings, fast: latestRouteCompatible ? latest.fast : settings.fast }
+          ? {
+              ...settings,
+              fast:
+                latestRouteCompatible && settings.serviceTier !== "ultrafast" ? latest.fast : settings.fast,
+            }
           : {}),
       },
       destinationKey,
@@ -329,7 +355,12 @@ export class TurnDispatcher {
       .choices()
       .find((choice) => choice.id === draft.model && choice.provider === draft.provider);
     if (!choice) throw new Error("Choose a model from the host catalog before sending");
-    let settings = { model: draft.model, effort: draft.effort, fast: draft.fast && choice.fast };
+    let settings = {
+      model: draft.model,
+      effort: draft.effort,
+      fast: draft.fast && choice.fast,
+      serviceTier: supportedServiceTier(draft.serviceTier, choice),
+    };
     let conversation = this.current().conversation;
     if (this.current().selected && !conversation)
       throw new Error("Wait for the selected conversation header to load");
@@ -365,6 +396,12 @@ export class TurnDispatcher {
         fence,
         "RemoteCoder",
       ));
+      const admittedChoice = (host.choices.status === "ready" ? host.choices.value : []).find(
+        (candidate) =>
+          candidate.id === settings.model && candidate.provider === conversation?.header.provider,
+      );
+      if (settings.serviceTier === "ultrafast")
+        settings.serviceTier = admittedChoice?.ultrafast ? "ultrafast" : undefined;
     }
     const current = conversation;
     const destinationKey = addressKey(current.address);
@@ -453,7 +490,7 @@ export class TurnDispatcher {
             cwd: current.header.cwd,
             approvalPolicy: "never",
             sandboxPolicy: { type: "dangerFullAccess" },
-            serviceTier: settings.fast ? "fast" : null,
+            serviceTier: settings.serviceTier,
           }),
         );
       if (mode !== "queue") {
