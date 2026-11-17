@@ -9,7 +9,7 @@ extension CodexAppServerV2 {
             let model: String
             let effort: ReasoningEffort?
             let serviceTier: String?
-            private let reportsServiceTier: Bool
+            let reportsServiceTier: Bool
 
             private enum CodingKeys: String, CodingKey { case model, effort, serviceTier }
 
@@ -21,8 +21,10 @@ extension CodexAppServerV2 {
                 reportsServiceTier = values.contains(.serviceTier)
             }
 
-            var fastModeSelection: Bool? {
-                reportsServiceTier ? ServiceTier.fastModeSelection(for: serviceTier) : nil
+            var fastModeSelection: Bool? { speedSelection?.isAccelerated }
+
+            var speedSelection: ConversationSpeed? {
+                reportsServiceTier ? ServiceTier.speedSelection(for: serviceTier) : nil
             }
         }
         let threadId: String

@@ -178,10 +178,10 @@ struct RealtimeVoiceConversationContext: Sendable {
     var model: String
     var effort: String?
     let cwd: String
-    var fastModeState: FastModeState
+    var speedState: ConversationSpeedState
     let history: [RealtimeVoiceHistoryMessage]
 
-    var fastModeSelection: Bool? { fastModeState.selection }
+    var fastModeSelection: Bool? { speedState.selection?.isAccelerated }
 
     var initialItems: [RealtimeVoiceInitialItem] {
         RealtimeVoiceConversationHistory.initialItems(from: history)
@@ -196,11 +196,11 @@ struct RealtimeVoiceConversationContext: Sendable {
             updated.effort = settings.effort
         }
         if fastMode {
-            switch settings.fastModeState {
+            switch settings.speedState {
             case .selection:
-                updated.fastModeState = settings.fastModeState
+                updated.speedState = settings.speedState
             case .readback:
-                updated.fastModeState = settings.fastModeState.restoringPreference(fastModeState.remembered)
+                updated.speedState = settings.speedState.restoringPreference(speedState.remembered)
             }
         }
         return updated
@@ -212,7 +212,7 @@ struct RealtimeVoiceConversationContext: Sendable {
         Self(
             threadID: threadID, realtimeSessionID: realtimeSessionID,
             isProvisionalThread: isProvisionalThread, model: model, effort: effort, cwd: cwd,
-            fastModeState: fastModeState,
+            speedState: speedState,
             history: RealtimeVoiceConversationHistory.merged(
                 chatMessages: chatMessages.isEmpty ? history : chatMessages, voiceMessages: voiceMessages
             )

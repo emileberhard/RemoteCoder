@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Captured, Rpc } from "../src/gateway";
 import { type PreferenceDocument, type PreferenceEntry, SyncedPreferences } from "../src/preferences";
-import { type Frame, type Host, object } from "../src/protocol/boundary";
+import { addressKey, type Frame, type Host, object } from "../src/protocol/boundary";
 import { Workspace } from "../src/workspace/workspace";
 
 const entry = (value: PreferenceEntry["value"], updatedAt = 100, device = "native"): PreferenceEntry => ({
@@ -149,6 +149,53 @@ function setup(ids = ["mini"], storage?: Storage) {
 }
 afterEach(() => {
   for (const workspace of workspaces.splice(0)) workspace.dispose();
+});
+
+test("native speed seeds capable new Codex conversations and remains typed", async () => {
+  const { workspace, gateway } = setup();
+  gateway.catalog[0] = { ...model("gpt-6.1-sol"), serviceTiers: [{ id: "fast" }, { id: "ultrafast" }] };
+  gateway.document = { entries: { "codex.fastModeEnabled": entry("ultrafast") } };
+  await workspace.refreshHost("mini");
+  await workspace.syncPreferences();
+  expect(workspace.draft).toMatchObject({ model: "gpt-6.1-sol", fast: true, serviceTier: "ultrafast" });
+  gateway.changed({ entries: { "codex.fastModeEnabled": entry(false, 190) } });
+  await workspace.syncPreferences();
+  workspace.newConversation();
+  expect(workspace.draft).toMatchObject({ fast: false, serviceTier: null });
+  gateway.changed({ entries: { "codex.fastModeEnabled": entry(true, 200) } });
+  workspace.newConversation();
+  expect(workspace.draft).toMatchObject({ fast: true, serviceTier: "fast" });
+  gateway.changed({ entries: { "codex.fastModeEnabled": entry("future", 210) } });
+  expect(workspace.preference("codex.fastModeEnabled")).toBeNull();
+});
+
+test("a saved Fast draft cannot overwrite an unknown live tier when changing models", async () => {
+  const storage = new MemoryStorage();
+  storage.setItem(
+    "remotecoder.web.drafts.v1",
+    JSON.stringify([
+      [
+        addressKey({ hostId: "mini", threadId: "conversation" }),
+        {
+          revision: 1,
+          text: "",
+          attachments: [],
+          model: "other",
+          provider: "codex",
+          effort: "high",
+          fast: true,
+          serviceTier: "fast",
+          cwd: "/workspace",
+        },
+      ],
+    ]),
+  );
+  const { workspace, gateway } = setup(["mini"], storage);
+  gateway.selectedModel = "other";
+  await workspace.refreshHost("mini");
+  await workspace.selectConversation({ hostId: "mini", threadId: "conversation" });
+  await workspace.chooseModel(workspace.choices().find((choice) => choice.id === "gpt-6.1-sol"));
+  expect(gateway.settings.at(-1)?.serviceTier).toBeUndefined();
 });
 
 test("model switches restore explicit reasoning per model and keep the remembered Fast choice", async () => {

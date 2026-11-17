@@ -302,6 +302,7 @@ mod tests {
                         model_id: "opus".to_owned(),
                         reasoning_selection_id: "effort-max".to_owned(),
                         fast_mode_enabled: Some(false),
+                        speed: None,
                         source: Some(SelectionSource::Selection),
                     },
                     expected_revision: 0,

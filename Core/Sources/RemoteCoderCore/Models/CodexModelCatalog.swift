@@ -20,19 +20,19 @@ struct CodexModelCatalog: Equatable, Sendable {
             let efforts = Set(model.supportedReasoningEfforts.compactMap {
                 ReasoningEffort(rawValue: $0.reasoningEffort.rawValue)
             })
-            let supportsFastMode = (model.serviceTiers.map(\.id) + model.additionalSpeedTiers)
-                .contains { CodexAppServerV2.ServiceTier(wireValue: $0) == .fast }
+            let speedTiers = Set((model.serviceTiers.map(\.id) + model.additionalSpeedTiers)
+                .compactMap(CodexAppServerV2.ServiceTier.init(wireValue:)))
             return Entry(
                 option: ModelOption(
                     id: model.model,
                     displayName: model.displayName,
                     reasoningEfforts: ReasoningEffort.allCases.filter(efforts.contains),
-                    supportsFastMode: supportsFastMode,
+                    supportsFastMode: speedTiers.contains(.fast),
                     supportsDaybreakBlue: model.availableAccessPrograms?.cyber.contains("daybreakBlue") == true,
                     acceptsImages: model.inputModalities.contains(.image),
                     provider: model.agentProvider,
                     modelProvider: model.modelProvider,
-                    isListed: true
+                    isListed: true, supportsUltrafast: model.agentProvider == .codex && model.serviceTiers.contains(where: { $0.id == "ultrafast" })
                 ),
                 summary: model.description,
                 isHiddenUpstream: model.hidden,

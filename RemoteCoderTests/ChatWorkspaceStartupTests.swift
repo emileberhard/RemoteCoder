@@ -96,7 +96,7 @@ struct ChatWorkspaceStartupTests {
             let context = try ComposerDraftStore.makeContext(directory: fixture.temporaryStorage.storage.directory(for: scope).appending(path: "drafts"))
             let draft = ComposerDraft(destination: ComposerDraftStore.Destination.newChat(slot).key)
             draft.text = text
-            draft.newChat = .init(workingDirectory: path, modelID: CodexModelFixtures.solID, reasoning: .effort(.high), fastMode: true,
+            draft.newChat = .init(workingDirectory: path, modelID: CodexModelFixtures.solID, reasoning: .effort(.high), speed: .fast,
                                   forkPoint: nil)
             context.insert(draft)
             try context.save()

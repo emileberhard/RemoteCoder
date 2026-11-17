@@ -14,12 +14,12 @@ struct ConversationSettingsSelection: Equatable {
 
     private(set) var model: ModelOption?
     private(set) var reasoning: ReasoningSelection
-    private(set) var fastMode: FastModeState
+    private(set) var fastMode: ConversationSpeedState
     private(set) var availability = Availability.ready
     private(set) var revision: UInt64 = 0
     private var reasoningByModelID: [String: ReasoningSelection] = [:]
 
-    init(model: ModelOption?, reasoning: ReasoningSelection, fastMode: FastModeState) {
+    init(model: ModelOption?, reasoning: ReasoningSelection, fastMode: ConversationSpeedState) {
         self.model = model
         self.reasoning = reasoning
         self.fastMode = fastMode
@@ -27,11 +27,14 @@ struct ConversationSettingsSelection: Equatable {
 
     var isReady: Bool { availability == .ready }
     var isLoading: Bool { availability == .loading }
-    var fastModeSelection: Bool? { fastMode.selection }
+    var fastModeSelection: Bool? { fastMode.selection?.isAccelerated }
+
+    var speedSelection: ConversationSpeed? {
+        fastMode.displayedSpeed(for: model)
+    }
 
     var serviceTierOverride: CodexAppServerV2.ServiceTierOverride? {
-        guard let fastModeSelection else { return nil }
-        return fastModeSelection && model?.supportsFastMode == true ? .set(.fast) : .clear
+        fastMode.tierOverride(for: model)
     }
 
     var unavailableMessage: String? {
@@ -47,13 +50,13 @@ struct ConversationSettingsSelection: Equatable {
         reasoningByModelID[model.id] = selection
     }
 
-    mutating func choose(model: ModelOption?, reasoning: ReasoningSelection, fastMode: FastModeState) {
+    mutating func choose(model: ModelOption?, reasoning: ReasoningSelection, fastMode: ConversationSpeedState) {
         revision &+= 1
         assign(model: model, reasoning: reasoning, fastMode: fastMode)
     }
 
     mutating func chooseForConversation(model: ModelOption, reasoning: ReasoningSelection,
-                                        fastMode: FastModeState) {
+                                        fastMode: ConversationSpeedState) {
         choose(model: model, reasoning: reasoning, fastMode: fastMode)
         availability = .ready
     }
@@ -63,7 +66,7 @@ struct ConversationSettingsSelection: Equatable {
         model = nil
     }
 
-    mutating func adopt(model: ModelOption, reasoning: ReasoningSelection, fastMode: FastModeState) {
+    mutating func adopt(model: ModelOption, reasoning: ReasoningSelection, fastMode: ConversationSpeedState) {
         assign(model: model, reasoning: reasoning, fastMode: fastMode)
     }
 
@@ -71,22 +74,21 @@ struct ConversationSettingsSelection: Equatable {
         self.model = model
     }
 
-    mutating func restore(model: ModelOption, reasoning: ReasoningSelection, fastMode: FastModeState) {
+    mutating func restore(model: ModelOption, reasoning: ReasoningSelection, fastMode: ConversationSpeedState) {
         assign(model: model, reasoning: reasoning, fastMode: fastMode)
         availability = .ready
     }
 
-    mutating func observe(model: ModelOption, reasoning: ReasoningSelection, reportedFastMode: Bool?) {
-        let observed = fastMode.observing(reportedFastMode)
-        if self.model != model || self.reasoning != reasoning || !fastMode.hasSameChoice(as: observed) {
+    mutating func observe(model: ModelOption, reasoning: ReasoningSelection, speedState: ConversationSpeedState) {
+        if self.model != model || self.reasoning != reasoning || !fastMode.hasSameChoice(as: speedState) {
             revision &+= 1
         }
-        assign(model: model, reasoning: reasoning, fastMode: observed)
+        assign(model: model, reasoning: reasoning, fastMode: speedState)
         availability = .ready
     }
 
-    mutating func showRecent(model: ModelOption, reasoning: ReasoningSelection, fastMode: FastModeState) {
-        let shown = model.provider == .codex ? FastModeState.readback(nil, remembered: fastMode.remembered) : fastMode
+    mutating func showRecent(model: ModelOption, reasoning: ReasoningSelection, fastMode: ConversationSpeedState) {
+        let shown = model.provider == .codex ? ConversationSpeedState.readback(nil, remembered: fastMode.remembered) : fastMode
         restore(model: model, reasoning: reasoning, fastMode: shown)
     }
 
@@ -106,7 +108,7 @@ struct ConversationSettingsSelection: Equatable {
 
     @discardableResult
     mutating func acceptTierReadback(_ extra: CodexAppServerV2.ThreadExtra?, expectedRevision: UInt64) -> Bool {
-        guard revision == expectedRevision, let extra else { return false }
+        guard revision == expectedRevision, let extra, extra.hasServiceTier else { return false }
         fastMode = fastMode.reading(extra)
         return true
     }
@@ -114,7 +116,7 @@ struct ConversationSettingsSelection: Equatable {
     @discardableResult
     mutating func restore(
         from thread: ConversationHeader, saved: ConversationMetadata?,
-        resolveOption: (_ modelID: String, _ effort: String?, _ fastMode: Bool) -> ModelOption?
+        resolveOption: (_ modelID: String, _ effort: String?, _ reportedSpeed: ConversationSpeed?) -> ModelOption?
     ) -> RestoredFrom? {
         // An unloaded Claude transcript describes the last run. A newer, explicit
         // settings change may already have selected a different model for its next turn.
@@ -128,7 +130,7 @@ struct ConversationSettingsSelection: Equatable {
         let reportedEffort = useSavedSelection ? savedReasoning?.effort?.rawValue
             : thread.reasoningEffort?.rawValue ?? (sameModel ? savedReasoning?.effort?.rawValue : nil)
         guard let option = resolveOption(modelID, reportedEffort,
-                                        thread.extra?.fastModeSelection ?? saved?.fastModeEnabled ?? false) else { return nil }
+                                        thread.extra?.speedSelection ?? saved?.rememberedSpeed) else { return nil }
         let restoredReasoning: ReasoningSelection
         if !useSavedSelection {
             // Automatic is a user choice; the server reports its resolved level.
@@ -141,15 +143,15 @@ struct ConversationSettingsSelection: Equatable {
         } else {
             restoredReasoning = savedReasoning ?? .automatic
         }
-        let rememberedFastMode = saved?.fastModeEnabled
+        let rememberedSpeed = saved?.rememberedSpeed
         let restoredFastMode = option.provider == .codex
-            ? FastModeState.readback(thread.extra?.fastModeSelection, remembered: rememberedFastMode)
-            : FastModeState.selection(rememberedFastMode)
+            ? ConversationSpeedState.readback(thread.extra?.speedSelection, remembered: rememberedSpeed)
+            : ConversationSpeedState.selection(rememberedSpeed)
         restore(model: option, reasoning: restoredReasoning, fastMode: restoredFastMode)
         return useSavedSelection ? .savedSelection : .thread
     }
 
-    private mutating func assign(model: ModelOption?, reasoning: ReasoningSelection, fastMode: FastModeState) {
+    private mutating func assign(model: ModelOption?, reasoning: ReasoningSelection, fastMode: ConversationSpeedState) {
         self.model = model
         self.reasoning = reasoning
         self.fastMode = fastMode

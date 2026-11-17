@@ -154,6 +154,7 @@ export class Workspace {
       () => this.dispatcher.pendingReceipts,
       (conversation) => this.dispatcher.reconcileReceipts(conversation),
       (target, notification) => this.event(target, notification),
+      (conversation, settings) => this.settings.observe(conversation, settings),
       (host, value) => this.sidebar.receiveActivity(host, value),
       (host, threadId, inventory) => this.sidebar.receiveQuestions(host, threadId, inventory),
       (hostId) =>
@@ -453,9 +454,9 @@ export class Workspace {
     if (!path) throw new Error("Choose a working directory");
     if (path === this.draft.cwd) return;
     if (this.startsNewConversation(path)) {
-      const { model, provider, effort, fast } = this.draft;
+      const { model, provider, effort, fast, serviceTier } = this.draft;
       this.newConversation();
-      this.updateDraft({ cwd: path, model, provider, effort, fast });
+      this.updateDraft({ cwd: path, model, provider, effort, fast, serviceTier });
       return;
     }
     this.updateDraft({ cwd: path });
@@ -518,6 +519,8 @@ export class Workspace {
         effort: conversation.header.reasoningEffort ?? "",
         provider: conversation.header.provider,
       });
+    if (conversation?.header.provider === "codex")
+      this.settings.observe(conversation, conversation.header.extra ?? {}, true);
   }
   private async loadNavigationConversation(address: Address, fence: number) {
     try {
@@ -579,7 +582,12 @@ export class Workspace {
     await (this.state.selected ? this.sessions.get(this.state.selected)?.newer() : undefined);
   }
   updateDraft(change: Partial<Draft>, key = this.draftKey) {
-    this.drafts.update(change, key);
+    this.drafts.update(
+      change.fast !== undefined && !("serviceTier" in change)
+        ? { ...change, serviceTier: change.fast ? "fast" : null }
+        : change,
+      key,
+    );
   }
   flushDrafts() {
     this.drafts.flush();

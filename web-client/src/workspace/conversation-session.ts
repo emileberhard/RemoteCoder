@@ -102,6 +102,7 @@ export class ConversationSession {
       applyActivity(host: HostState, value: unknown): void;
       receiveQuestions(host: HostState, threadId: string, inventory: Questions): void;
       replay(target: ExecutionTarget, notification: Frame): void;
+      observeSettings(conversation: Conversation, settings: Record<string, unknown>): void;
     },
   ) {
     this.state = {
@@ -874,6 +875,26 @@ export class ConversationSession {
         ...conversation.requests.filter((value) => value.id !== notification.id),
         { id: notification.id, method: notification.method, params },
       ];
+      this.publish();
+      return;
+    }
+    if (notification.method === "thread/settings/updated" && conversation.header.provider === "codex") {
+      const settings = object(params.threadSettings);
+      const header = conversation.header;
+      conversation.header = {
+        ...header,
+        model: typeof settings.model === "string" ? settings.model : header.model,
+        reasoningEffort:
+          typeof settings.effort === "string"
+            ? (settings.effort as ConversationHeader["reasoningEffort"])
+            : settings.effort === null
+              ? null
+              : header.reasoningEffort,
+        extra: Object.hasOwn(settings, "serviceTier")
+          ? { ...header.extra, serviceTier: optionalString(settings.serviceTier) }
+          : header.extra,
+      };
+      this.actions.observeSettings(conversation, settings);
       this.publish();
       return;
     }

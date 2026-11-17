@@ -155,12 +155,12 @@ struct UnsentDraftTests {
         let draft = try #require(await store.draft(for: .newChat(id)))
         store.setText("Edited prompt", in: draft)
         let point = NewChatSetup.ForkPoint(threadID: "source", lastTurnID: "turn-1")
-        let forked = NewChatSetup(workingDirectory: "/repo", modelID: "gpt-6-sol", reasoning: .automatic, fastMode: nil,
+        let forked = NewChatSetup(workingDirectory: "/repo", modelID: "gpt-6-sol", reasoning: .automatic, speed: nil,
                                   forkPoint: point)
         store.setNewChatSetup(forked, in: draft)
         store.setNewChatSetup(setup(folder: "/elsewhere"), in: draft)
         #expect(draft.newChat == forked)
-        let rechosen = NewChatSetup(workingDirectory: "/repo", modelID: "gpt-6-astra", reasoning: .effort(.high), fastMode: nil,
+        let rechosen = NewChatSetup(workingDirectory: "/repo", modelID: "gpt-6-astra", reasoning: .effort(.high), speed: nil,
                                     forkPoint: point)
         store.setNewChatSetup(rechosen, in: draft)
         #expect(await store.flush())
@@ -177,7 +177,7 @@ struct UnsentDraftTests {
     @Test func aSetupSavedBeforeForkPointsDecodesWithoutOne() throws {
         let saved = #"{"workingDirectory":"/repo","modelID":"gpt-6-sol","reasoning":"effort-high","fastMode":true}"#
         let setup = try JSONDecoder().decode(NewChatSetup.self, from: Data(saved.utf8))
-        #expect(setup == NewChatSetup(workingDirectory: "/repo", modelID: "gpt-6-sol", reasoning: .effort(.high), fastMode: true,
+        #expect(setup == NewChatSetup(workingDirectory: "/repo", modelID: "gpt-6-sol", reasoning: .effort(.high), speed: .fast,
                                       forkPoint: nil))
     }
 
@@ -252,12 +252,12 @@ struct UnsentDraftTests {
 
     private func setup(folder: String, model: String? = nil, reasoning: ReasoningSelection = .automatic,
                        fast: Bool? = nil) -> NewChatSetup {
-        NewChatSetup(workingDirectory: folder, modelID: model, reasoning: reasoning, fastMode: fast, forkPoint: nil)
+        NewChatSetup(workingDirectory: folder, modelID: model, reasoning: reasoning, speed: fast.map(ConversationSpeed.init(accelerated:)), forkPoint: nil)
     }
 
     private func summary(_ title: String, folder: String?, model: String?, at date: Date?) -> UnsentDraftSummary {
         UnsentDraftSummary(id: UUID(), title: title,
-                           setup: NewChatSetup(workingDirectory: folder, modelID: model, reasoning: .automatic, fastMode: nil, forkPoint: nil),
+                           setup: NewChatSetup(workingDirectory: folder, modelID: model, reasoning: .automatic, speed: nil, forkPoint: nil),
                            modifiedAt: date)
     }
 

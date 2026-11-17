@@ -36,6 +36,7 @@ export class ConversationSessions {
     private readonly receipts: () => ReadonlyMap<string, SubmissionReceipt>,
     private readonly reconcileReceipts: (conversation: Conversation) => void,
     private readonly replay: (target: ExecutionTarget, notification: Frame) => void,
+    private readonly observeSettings: (conversation: Conversation, settings: Record<string, unknown>) => void,
     private readonly receiveActivity: (host: HostState, value: unknown) => void,
     private readonly receiveQuestions: (host: HostState, threadId: string, inventory: Questions) => void,
     private readonly claudeQueue: (hostId: string) => Promise<boolean | undefined>,
@@ -95,6 +96,7 @@ export class ConversationSessions {
       applyActivity: (host, value) => this.applyActivity(host, value),
       receiveQuestions: this.receiveQuestions,
       replay: this.replay,
+      observeSettings: this.observeSettings,
       claudeQueue: this.claudeQueue,
     });
     this.sessions.set(addressKey(address), session);

@@ -167,8 +167,8 @@ struct ClaudeRouterAccountTests {
         try state.accept(JSONDecoder().decode(ClaudeRouterAccountList.self, from: data))
         #expect(state.accounts.map(\.cyberVerified) == [true, nil])
         let external = ModelOption.unlisted(id: "copilot/gemini-4-argon", modelProvider: .init(id: "copilot", name: "Copilot"),
-                                            reportedEffort: nil, reportedFastMode: false, provider: .claude)
-        let codex = ModelOption.unlisted(id: "gpt-6", modelProvider: nil, reportedEffort: nil, reportedFastMode: false)
+                                            reportedEffort: nil, reportedSpeed: nil, provider: .claude)
+        let codex = ModelOption.unlisted(id: "gpt-6", modelProvider: nil, reportedEffort: nil, reportedSpeed: nil)
         let sonnet = try #require(ClaudeModelCatalog.model(for: "sonnet"))
         let options = ClaudeModelCatalog.models + [external, codex]
         #expect(state.offeredModels(options, keeping: nil).map(\.id) == ["opus", "copilot/gemini-4-argon", "gpt-6"])

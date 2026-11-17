@@ -5,7 +5,7 @@ struct ConversationSettingsControls<Status: View>: View {
     let models: [ModelOption]
     @Binding var model: ModelOption
     @Binding var reasoning: ReasoningSelection
-    @Binding var fastMode: Bool?
+    @Binding var speed: ConversationSpeed?
     @ViewBuilder var status: Status
 
     @Environment(ModelPickerPreferences.self) private var preferences
@@ -25,9 +25,8 @@ struct ConversationSettingsControls<Status: View>: View {
             status
             Spacer(minLength: 0)
             reasoningMenu
-            ConversationFastModeToggle(isAvailable: model.supportsFastMode, isOn: $fastMode,
-                                       symbolHeight: symbolHeight)
-                .tooltip("Fast mode")
+            ConversationSpeedControl(model: model, speed: $speed, symbolHeight: symbolHeight)
+                .tooltip(model.supportsUltrafast ? "Speed · Hold for Ultrafast" : "Fast mode")
                 .composerControlHitRegion()
         }
         .frame(maxWidth: .infinity, alignment: .leading)

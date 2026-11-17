@@ -6,7 +6,7 @@ extension RemoteCoderVoiceConfiguration {
         configuredModel: (String) -> NewChatModelLookup,
         defaultModel: () -> NewChatModelLookup,
         preferences: ModelPickerPreferences
-    ) throws -> (model: ModelOption, reasoning: ReasoningSelection, fastModeEnabled: Bool) {
+    ) throws -> (model: ModelOption, reasoning: ReasoningSelection, speed: ConversationSpeed) {
         let model: ModelOption
         if let modelID {
             model = try configuredModel(modelID).requireModel(ifNotOffered: .modelNotOffered(modelID))
@@ -25,8 +25,8 @@ extension RemoteCoderVoiceConfiguration {
         } else {
             reasoning = NewChatDefaults.reasoningSelection()
         }
-        return (model, preferences.clamped(reasoning, for: model),
-                fastModeEnabled && model.supportsFastMode)
+        let speed = self.speed.flatMap(ConversationSpeed.init(rawValue:)) ?? ConversationSpeed(accelerated: fastModeEnabled)
+        return (model, preferences.clamped(reasoning, for: model), model.supportsSpeed(speed) ? speed : .standard)
     }
 }
 

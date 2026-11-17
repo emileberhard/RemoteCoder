@@ -101,6 +101,7 @@ actor ConversationMetadataService {
         let preference = document.acknowledged[sessionID] ?? document.legacy?[sessionID]
         guard var observed = document.observed?[sessionID]?.metadata else { return preference }
         observed.fastModeEnabled = preference?.fastModeEnabled
+        observed.speed = preference?.speed
         return observed
     }
 
@@ -113,7 +114,9 @@ actor ConversationMetadataService {
             let settings = notification.threadSettings
             let reasoning = settings.effort.map { "effort-\($0.rawValue)" } ?? "automatic"
             let observed = ConversationMetadata(sessionID: notification.threadId, modelID: settings.model,
-                reasoningSelectionID: reasoning, fastModeEnabled: settings.fastModeSelection, updatedAt: observedAt)
+                reasoningSelectionID: reasoning, fastModeEnabled: settings.fastModeSelection,
+                speed: settings.speedSelection == .ultrafast ? .ultrafast : nil,
+                updatedAt: observedAt)
             let acknowledgedRevision = document.acknowledged[notification.threadId]?.serverRevision
             if document.observed?[notification.threadId]?.metadata.selection != observed.selection
                 || document.observed?[notification.threadId]?.acknowledgedRevision != acknowledgedRevision {
@@ -127,19 +130,19 @@ actor ConversationMetadataService {
         } catch { failed(error) }
     }
 
-    func upsert(sessionID: String, modelID: String, reasoningSelectionID: String, fastModeEnabled: Bool?,
+    func upsert(sessionID: String, modelID: String, reasoningSelectionID: String, speed: ConversationSpeed?,
                 source: ConversationMetadata.Source) async {
         guard !isRetired else { return }
         do {
             try await load()
             guard !isRetired else { return }
-            let rememberedFastMode = document.pending[sessionID]?.metadata.fastModeEnabled
-                ?? document.acknowledged[sessionID]?.fastModeEnabled
-                ?? document.legacy?[sessionID]?.fastModeEnabled
+            let preference = speed ?? document.pending[sessionID]?.metadata.rememberedSpeed
+                ?? document.acknowledged[sessionID]?.rememberedSpeed
+                ?? document.legacy?[sessionID]?.rememberedSpeed
             let selection = ConversationMetadataSelection(sessionID: sessionID,
                 modelID: modelID.trimmingCharacters(in: .whitespacesAndNewlines),
                 reasoningSelectionID: reasoningSelectionID.trimmingCharacters(in: .whitespacesAndNewlines),
-                fastModeEnabled: fastModeEnabled ?? rememberedFastMode, source: source)
+                fastModeEnabled: preference?.isAccelerated, speed: preference == .ultrafast ? .ultrafast : nil, source: source)
             guard !selection.modelID.isEmpty, !selection.reasoningSelectionID.isEmpty else { return }
             if document.pending[sessionID]?.mutation.selection == selection {
                 try await persist()
@@ -256,6 +259,7 @@ actor ConversationMetadataService {
                 try await persist()
                 // Snapshot identifiers, not values. A newer local edit can arrive
                 // at any await and must not be acknowledged by an older response.
+                var needsUpdatedGateway = false
                 for id in document.pending.keys.sorted() {
                     try Task.checkCancellation()
                     guard !isRetired else { return }
@@ -266,6 +270,16 @@ actor ConversationMetadataService {
                         let applied = try await remote.updateRemoteMetadata(pending.mutation)
                         try Task.checkCancellation()
                         guard !isRetired else { return }
+                        if let requestedSpeed = pending.mutation.selection.speed, applied.speed != requestedSpeed,
+                           document.pending[id]?.mutation.mutationID == pending.mutation.mutationID {
+                            if document.acknowledged[id] != applied {
+                                acknowledge(applied, for: id)
+                                revision += 1
+                                try await persist()
+                            }
+                            needsUpdatedGateway = true
+                            continue
+                        }
                         acknowledge(applied, for: id)
                         if document.observed?[id] == observed { document.observed?[id] = nil }
                         if document.pending[id]?.mutation.mutationID == pending.mutation.mutationID {
@@ -286,7 +300,8 @@ actor ConversationMetadataService {
                         try await persist()
                     }
                 }
-                status.error = refreshError
+                status.error = needsUpdatedGateway
+                    ? "The gateway needs an update to sync the Ultrafast preference." : refreshError
                 publishStatus()
             } catch is CancellationError { return }
             catch {
@@ -339,7 +354,7 @@ actor ConversationMetadataService {
                         observations[id] = nil
                     } else if current.modelID == observed.metadata.modelID
                         && current.reasoningSelectionID == observed.metadata.reasoningSelectionID
-                        && current.fastModeEnabled == observed.metadata.fastModeEnabled {
+                        && current.rememberedSpeed == observed.metadata.rememberedSpeed {
                         observations[id] = nil
                     } else if observed.acknowledgedRevision == nil, let revision = current.serverRevision {
                         observed.acknowledgedRevision = revision

@@ -51,15 +51,17 @@ extension CodexAppServerV2 {
 
     struct ThreadExtra: Codable, Equatable, Sendable {
         let serviceTier: String?
-        private let hasServiceTier: Bool
+        let hasServiceTier: Bool
 
         init(serviceTier: String?) {
             self.serviceTier = serviceTier
             hasServiceTier = true
         }
 
-        var fastModeSelection: Bool? {
-            hasServiceTier ? ServiceTier.fastModeSelection(for: serviceTier) : nil
+        var fastModeSelection: Bool? { speedSelection?.isAccelerated }
+
+        var speedSelection: ConversationSpeed? {
+            hasServiceTier ? ServiceTier.speedSelection(for: serviceTier) : nil
         }
 
         private enum CodingKeys: String, CodingKey { case serviceTier }

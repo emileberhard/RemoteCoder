@@ -43,10 +43,23 @@ enum NewChatDefaults {
     }
 
     static func fastModeEnabled(defaults: UserDefaults = AppStorageScope.current.defaults) -> Bool {
-        defaults.bool(forKey: fastModeKey)
+        speed(defaults: defaults).isAccelerated
+    }
+
+    static func speed(defaults: UserDefaults = AppStorageScope.current.defaults) -> ConversationSpeed {
+        if defaults.string(forKey: fastModeKey) == ConversationSpeed.ultrafast.rawValue { return .ultrafast }
+        return ConversationSpeed(accelerated: defaults.bool(forKey: fastModeKey))
+    }
+
+    static func recordSpeed(_ speed: ConversationSpeed, defaults: UserDefaults = AppStorageScope.current.defaults) {
+        if speed == .ultrafast {
+            defaults.set(speed.rawValue, forKey: fastModeKey)
+        } else {
+            defaults.set(speed.isAccelerated, forKey: fastModeKey)
+        }
     }
 
     static func setFastModeEnabled(_ enabled: Bool, defaults: UserDefaults = AppStorageScope.current.defaults) {
-        defaults.set(enabled, forKey: fastModeKey)
+        recordSpeed(ConversationSpeed(accelerated: enabled), defaults: defaults)
     }
 }

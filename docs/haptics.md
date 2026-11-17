@@ -1,7 +1,7 @@
 # Haptics and press previews
 
 RemoteCoder has one semantic vocabulary with one recipe per event: firm everyday
-contact, firm slider detents and two short, gesture-owned lift/seating accents.
+contact, firm slider detents and short, gesture-owned accents.
 The recipes never change the meaning of success, warning or error. There is no
 in-app haptics setting, audio click track, haptic library dependency, background
 rumble or perpetual keep-warm timer.
@@ -280,11 +280,14 @@ pool prepares anticipated impact/selection recipes at contact and re-prepares
 after ticks. Requests go directly to its prepared generators. No tick backlog
 is accumulated and the final detent/release pair is not blindly layered.
 
-The prepared player also prepares a haptics-only Core Haptics engine and two cached players.
+The prepared player also prepares a haptics-only Core Haptics engine and caches its pattern players.
 Startup is asynchronous. If an accent is not ready at its event, a native recipe
 plays immediately instead; startup never replays it later. The lift has a 35 ms
 rounded onset followed by a crisp transient; seating is a contact plus a fading
-65 ms tail (75 ms total). A new gesture event stops the previous accent. Custom
+65 ms tail (75 ms total). Ultrafast uses an 84 ms soft swell capped by a crisp
+transient as the Jetstream bolt moves forward. The composer prepares on contact,
+plays once when the hold commits, and lets the short accent finish after release.
+A new gesture event stops the previous accent. Custom
 patterns replace, not accompany, the corresponding native impact.
 
 The engine belongs to this interaction, not each tick. Stop/reset/start callbacks

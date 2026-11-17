@@ -5,7 +5,7 @@ struct ConversationSettingsControls<Status: View>: View {
     let models: [ModelOption]
     @Binding var model: ModelOption
     @Binding var reasoning: ReasoningSelection
-    @Binding var fastMode: Bool?
+    @Binding var speed: ConversationSpeed?
     var haptics: HapticService = .shared
     @ViewBuilder var status: Status
 
@@ -160,7 +160,7 @@ struct ConversationSettingsControls<Status: View>: View {
     }
 
     private var fastModeToggle: some View {
-        ConversationFastModeToggle(isAvailable: model.supportsFastMode, isOn: $fastMode, symbolHeight: symbolHeight)
+        ConversationSpeedControl(model: model, speed: $speed, symbolHeight: symbolHeight, haptics: haptics)
             .composerControlHitRegion()
     }
 

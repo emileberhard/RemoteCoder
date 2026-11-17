@@ -17,6 +17,7 @@ export type Draft = {
   provider: Provider;
   effort: string;
   fast: boolean;
+  serviceTier?: string | null;
   cwd: string;
   uncertain?: string;
 };
@@ -30,6 +31,24 @@ export const blank = (host?: Host): Draft => ({
   fast: false,
   cwd: host?.cwd ?? "",
 });
+
+export function reportedServiceTier(value: unknown): string | null | undefined {
+  if (value === null || value === "default") return null;
+  return typeof value === "string" ? value : undefined;
+}
+
+export function fastServiceTier(tier: string | null | undefined) {
+  return tier === "fast" || tier === "priority" || tier === "ultrafast";
+}
+
+export function supportedServiceTier(
+  tier: string | null | undefined,
+  choice: { fast: boolean; ultrafast?: boolean },
+) {
+  if (tier === "ultrafast") return choice.ultrafast ? tier : undefined;
+  if (tier === "fast" || tier === "priority") return choice.fast ? tier : null;
+  return tier;
+}
 
 export class ComposerDraftStore {
   private drafts = new Map<string, Draft>();

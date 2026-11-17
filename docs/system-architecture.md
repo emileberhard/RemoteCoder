@@ -2472,9 +2472,15 @@ without overwriting the preference. Likewise, a preferred Codex model that is
 hidden in Settings or absent from the host's `model/list` resolves to the app's
 initial model (`NewChatDefaults.initialCodexModelID`) when visible, then the
 host's `isDefault` model, then the first visible one. Applying that resolved
-default does not record it, so the stored preference stays unchanged. Fast mode retains the last manual Fast choice independently of model support.
-Only supported models enable the tier; moving through Claude or another unsupported
-model does not erase the choice. Opening a conversation or applying a shortcut's explicit configuration
+default does not record it, so the stored preference stays unchanged. Speed retains the last manual Standard, Fast, or Ultrafast choice independently of
+model support. An unsupported preference resolves to Standard for the current
+model and is retained when switching back. Ultrafast is offered only for Codex
+models that advertise the tier. A short tap selects ordinary Fast from Standard
+or Ultrafast, and selects Standard from Fast. Holding the control switches
+between Ultrafast and Fast on models with both tiers. New-chat speed uses one
+synced value at `codex.fastModeEnabled`. Existing Boolean values mean Standard
+and Fast, and the string `"ultrafast"` selects Ultrafast. An older client's next
+Boolean write replaces that choice in the same preference. Opening a conversation or applying a shortcut's explicit configuration
 never changes these preferences.
 
 New Chat actions use the configured provider on the physical host default,
@@ -2512,14 +2518,14 @@ acknowledged versioned metadata. Restoration uses those values without a remote
 read; absent tier readback stays unknown. Reads started before an observation
 cannot clear it. A later read reconciles it when the settings agree or its
 acknowledged revision proves a newer preference than the observation's captured
-baseline. Runtime tier readback never replaces the acknowledged Fast preference.
+baseline. Runtime tier readback never replaces the acknowledged speed preference.
 Observations carry local receipt time and no invented runtime server revision,
 mutation identity or selection source. Historical replay never reinstates old settings. A pending explicit edit wins
 over notifications until its latest response arrives. Per-session metadata
-stores the requested Fast preference and whether it records an explicit selection
+stores the requested speed preference and whether it records an explicit selection
 or an observed runtime setting. Loaded Codex thread reads expose the current tier
 in `thread.extra.serviceTier`; this live snapshot takes precedence over metadata.
-Both `fast` and `priority` mean Fast. Cached and unloaded threads have unknown
+Both `fast` and `priority` mean Fast. `ultrafast` is a separate tier. Cached and unloaded threads have unknown
 readback, shown by a question mark on the Fast control, and preserve the remote tier
 on sends, reasoning changes and forks. Native cold resume restores the latest
 thread-owned settings snapshot; native forks inherit the source's live or persisted
@@ -2534,7 +2540,10 @@ Voice startup, refresh and incoming calls apply readback under their conversatio
 host and call ownership checks. Unrepresentable tiers such as `flex` remain
 unknown to the Fast control and are omitted on unrelated edits; observed state
 does not overwrite the remembered user preference. `conversation/settings/update` omits an
-unknown tier, sends `fast` for On, and sends explicit null for Off. The gateway
+unknown tier, sends `fast` or `ultrafast` for an accelerated tier, and sends
+explicit null for Standard. Conversation metadata keeps the
+legacy `fastModeEnabled` encoding for Standard and Fast. Ultrafast adds
+`speed: "ultrafast"` alongside the Boolean projection. The gateway
 preserves that omission/null distinction for both future and active settings. A newer explicit selection for an unloaded Claude thread
 survives until its next turn, while legacy metadata cannot override a known
 server model. Metadata synchronization merges against the current local state

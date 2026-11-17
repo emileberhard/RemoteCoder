@@ -373,7 +373,7 @@ fileprivate struct ChatWindowActionContext {
             selectedModelID: screen.selectedModel?.id,
             reasoningLevels: settingsModel.map { workspace.modelPickerPreferences.reasoningEfforts(for: $0).map { .effort($0) } } ?? [],
             reasoning: screen.reasoningSelection,
-            isFastModeOn: fastModel != nil && screen.fastModeSelection == true,
+            isFastModeOn: fastModel != nil && screen.speedSelection == .fast,
             favoriteFolders: workspace.favoriteFolders,
             drawerMode: workspace.drawerPreferences.mode,
             isUnreadOnly: workspace.drawerPreferences.unreadOnly,
@@ -408,7 +408,7 @@ fileprivate struct ChatWindowActionContext {
             if let turn = screen.composerStopState.readyTurn { screen.stopTurn(turn) }
         case .focusComposer: focusComposer()
         case .attachFile: attachFile()
-        case .toggleFastMode: screen.selectFastMode(screen.fastModeSelection != true, for: screen.activeSessionID)
+        case .toggleFastMode: screen.selectSpeed(screen.speedSelection == .fast ? .standard : .fast, for: screen.activeSessionID)
         case .togglePin:
             if let address = screen.openAddress {
                 if workspace.isPinned(address) {

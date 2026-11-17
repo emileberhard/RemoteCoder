@@ -318,7 +318,7 @@ struct ChatComposerView: View {
             models: modelOptions,
             model: Binding(get: { selectedModel }, set: { onSelectModel($0) }),
             reasoning: reasoningSelection,
-            fastMode: fastModeSelection
+            speed: speedSelection
         ) {
             #if os(iOS)
             if let usage = screen.contextWindowUsage {
@@ -473,9 +473,9 @@ struct ChatComposerView: View {
         })
     }
 
-    private var fastModeSelection: Binding<Bool?> {
-        Binding(get: { screen.fastModeSelection }, set: {
-            if let value = $0 { screen.selectFastMode(value, for: screen.activeSessionID) }
+    private var speedSelection: Binding<ConversationSpeed?> {
+        Binding(get: { screen.speedSelection }, set: {
+            if let value = $0 { screen.selectSpeed(value, for: screen.activeSessionID) }
         })
     }
 
@@ -1178,7 +1178,7 @@ private struct ChatComposerPreview: View {
         let screen = ChatScreenModel(target: target, newChat: UUID())
         screen.selectModel(Self.model, for: nil)
         screen.selectReasoning(.effort(.high), for: nil)
-        screen.selectFastMode(false, for: nil)
+        screen.selectSpeed(.standard, for: nil)
         if state == .draft {
             screen.input = "Make the composer more compact while reading, and expand it smoothly when I start typing."
         }

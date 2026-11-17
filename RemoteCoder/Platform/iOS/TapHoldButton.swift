@@ -21,6 +21,7 @@ struct TapHoldButton: UIViewRepresentable {
         let button = ContactButton(type: .custom)
         button.addTarget(context.coordinator, action: #selector(Coordinator.activate), for: .primaryActionTriggered)
         button.addGestureRecognizer(context.coordinator.hold)
+        button.hold = context.coordinator.hold
         return button
     }
 
@@ -59,6 +60,7 @@ struct TapHoldButton: UIViewRepresentable {
     }
 
     final class ContactButton: UIButton {
+        weak var hold: UILongPressGestureRecognizer?
         var onPress: (Bool) -> Void = { _ in }
         var onContactEnded: () -> Void = {}
 
@@ -73,7 +75,7 @@ struct TapHoldButton: UIViewRepresentable {
 
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
             super.touchesCancelled(touches, with: event)
-            onContactEnded()
+            if hold?.state != .began, hold?.state != .changed { onContactEnded() }
         }
     }
 
@@ -106,6 +108,9 @@ struct TapHoldButton: UIViewRepresentable {
                 source = .zero
             }
             onHold(phase, recognizer.location(in: nil), source)
+            if phase == .ended || phase == .cancelled {
+                (recognizer.view as? ContactButton)?.onContactEnded()
+            }
         }
 
         func cancelHold() {

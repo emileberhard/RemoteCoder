@@ -29,7 +29,7 @@ final class TurnDispatcher {
         let model: ModelOption
         let reasoning: ReasoningSelection
         let serviceTier: CodexAppServerV2.ServiceTierOverride?
-        let fastModeState: FastModeState
+        let speedState: ConversationSpeedState
         let workingDirectory: String?
         let selectionRevision: UInt64
 
@@ -40,20 +40,21 @@ final class TurnDispatcher {
             let changedRoute = provider != model.provider || id != model.id ||
                 modelProvider?.externalID != model.modelProvider?.id
             let effort = thread.reasoningEffort.flatMap { ReasoningEffort(rawValue: $0.rawValue) }
-            let fastMode = thread.extra?.fastModeSelection
+            let speed = thread.extra?.speedSelection
             let resolved: ModelOption
             if changedRoute {
                 resolved = (provider == .claude && modelProvider?.externalID == nil ? ClaudeModelCatalog.model(for: id, in: catalog) : nil)
                     ?? .unlisted(id: id, modelProvider: modelProvider?.modelProvider,
-                        reportedEffort: effort, reportedFastMode: fastMode == true, provider: provider)
+                        reportedEffort: effort, reportedSpeed: speed, provider: provider)
             } else {
                 resolved = model
             }
+            let admittedSpeed = changedRoute ? .readback(speed, remembered: speed) : speedState.reading(thread.extra)
             return Self(model: resolved,
                 reasoning: !changedRoute && reasoning == .automatic ? .automatic
                     : effort.map(ReasoningSelection.effort) ?? (changedRoute ? .automatic : reasoning),
-                serviceTier: fastMode.map { $0 ? .set(.fast) : .clear } ?? (changedRoute ? .clear : serviceTier),
-                fastModeState: changedRoute ? .readback(fastMode, remembered: fastMode) : fastModeState.reading(thread.extra),
+                serviceTier: speed == nil ? (changedRoute ? .clear : serviceTier) : admittedSpeed.tierOverride(for: resolved),
+                speedState: admittedSpeed,
                 workingDirectory: workingDirectory, selectionRevision: selectionRevision)
         }
     }
@@ -559,7 +560,7 @@ final class TurnDispatcher {
                 if sessionID == nil, host.selectionIsCurrent(revision: settings.selectionRevision, threadID: threadID) {
                     await metadata.upsert(sessionID: threadID, modelID: settings.model.id,
                         reasoningSelectionID: settings.reasoning.id,
-                        fastModeEnabled: settings.fastModeState.remembered,
+                        speed: settings.speedState.remembered,
                         source: .selection)
                 }
             } catch is CancellationError {

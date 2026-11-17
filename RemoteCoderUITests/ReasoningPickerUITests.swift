@@ -139,7 +139,7 @@ final class ReasoningPickerUITests: XCTestCase {
         assertClosed(in: app)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
 
-        let fast = app.switches["conversation-fast-mode-toggle"]
+        let fast = app.buttons["conversation-fast-mode-toggle"]
         let original = fast.value as? String
         fast.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertFalse(app.keyboards.firstMatch.exists)
@@ -159,6 +159,22 @@ final class ReasoningPickerUITests: XCTestCase {
         XCTAssertFalse(app.keyboards.firstMatch.exists)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
         XCTAssertFalse(app.keyboards.firstMatch.exists)
+    }
+
+    @MainActor
+    func testHoldSelectsUltrafastWithoutReleasingAsATap() throws {
+        let app = try launchReasoningDraft()
+        let speed = app.buttons["conversation-fast-mode-toggle"]
+        XCTAssertTrue(speed.waitForExistence(timeout: 5))
+        guard speed.label == "Speed" else { throw XCTSkip("Requires a Codex model that advertises Ultrafast") }
+        if speed.value as? String == "Ultrafast" { speed.tap() }
+        speed.press(forDuration: 0.45)
+        XCTAssertEqual(speed.value as? String, "Ultrafast")
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        speed.tap()
+        XCTAssertEqual(speed.value as? String, "Fast")
+        speed.tap()
+        XCTAssertEqual(speed.value as? String, "Standard")
     }
 
     @MainActor

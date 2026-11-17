@@ -17,7 +17,7 @@ enum CodexModelFixtures {
             wireModel(astraID, name: "GPT-6 Astra", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
                       serviceTiers: ["priority"], isDefault: true),
             wireModel(solID, name: "GPT-6.1 Sol", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-                      serviceTiers: ["priority"]),
+                      serviceTiers: ["priority", "ultrafast"]),
             wireModel(lunaID, name: "GPT-5.6 Luna", efforts: ["low", "medium", "high", "xhigh", "max"],
                       additionalSpeedTiers: ["fast"]),
             wireModel(sparkID, name: "GPT-5.3 Codex Spark", efforts: ["minimal", "low", "medium", "high", "xhigh"],

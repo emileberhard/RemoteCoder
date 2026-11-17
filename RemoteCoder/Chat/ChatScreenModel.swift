@@ -128,7 +128,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let reasoning = NewChatDefaults.reasoningSelection(defaults: target.chatDefaults)
         pickerSelection = ConversationSettingsSelection(
             model: model, reasoning: model.map { target.modelPickerPreferences.clamped(reasoning, for: $0) } ?? reasoning,
-            fastMode: .selection(NewChatDefaults.fastModeEnabled(defaults: target.chatDefaults)))
+            fastMode: .selection(NewChatDefaults.speed(defaults: target.chatDefaults)))
         currentDraft = drafts.cachedDraft(for: draftDestination)
         if let draft = currentDraft {
             currentConversationID = draft.id
@@ -274,21 +274,21 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let changedRoute = selectedModel?.provider != settings.model.provider ||
             selectedModel?.modelProvider?.id != settings.model.modelProvider?.id
         guard changedRoute || selectionIsCurrent(revision: settings.selectionRevision, threadID: threadID) else { return }
-        pickerSelection.adopt(model: settings.model, reasoning: settings.reasoning, fastMode: settings.fastModeState)
+        pickerSelection.adopt(model: settings.model, reasoning: settings.reasoning, fastMode: settings.speedState)
     }
 
     func adoptReportedModel(_ modelID: String?, threadID: String, selectionRevision: UInt64) {
         guard activeModelProvider?.externalID != nil, let modelID, modelID != selectedModel?.id,
               selectionIsCurrent(revision: selectionRevision, threadID: threadID),
               let option = modelOption(id: modelID, threadID: threadID, effort: reasoningSelection.effort?.rawValue,
-                                       fastMode: fastModeSelection == true) else { return }
+                                       reportedSpeed: speedState.selection) else { return }
         pickerSelection.adoptModel(option)
         refreshReasoningVisibility()
     }
 
-    private func modelOption(id: String, threadID: String, effort: String?, fastMode: Bool) -> ModelOption? {
+    private func modelOption(id: String, threadID: String, effort: String?, reportedSpeed: ConversationSpeed?) -> ModelOption? {
         target.modelCatalog.option(id: id, threadID: threadID, modelProvider: threadID == activeSessionID ? activeModelProvider : nil,
-                                   effort: effort, fastMode: fastMode)
+                                   effort: effort, reportedSpeed: reportedSpeed)
     }
 
     func beginNewChat() {
@@ -1009,7 +1009,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     private func turnSettings(model: ModelOption) -> TurnDispatcher.Settings {
         TurnDispatcher.Settings(model: model, reasoning: reasoningSelection,
-                                serviceTier: serviceTierOverride, fastModeState: fastModeState,
+                                serviceTier: serviceTierOverride, speedState: speedState,
                                 workingDirectory: workingDirectory, selectionRevision: settingsSelectionRevision)
     }
 
@@ -1287,7 +1287,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         case .afterTurn(let turnID): NewChatSetup.ForkPoint(threadID: threadID, lastTurnID: turnID)
         }
         let setup = NewChatSetup(workingDirectory: workingDirectory, modelID: selectedModel?.id,
-                                 reasoning: reasoningSelection, fastMode: fastModeSelection, forkPoint: forkPoint)
+                                 reasoning: reasoningSelection, speed: speedState.selection, forkPoint: forkPoint)
         let address = UnsentDraftAddress(target: executionTarget, draftID: UUID())
         guard let draft = await drafts.draft(for: .newChat(address.draftID)), target.acceptsWork else { return nil }
         drafts.setNewChatSetup(setup, in: draft)
@@ -1366,7 +1366,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let modelID: String? = if let selectedModel { selectedModel.id }
             else if case .unavailable(let modelID, _) = newChatModelSource { modelID } else { nil }
         return NewChatSetup(workingDirectory: workingDirectory, modelID: modelID, reasoning: reasoningSelection,
-                            fastMode: fastModeSelection, forkPoint: currentDraft?.newChat?.forkPoint)
+                            speed: speedState.selection, forkPoint: currentDraft?.newChat?.forkPoint)
     }
 
     private func chooseNewChatSetup() {
@@ -1397,7 +1397,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         if let directory = setup.workingDirectory { updateWorkingDirectory(directory) }
         guard let modelID = setup.modelID else { return refreshNewChatDefaults() }
         guard !adoptSettings(modelID: modelID, reasoning: setup.reasoningSelection ?? reasoningSelection,
-                             fastModeState: .selection(setup.fastMode), source: .draftSetup) else { return }
+                             speedState: .selection(setup.speed), source: .draftSetup) else { return }
         if case .unavailable(let unavailable, _) = newChatModelSource, unavailable == modelID { return }
         refreshNewChatDefaults()
     }
@@ -1837,7 +1837,9 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     var reasoningSelection: ReasoningSelection { pickerSelection.reasoning }
 
-    var fastModeState: FastModeState { pickerSelection.fastMode }
+    var speedState: ConversationSpeedState { pickerSelection.fastMode }
+
+    var speedSelection: ConversationSpeed? { pickerSelection.speedSelection }
 
     var fastModeSelection: Bool? { pickerSelection.fastModeSelection }
 
@@ -1880,7 +1882,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     func rememberConversationSettings() {
         guard let threadID = activeSessionID, areConversationSettingsReady, let selectedModel else { return }
-        target.recentConversations.record(.init(model: selectedModel, reasoning: reasoningSelection, fastModeState: fastModeState),
+        target.recentConversations.record(.init(model: selectedModel, reasoning: reasoningSelection, speedState: speedState),
             threadID: threadID)
     }
 
@@ -1889,7 +1891,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             pickerSelection.beginLoading()
             return
         }
-        pickerSelection.showRecent(model: settings.model, reasoning: settings.reasoning, fastMode: settings.fastModeState)
+        pickerSelection.showRecent(model: settings.model, reasoning: settings.reasoning, fastMode: settings.speedState)
         refreshReasoningVisibility()
     }
 
@@ -1933,8 +1935,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     func restorePendingConversationSettings(for threadID: String) -> Bool {
         guard activeSessionID == threadID, let pending = pendingSettings[threadID],
               let option = modelOption(id: pending.model, threadID: threadID, effort: pending.effort,
-                                       fastMode: pending.fastMode == true) else { return false }
-        pickerSelection.restore(model: option, reasoning: pending.reasoningSelection, fastMode: pending.fastModeState)
+                                       reportedSpeed: pending.speedState.selection) else { return false }
+        pickerSelection.restore(model: option, reasoning: pending.reasoningSelection, fastMode: pending.speedState)
         refreshReasoningVisibility()
         return true
     }
@@ -1942,10 +1944,10 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     func restorePicker(from thread: ConversationHeader, saved: ConversationMetadata?) {
         adoptModelProvider(thread.modelProvider, threadID: thread.id)
         let source = pickerSelection.restore(from: thread, saved: saved) {
-            modelOption(id: $0, threadID: thread.id, effort: $1, fastMode: $2)
+            modelOption(id: $0, threadID: thread.id, effort: $1, reportedSpeed: $2)
         }
         guard let source, let model = selectedModel else { return }
-        logger.notice("Restored conversation settings thread=\(thread.id) model=\(model.id) reasoning=\(self.reasoningSelection.id) fast=\(self.fastModeSelection.map { String($0) } ?? "unknown") source=\(source.rawValue)")
+        logger.notice("Restored conversation settings thread=\(thread.id) model=\(model.id) reasoning=\(self.reasoningSelection.id) speed=\(self.speedSelection?.rawValue ?? "unknown") source=\(source.rawValue)")
     }
 
     func refreshNewChatDefaults(for provider: AgentProvider? = nil) {
@@ -1953,7 +1955,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let model = target.modelCatalog.newChatDefault(for: provider, health: target.providerHealth).model
         newChatModelSource = .resolvedDefault(provider)
         let reasoning = NewChatDefaults.reasoningSelection(defaults: target.chatDefaults)
-        let fastMode = FastModeState.selection(NewChatDefaults.fastModeEnabled(defaults: target.chatDefaults))
+        let fastMode = ConversationSpeedState.selection(NewChatDefaults.speed(defaults: target.chatDefaults))
         pickerSelection.choose(model: model, reasoning: model.map { visibleReasoning(reasoning, for: $0) } ?? reasoning,
                                fastMode: fastMode)
         recordBlankNewChatSetup()
@@ -1988,7 +1990,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         guard let current = selectedModel else {
             if case .unavailable(let modelID, _) = newChatModelSource {
                 guard provider == .codex || target.modelCatalog.provider(forModelID: modelID) == provider else { return }
-                _ = adoptSettings(modelID: modelID, reasoning: reasoningSelection, fastModeState: fastModeState, source: .draftSetup)
+                _ = adoptSettings(modelID: modelID, reasoning: reasoningSelection, speedState: speedState, source: .draftSetup)
             } else {
                 refreshNewChatDefaults(for: requestedNewChatProvider)
             }
@@ -1998,7 +2000,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let option: ModelOption?
         if let activeSessionID {
             option = modelOption(id: current.id, threadID: activeSessionID,
-                effort: reasoningSelection.effort?.rawValue, fastMode: fastModeSelection == true)
+                effort: reasoningSelection.effort?.rawValue, reportedSpeed: speedState.selection)
         } else {
             option = target.configuredModel(id: current.id).model
         }
@@ -2031,20 +2033,20 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     @discardableResult
     func adoptNewChatSettings(modelID: String, reasoning: ReasoningSelection,
-                              fastModeState: FastModeState) -> Bool {
-        adoptSettings(modelID: modelID, reasoning: reasoning, fastModeState: fastModeState, source: .movedDraft)
+                              speedState: ConversationSpeedState) -> Bool {
+        adoptSettings(modelID: modelID, reasoning: reasoning, speedState: speedState, source: .movedDraft)
     }
 
     private func adoptSettings(modelID: String, reasoning: ReasoningSelection,
-                               fastModeState: FastModeState, source: SettingsChangeSource) -> Bool {
+                               speedState: ConversationSpeedState, source: SettingsChangeSource) -> Bool {
         guard target.acceptsWork, activeSessionID == nil else { return false }
         let lookup = target.configuredModel(id: modelID)
         guard let option = lookup.model else {
-            pickerSelection.choose(model: nil, reasoning: reasoning, fastMode: fastModeState)
+            pickerSelection.choose(model: nil, reasoning: reasoning, fastMode: speedState)
             newChatModelSource = .unavailable(modelID: modelID, lookup: lookup)
             return false
         }
-        applyPickerSettings(model: option, reasoning: visibleReasoning(reasoning, for: option), fastModeState: fastModeState,
+        applyPickerSettings(model: option, reasoning: visibleReasoning(reasoning, for: option), speedState: speedState,
                             threadID: nil, source: source)
         newChatModelSource = .chosen
         return true
@@ -2062,7 +2064,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         else { return false }
         let reasoning = visibleReasoning(pickerSelection.rememberedReasoning(for: option) ?? current.reasoning, for: option)
         applyPickerSettings(model: option, reasoning: reasoning,
-            fastModeState: current.fastModeState.changingModel(from: current.model, to: option),
+            speedState: current.speedState.changingModel(from: current.model, to: option),
             threadID: threadID, source: source)
         return true
     }
@@ -2073,15 +2075,15 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         pickerSelection.remember(selection, for: model)
         NewChatDefaults.recordReasoningSelection(selection, defaults: target.chatDefaults)
         applyPickerSettings(model: model, reasoning: selection,
-            fastModeState: current.fastModeState, threadID: threadID, source: .picker)
+            speedState: current.speedState, threadID: threadID, source: .picker)
     }
 
-    func selectFastMode(_ enabled: Bool, for threadID: String?) {
+    func selectSpeed(_ speed: ConversationSpeed, for threadID: String?) {
         guard let current = pickerSettings(for: threadID), let model = current.model,
-              !enabled || model.supportsFastMode else { return }
-        NewChatDefaults.setFastModeEnabled(enabled, defaults: target.chatDefaults)
+              model.supportsSpeed(speed) else { return }
+        NewChatDefaults.recordSpeed(speed, defaults: target.chatDefaults)
         applyPickerSettings(model: model, reasoning: current.reasoning,
-            fastModeState: current.fastModeState.choosing(enabled), threadID: threadID, source: .picker)
+            speedState: current.speedState.choosing(speed), threadID: threadID, source: .picker)
     }
 
     private func visibleReasoning(_ selection: ReasoningSelection, for model: ModelOption) -> ReasoningSelection {
@@ -2093,30 +2095,30 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         if let selectedModel, activeSessionID == nil || areConversationSettingsReady {
             let selection = visibleReasoning(reasoningSelection, for: selectedModel)
             if selection != reasoningSelection {
-                applyPickerSettings(model: selectedModel, reasoning: selection, fastModeState: fastModeState,
+                applyPickerSettings(model: selectedModel, reasoning: selection, speedState: speedState,
                                     threadID: activeSessionID, source: .reasoningVisibility)
             }
         }
         if let voice = voiceConversationSettings, voice.threadId != activeSessionID,
-           let model = modelOption(id: voice.model, threadID: voice.threadId, effort: voice.effort, fastMode: voice.fastMode == true) {
+           let model = modelOption(id: voice.model, threadID: voice.threadId, effort: voice.effort, reportedSpeed: voice.speedState.selection) {
             let selection = visibleReasoning(voice.reasoningSelection, for: model)
             if selection != voice.reasoningSelection {
-                applyPickerSettings(model: model, reasoning: selection, fastModeState: voice.fastModeState,
+                applyPickerSettings(model: model, reasoning: selection, speedState: voice.speedState,
                                     threadID: voice.threadId, source: .reasoningVisibility)
             }
         }
     }
 
     private func pickerSettings(for threadID: String?)
-        -> (model: ModelOption?, reasoning: ReasoningSelection, fastModeState: FastModeState)? {
+        -> (model: ModelOption?, reasoning: ReasoningSelection, speedState: ConversationSpeedState)? {
         guard target.acceptsWork else { return nil }
         if threadID == activeSessionID {
-            return (selectedModel, reasoningSelection, fastModeState)
+            return (selectedModel, reasoningSelection, speedState)
         }
         guard let settings = voiceConversationSettings, settings.threadId == threadID,
               let model = modelOption(id: settings.model, threadID: settings.threadId, effort: settings.effort,
-                                      fastMode: settings.fastMode == true) else { return nil }
-        return (model, settings.reasoningSelection, settings.fastModeState)
+                                      reportedSpeed: settings.speedState.selection) else { return nil }
+        return (model, settings.reasoningSelection, settings.speedState)
     }
 
     private enum SettingsChangeSource: String {
@@ -2128,14 +2130,14 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     }
 
     private func applyPickerSettings(model: ModelOption, reasoning: ReasoningSelection,
-                                     fastModeState: FastModeState, threadID: String?,
+                                     speedState: ConversationSpeedState, threadID: String?,
                                      source: SettingsChangeSource) {
-        logger.notice("\(source.rawValue) thread=\(threadID ?? "new-chat") model=\(model.id) reasoning=\(reasoning.id) fast=\(fastModeState.selection == true && model.supportsFastMode)")
+        logger.notice("\(source.rawValue) thread=\(threadID ?? "new-chat") model=\(model.id) reasoning=\(reasoning.id) speed=\(speedState.selection?.rawValue ?? "unknown")")
         if let threadID {
             applyConversationSettings(ConversationSettingsUpdate(threadID: threadID, model: model,
-                reasoning: reasoning, fastModeState: fastModeState))
+                reasoning: reasoning, speedState: speedState))
         } else {
-            pickerSelection.choose(model: model, reasoning: reasoning, fastMode: fastModeState)
+            pickerSelection.choose(model: model, reasoning: reasoning, fastMode: speedState)
             switch source {
             case .picker, .providerDefault, .movedDraft: chooseNewChatSetup()
             case .draftSetup, .reasoningVisibility: break
@@ -2152,7 +2154,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private func selectedConversationSettings(threadID: String) -> ConversationSettingsUpdate? {
         guard let selectedModel else { return nil }
         return ConversationSettingsUpdate(threadID: threadID, model: selectedModel, reasoning: reasoningSelection,
-                                          fastModeState: fastModeState)
+                                          speedState: speedState)
     }
 
     func settingsNotice(for threadID: String?) -> String? {
@@ -2178,7 +2180,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
 
     var voiceSelectedModel: ModelOption? {
         voiceConversationSettings.flatMap {
-            modelOption(id: $0.model, threadID: $0.threadId, effort: $0.effort, fastMode: $0.fastMode == true)
+            modelOption(id: $0.model, threadID: $0.threadId, effort: $0.effort, reportedSpeed: $0.speedState.selection)
         }
     }
 
@@ -2186,11 +2188,11 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         guard target.realtimeVoice.callOwner == executionTarget,
               let context = target.realtimeVoice.conversationContext,
               let model = modelOption(id: context.model, threadID: context.threadID, effort: context.effort,
-                                      fastMode: context.fastModeSelection == true) else { return nil }
+                                      reportedSpeed: context.speedState.selection) else { return nil }
         return pendingSettings[context.threadID] ?? ConversationSettingsUpdate(
             threadID: context.threadID, model: model,
             reasoning: context.effort.flatMap(ReasoningEffort.init(rawValue:)).map(ReasoningSelection.effort) ?? .automatic,
-            fastModeState: context.fastModeState
+            speedState: context.speedState
         )
     }
 
@@ -2198,11 +2200,11 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         _ settings: ConversationSettingsUpdate
     ) -> (settings: ConversationSettingsUpdate, model: ModelOption?) {
         guard let model = modelOption(id: settings.model, threadID: settings.threadId,
-                                      effort: settings.effort, fastMode: settings.fastMode == true)
+                                      effort: settings.effort, reportedSpeed: settings.speedState.selection)
         else { return (settings, nil) }
         return (ConversationSettingsUpdate(threadID: settings.threadId, model: model,
                     reasoning: visibleReasoning(settings.reasoningSelection, for: model),
-                    fastModeState: settings.fastModeState),
+                    speedState: settings.speedState),
                 model)
     }
 
@@ -2214,7 +2216,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         await target.metadataService.upsert(
             sessionID: settings.threadId, modelID: settings.model,
             reasoningSelectionID: settings.reasoningSelection.id,
-            fastModeEnabled: settings.fastModeState.remembered,
+            speed: settings.speedState.remembered,
             source: .selection
         )
     }
@@ -2225,7 +2227,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         pendingSettings[settings.threadId] = settings
         if activeSessionID == settings.threadId, let option = model {
             let reasoning = settings.effort.flatMap(ReasoningEffort.init(rawValue:)).map(ReasoningSelection.effort) ?? .automatic
-            pickerSelection.chooseForConversation(model: option, reasoning: reasoning, fastMode: settings.fastModeState)
+            pickerSelection.chooseForConversation(model: option, reasoning: reasoning, fastMode: settings.speedState)
         }
         settingsFeedback[settings.threadId] = nil
         guard !ownedTasks.isRunning(.settingsUpdate) else { return }
@@ -2268,7 +2270,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         startNewConversation()
         guard let selection else { return }
         pickerSelection.adopt(model: selection.model, reasoning: visibleReasoning(selection.reasoning, for: selection.model),
-                              fastMode: .selection(selection.fastModeEnabled))
+                              fastMode: .selection(selection.speed))
         newChatModelSource = .chosen
     }
 
@@ -2292,7 +2294,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         guard !cwd.isEmpty else { throw AgentProviderError.workingDirectoryRequired(model.provider) }
         return .init(
             model: model, effort: reasoningSelection.effort?.rawValue, serviceTier: serviceTierOverride,
-            fastMode: fastModeState, settingsRevision: settingsSelectionRevision,
+            fastMode: speedState, settingsRevision: settingsSelectionRevision,
             hadPendingSettings: resumableThreadID.flatMap { pendingSettings[$0] } != nil, cwd: cwd,
             history: messages.map {
                 RealtimeVoiceHistoryMessage(role: $0.role == .user ? .user : .assistant, text: $0.text, date: $0.date)
@@ -2342,8 +2344,8 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
            target.realtimeVoice.conversationContext?.realtimeSessionID == context.realtimeSessionID,
            !hadPendingSettings, pendingSettings[context.threadID] == nil,
            settingsSelectionRevision == settingsRevision, voiceConversationSettings == priorVoiceSettings,
-           let extra = read.thread.extra {
-            refreshed.fastModeState = refreshed.fastModeState.reading(extra)
+           let extra = read.thread.extra, extra.hasServiceTier {
+            refreshed.speedState = refreshed.speedState.reading(extra)
             acceptThreadTierReadback(extra, threadID: context.threadID, selectionRevision: settingsRevision)
             target.realtimeVoice.acceptConversationReadback(threadID: context.threadID,
                 realtimeSessionID: context.realtimeSessionID, hostID: hostID)
@@ -2373,9 +2375,9 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
                 && self.target.realtimeVoice.incomingSettingsRevision(
                     for: context, hostID: self.hostID) == incomingRevision
         }
-        let rememberedState = await incomingVoiceFastModeState(for: context)
+        let rememberedState = await incomingVoiceConversationSpeedState(for: context)
         var updated = context
-        updated.fastModeState = rememberedState
+        updated.speedState = rememberedState
         guard ownsRead() else { return .init(context: context, readModelAndEffort: false, readFastMode: false) }
         guard isCurrent() else { return .init(context: updated, readModelAndEffort: false, readFastMode: false) }
         do {
@@ -2388,11 +2390,9 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
                 updated.model = reportedModel
                 updated.effort = response.thread.reasoningEffort?.rawValue
             }
-            let reportsTier = response.thread.extra.map {
-                $0.fastModeSelection != nil || $0.serviceTier != nil
-            } ?? false
+            let reportsTier = response.thread.extra?.hasServiceTier == true
             if let extra = response.thread.extra, reportsTier {
-                updated.fastModeState = updated.fastModeState.reading(extra)
+                updated.speedState = updated.speedState.reading(extra)
                 acceptThreadTierReadback(extra, threadID: context.threadID, selectionRevision: settingsRevision)
             }
             return .init(context: updated, readModelAndEffort: response.thread.model != nil,
@@ -2404,12 +2404,12 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         }
     }
 
-    func incomingVoiceFastModeState(for context: RealtimeVoiceConversationContext) async -> FastModeState {
+    func incomingVoiceConversationSpeedState(for context: RealtimeVoiceConversationContext) async -> ConversationSpeedState {
         let saved = await target.metadataService.metadata(for: context.threadID)
         guard let saved else {
-            return context.fastModeState
+            return context.speedState
         }
-        return context.fastModeState.restoringPreference(saved.fastModeEnabled)
+        return context.speedState.restoringPreference(saved.rememberedSpeed)
     }
 
     func discardProvisionalRealtimeVoiceConversation(threadID: String?) async {

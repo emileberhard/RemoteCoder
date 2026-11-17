@@ -197,7 +197,7 @@ private struct ReasoningControlFixtureView: View {
                     reasoning: Binding(get: { fixture.reasoning }, set: {
                         fixture.reasoning = $0
                         fixture.showsStatus = fixture.savedChat
-                    }), fastMode: .constant(false), haptics: fixture.haptics) { EmptyView() }
+                    }), speed: .constant(.standard), haptics: fixture.haptics) { EmptyView() }
                     .id(fixture.conversation)
                 if fixture.showsStatus {
                     Text("Applying settings…").font(.caption)

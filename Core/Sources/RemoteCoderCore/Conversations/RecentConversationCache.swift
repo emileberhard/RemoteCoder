@@ -21,7 +21,7 @@ struct RecentConversationCache {
     struct Settings {
         let model: ModelOption
         let reasoning: ReasoningSelection
-        let fastModeState: FastModeState
+        let speedState: ConversationSpeedState
     }
 
     private let capacity: Int

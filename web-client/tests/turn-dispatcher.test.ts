@@ -3,20 +3,116 @@ import attachedFiles from "../../protocol-fixtures/attached-files-block.json";
 import { executionTarget, targetKey } from "../src/execution-context";
 import { RpcError } from "../src/gateway";
 import { type Address, addressKey } from "../src/protocol/boundary";
+import { Workspace } from "../src/workspace/workspace";
 
 import {
   activity,
   cleanupWorkspaces,
   deferred,
   enrollmentId,
+  Harness,
   header,
+  host,
   MemoryStorage,
+  model,
   setup,
   setupClaude,
   setupContexts,
+  workspaces,
 } from "./fixtures/workspace";
 
 afterEach(cleanupWorkspaces);
+
+test("ultrafast readback survives browser changes and dispatch until Fast is explicitly changed", async () => {
+  let harness: Harness | undefined;
+  const workspace = new Workspace((_host, event) => (harness = new Harness(event)), new MemoryStorage());
+  workspaces.push(workspace);
+  workspace.configureHosts([host("mini")]);
+  if (!harness) throw new Error("Missing gateway");
+  const capable = { ...model, serviceTiers: [{ id: "fast" }, { id: "ultrafast" }] };
+  const second = { ...capable, id: "second", model: "second", displayName: "Second" };
+  const limited = {
+    ...capable,
+    id: "limited",
+    model: "limited",
+    displayName: "Limited",
+    serviceTiers: [{ id: "fast" }],
+  };
+  const historyStarted = deferred<void>();
+  const history = deferred<unknown>();
+  harness.handler = (method) => {
+    if (method === "model/list") return { data: [capable, second, limited], nextCursor: null };
+    if (method === "thread/items/list") {
+      historyStarted.resolve();
+      return history.promise;
+    }
+    if (method === "thread/subscribe")
+      return {
+        status: "subscribed",
+        subscriptionId: "s",
+        thread: { ...header(), extra: { serviceTier: "priority" } },
+        checkpoint: { itemsBackwardsCursor: "tail", liveItems: [] },
+      };
+    if (method === "conversation/settings/update") return { status: "applied" };
+  };
+  await workspace.refreshHost("mini");
+  const loading = workspace.selectConversation({ hostId: "mini", threadId: "shared" });
+  await historyStarted.promise;
+  harness.emit("thread/settings/updated", {
+    threadId: "shared",
+    threadSettings: { model: capable.model, effort: "high", serviceTier: "ultrafast" },
+  });
+  history.resolve({ data: [], nextCursor: null });
+  await loading;
+  expect(workspace.draft).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+  await workspace.chooseReasoning("high");
+  expect(
+    harness.calls.filter((call) => call.method === "conversation/settings/update").at(-1)?.params.serviceTier,
+  ).toBe("ultrafast");
+  const other = workspace.choices().find((choice) => choice.id === "second");
+  await workspace.chooseModel(other);
+  expect(
+    harness.calls.filter((call) => call.method === "conversation/settings/update").at(-1)?.params.serviceTier,
+  ).toBe("ultrafast");
+  const unsupported = workspace.choices().find((choice) => choice.id === "limited");
+  await workspace.chooseModel(unsupported);
+  expect(
+    harness.calls.filter((call) => call.method === "conversation/settings/update").at(-1)?.params.serviceTier,
+  ).toBeUndefined();
+  await workspace.chooseModel(other);
+  workspace.updateDraft({ text: "Hello" });
+  await workspace.send();
+  expect(harness.calls.find((call) => call.method === "turn/start")?.params.serviceTier).toBe("ultrafast");
+  harness.emit("thread/settings/updated", {
+    threadId: "shared",
+    threadSettings: { model: "second", effort: "high" },
+  });
+  expect(workspace.draft.serviceTier).toBe("ultrafast");
+  harness.emit("thread/settings/updated", {
+    threadId: "shared",
+    threadSettings: { model: "second", effort: "high", serviceTier: "priority" },
+  });
+  expect(workspace.draft).toMatchObject({ fast: true, serviceTier: "priority" });
+  harness.emit("thread/settings/updated", {
+    threadId: "shared",
+    threadSettings: { model: "second", effort: "high", serviceTier: "ultrafast" },
+  });
+  await workspace.chooseFastMode(false);
+  expect(
+    harness.calls.filter((call) => call.method === "conversation/settings/update").at(-1)?.params.serviceTier,
+  ).toBeNull();
+  await workspace.chooseFastMode(true);
+  expect(
+    harness.calls.filter((call) => call.method === "conversation/settings/update").at(-1)?.params.serviceTier,
+  ).toBe("fast");
+  expect(workspace.preference("codex.fastModeEnabled")).toBe(true);
+  harness.emit("thread/settings/updated", {
+    threadId: "shared",
+    threadSettings: { model: "second", effort: "high", serviceTier: "ultrafast" },
+  });
+  workspace.selectWorkingDirectory("/different");
+  expect(workspace.draft).toMatchObject({ cwd: "/different", serviceTier: "ultrafast" });
+});
 
 for (const route of [
   { id: "claude_fallback", model: "opus", modelProvider: "claude", provider: "claude" },

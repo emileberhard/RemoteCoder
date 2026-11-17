@@ -65,7 +65,7 @@ struct SessionMetadataTests {
         let refresh = Task { await fixture.service.sync() }
         await fixture.remote.waitForRead(count: 2)
         await fixture.service.upsert(sessionID: "other", modelID: "local", reasoningSelectionID: "effort-high",
-            fastModeEnabled: false, source: .selection)
+            speed: .standard, source: .selection)
         await fixture.remote.releaseRead()
         await refresh.value
         #expect(try await fixture.store.load().observed?["chat"] == nil)
@@ -81,11 +81,11 @@ struct SessionMetadataTests {
         defer { await fixture.close() }
         await fixture.remote.holdUpdates()
         await fixture.service.upsert(sessionID: "chat", modelID: "first", reasoningSelectionID: "effort-high",
-            fastModeEnabled: false, source: .selection)
+            speed: .standard, source: .selection)
         await fixture.remote.waitForUpdate()
         #expect(try await fixture.store.load().pending["chat"]?.mutation.selection.modelID == "first")
         await fixture.service.upsert(sessionID: "chat", modelID: "second", reasoningSelectionID: "effort-high",
-            fastModeEnabled: false, source: .selection)
+            speed: .standard, source: .selection)
         #expect(try await fixture.store.load().pending["chat"]?.mutation.selection.modelID == "second")
         await fixture.remote.releaseUpdates()
         await fixture.service.flushPendingChanges()
@@ -109,7 +109,7 @@ struct SessionMetadataTests {
         #expect(await fixture.service.status.error != nil)
         #expect(try await fixture.store.load().acknowledged["chat"] == saved)
         await fixture.service.upsert(sessionID: "other", modelID: "local", reasoningSelectionID: "effort-high",
-            fastModeEnabled: false, source: .selection)
+            speed: .standard, source: .selection)
         await fixture.service.flushPendingChanges()
         #expect(await fixture.remote.entries["other"]?.modelID == "local")
         #expect(await fixture.remote.readCount == 1)
@@ -132,7 +132,7 @@ struct SessionMetadataTests {
         let refresh = Task { await fixture.service.sync() }
         await fixture.remote.waitForRead()
         await fixture.service.upsert(sessionID: "chat", modelID: "local", reasoningSelectionID: "effort-high",
-            fastModeEnabled: false, source: .selection)
+            speed: .standard, source: .selection)
         await fixture.remote.failReads(true)
         await fixture.remote.releaseRead()
         await refresh.value
@@ -280,7 +280,7 @@ struct SessionMetadataTests {
             from: Data(#"{"threadId":"chat","threadSettings":{"model":"gpt-6-astra","effort":"high","serviceTier":"default"}}"#.utf8))
         await fixture.service.observeSettings(notification, observedAt: .now)
         await fixture.service.upsert(sessionID: "chat", modelID: automatic.modelID,
-            reasoningSelectionID: "automatic", fastModeEnabled: false, source: .selection)
+            reasoningSelectionID: "automatic", speed: .standard, source: .selection)
         let pending = try #require(try await fixture.store.load().pending["chat"])
         #expect(pending.mutation.expectedRevision == 1)
         #expect(await fixture.service.metadata(for: "chat")?.selection == automatic.selection)
@@ -299,7 +299,7 @@ struct SessionMetadataTests {
         try await fixture.store.save(.init(acknowledged: ["chat": automatic]))
         await fixture.remote.configure(entries: ["chat": automatic])
         await fixture.service.upsert(sessionID: "chat", modelID: automatic.modelID,
-            reasoningSelectionID: "automatic", fastModeEnabled: false, source: .selection)
+            reasoningSelectionID: "automatic", speed: .standard, source: .selection)
         #expect(try await fixture.store.load().pending.isEmpty)
         #expect(await fixture.remote.readCount == 0)
         #expect(await fixture.remote.appliedCount == 0)
@@ -337,7 +337,7 @@ struct SessionMetadataTests {
         let sync = Task { await fixture.service.sync() }
         await fixture.remote.waitForRead()
         await fixture.service.upsert(sessionID: "chat", modelID: "gpt-6-astra", reasoningSelectionID: "effort-xhigh",
-            fastModeEnabled: true, source: .selection)
+            speed: .fast, source: .selection)
         await fixture.remote.releaseRead()
         await sync.value
         #expect(await fixture.service.metadata(for: "chat")?.modelID == "gpt-6-astra")
@@ -353,7 +353,7 @@ struct SessionMetadataTests {
             for _ in 0..<20 { group.addTask { _ = await fixture.service.metadata(for: "chat") } }
             group.addTask {
                 await fixture.service.upsert(sessionID: "chat", modelID: "opus", reasoningSelectionID: "effort-max",
-                    fastModeEnabled: false, source: .selection)
+                    speed: .standard, source: .selection)
             }
         }
         await fixture.service.sync()
@@ -361,22 +361,42 @@ struct SessionMetadataTests {
         #expect(try await fixture.store.load().acknowledged["chat"]?.reasoningSelectionID == "effort-max")
     }
 
-    @Test(arguments: [false, true])
-    func reasoningEditRetainsTheSavedFastPreference(savedFast: Bool) async throws {
+    @Test(arguments: ConversationSpeed.allCases)
+    func reasoningEditRetainsTheSavedSpeed(savedSpeed: ConversationSpeed) async throws {
         let fixture = Fixture()
         defer { await fixture.close() }
         let saved = ConversationMetadata(sessionID: "chat", modelID: "gpt-5.6-sol",
-            reasoningSelectionID: "effort-high", fastModeEnabled: savedFast,
-            source: .selection, updatedAt: .now, serverRevision: 1)
+            reasoningSelectionID: "effort-high", fastModeEnabled: savedSpeed.isAccelerated,
+            speed: savedSpeed == .ultrafast ? savedSpeed : nil, source: .selection, updatedAt: .now, serverRevision: 1)
         try await fixture.store.save(SessionMetadataLocalState(acknowledged: ["chat": saved]))
         await fixture.remote.configure(entries: ["chat": saved])
         await fixture.service.upsert(sessionID: "chat", modelID: "gpt-5.6-sol",
-            reasoningSelectionID: "effort-medium", fastModeEnabled: nil,
+            reasoningSelectionID: "effort-medium", speed: nil,
             source: .selection)
         await fixture.service.sync()
-        #expect(await fixture.service.metadata(for: "chat")?.fastModeEnabled == savedFast)
-        #expect(await fixture.remote.entries["chat"]?.fastModeEnabled == savedFast)
+        #expect(await fixture.service.metadata(for: "chat")?.rememberedSpeed == savedSpeed)
+        #expect(await fixture.remote.entries["chat"]?.rememberedSpeed == savedSpeed)
         #expect(await fixture.remote.entries["chat"]?.reasoningSelectionID == "effort-medium")
+    }
+
+    @Test func aLegacyGatewayAcknowledgementKeepsUltrafastPendingUntilUpgrade() async throws {
+        let fixture = Fixture()
+        defer { await fixture.close() }
+        await fixture.remote.setSupportsSpeed(false)
+        await fixture.service.upsert(sessionID: "chat", modelID: "gpt-6.2-sol",
+            reasoningSelectionID: "effort-high", speed: .ultrafast, source: .selection)
+        await fixture.service.sync()
+        #expect(await fixture.service.metadata(for: "chat")?.rememberedSpeed == .ultrafast)
+        let pending = try #require(try await fixture.store.load().pending["chat"])
+        #expect(await fixture.remote.entries["chat"]?.mutationID == pending.mutation.mutationID)
+        #expect(await fixture.service.status.error != nil)
+
+        await fixture.remote.setSupportsSpeed(true)
+        await fixture.service.sync()
+        #expect(try await fixture.store.load().pending.isEmpty)
+        #expect(await fixture.remote.entries["chat"]?.speed == .ultrafast)
+        #expect(await fixture.remote.entries["chat"]?.serverRevision == 1)
+        #expect(await fixture.service.status.error == nil)
     }
 
     @Test func lostAcknowledgementRetriesTheSameMutationWithoutApplyingTwice() async throws {
@@ -384,7 +404,7 @@ struct SessionMetadataTests {
         defer { await fixture.close() }
         await fixture.remote.loseNextAcknowledgement()
         await fixture.service.upsert(sessionID: "chat", modelID: "opus", reasoningSelectionID: "effort-high",
-            fastModeEnabled: false, source: .selection)
+            speed: .standard, source: .selection)
         await fixture.service.sync()
         await fixture.service.sync()
         #expect(await fixture.remote.appliedCount == 1)
@@ -401,7 +421,7 @@ struct SessionMetadataTests {
         await fixture.service.sync()
         await fixture.remote.configure(entries: ["chat": record("chat", model: "other-client", revision: 2)])
         await fixture.service.upsert(sessionID: "chat", modelID: "local", reasoningSelectionID: "effort-high",
-            fastModeEnabled: true, source: .selection)
+            speed: .fast, source: .selection)
         await fixture.service.flushPendingChanges()
         await fixture.service.sync()
         #expect(await fixture.remote.requestedRevisions == [nil, nil])
@@ -424,7 +444,7 @@ struct SessionMetadataTests {
         try FileManager.default.createDirectory(at: fixture.directory, withIntermediateDirectories: true)
         try original.write(to: fixture.file)
         await fixture.service.upsert(sessionID: "chat", modelID: "local", reasoningSelectionID: "effort-high",
-            fastModeEnabled: false, source: .selection)
+            speed: .standard, source: .selection)
         await fixture.service.sync()
         #expect(try Data(contentsOf: fixture.file) == original)
         #expect(await fixture.remote.appliedCount == 0)
@@ -437,12 +457,12 @@ struct SessionMetadataTests {
         _ = await fixture.service.metadata(for: "chat")
         try FileManager.default.createDirectory(at: fixture.file, withIntermediateDirectories: true)
         await fixture.service.upsert(sessionID: "chat", modelID: "local", reasoningSelectionID: "effort-high",
-            fastModeEnabled: false, source: .selection)
+            speed: .standard, source: .selection)
         #expect(await fixture.service.status.error != nil)
         #expect(await fixture.remote.appliedCount == 0)
         try FileManager.default.removeItem(at: fixture.file)
         await fixture.service.upsert(sessionID: "chat", modelID: "local", reasoningSelectionID: "effort-high",
-            fastModeEnabled: false, source: .selection)
+            speed: .standard, source: .selection)
         await fixture.service.sync()
         #expect(await fixture.remote.entries["chat"]?.modelID == "local")
         #expect(try await fixture.store.load().pending.isEmpty)
@@ -483,6 +503,7 @@ private actor MetadataRemoteFixture: ConversationMetadataRemote {
     private var isHoldingRead = false
     private var snapshotRevision = 0
     private var supportsValidator = true
+    private var supportsSpeed = true
     private var forcedSnapshot: ConversationMetadataSnapshot?
     private(set) var requestedRevisions: [String?] = []
     private var isHoldingUpdate = false
@@ -501,6 +522,7 @@ private actor MetadataRemoteFixture: ConversationMetadataRemote {
     func failReads(_ value: Bool) { readsFail = value }
 
     func useLegacyResponses() { supportsValidator = false }
+    func setSupportsSpeed(_ value: Bool) { supportsSpeed = value }
     func forceSnapshot(_ snapshot: ConversationMetadataSnapshot?) { forcedSnapshot = snapshot }
     func holdUpdates() { isHoldingUpdate = true }
     func holdReads() { isHoldingRead = true }
@@ -529,7 +551,14 @@ private actor MetadataRemoteFixture: ConversationMetadataRemote {
         waiters.forEach { $0.resume() }
         if isHoldingUpdate { await withCheckedContinuation { pendingUpdates.append($0) } }
         let current = entries[mutation.selection.sessionID]
-        if let current, current.mutationID == mutation.mutationID { return current }
+        if var current, current.mutationID == mutation.mutationID {
+            if supportsSpeed, current.speed == nil, let speed = mutation.selection.speed {
+                current.speed = speed
+                entries[current.sessionID] = current
+                snapshotRevision += 1
+            }
+            return current
+        }
         guard (current?.serverRevision ?? 0) == mutation.expectedRevision else {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .secondsSince1970
@@ -538,6 +567,7 @@ private actor MetadataRemoteFixture: ConversationMetadataRemote {
                 data: .object(["kind": .string("metadataConflict"), "retryable": .bool(false), "current": current])))
         }
         var record = mutation.selection.localMetadata(updatedAt: .now)
+        if !supportsSpeed { record.speed = nil }
         record.serverRevision = mutation.expectedRevision + 1
         record.mutationID = mutation.mutationID
         entries[record.sessionID] = record
