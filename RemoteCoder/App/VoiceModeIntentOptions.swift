@@ -30,7 +30,9 @@ struct VoiceModeFastOptionsProvider: DynamicOptionsProvider {
         let entity = try intent?.destination.model
         let workspace = workspace
         let model = try await CodexIntentModelCatalog.resolve(entity, in: workspace)
-        return model.supportsFastMode ? [.appDefault, .on, .off] : [.off]
+        let choices: [CodexIntentFastMode] = [.off, .on, .ultrafast]
+        let available = choices.filter { model.supportsSpeed($0.speed) }
+        return available.count > 1 ? [.appDefault] + available : available
     }
 
     func defaultResult() async -> CodexIntentFastMode? { .appDefault }

@@ -119,6 +119,21 @@ struct VoiceModeIntentTests {
         #expect(model.fastModeEnabled == option.supportsFastMode)
     }
 
+    @Test(arguments: [("on", ConversationSpeed.fast), ("off", .standard), ("ultrafast", .ultrafast)])
+    func shortcutSpeedReachesVoiceMode(savedValue: String, expected: ConversationSpeed) async throws {
+        let fixture = await WorkspaceFixture()
+        await fixture.restoreCachedModels()
+        defer { fixture.workspace.teardown(); await fixture.cleanUp() }
+        let screen = try #require(fixture.workspace.selectedScreen)
+        let intent = RemoteCoderVoiceChatIntent()
+        intent.destination = .model(CodexModelEntity.resolving(CodexModelFixtures.solID, in: fixture.workspace))
+        intent.fastMode = try #require(CodexIntentFastMode(rawValue: savedValue))
+
+        try screen.prepareForVoiceModePresentation(startsFreshChat: true, configuration: try intent.voiceConfiguration)
+
+        #expect(screen.speedSelection == expected)
+    }
+
     @Test func unconfiguredShortcutDefersAppDefaultsToTheApp() async throws {
         let fixture = await WorkspaceFixture()
         await fixture.restoreCachedModels()

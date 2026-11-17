@@ -27,7 +27,7 @@ struct RemoteCoderNewChatIntent: AppIntent {
 struct RemoteCoderVoiceChatIntent: AudioRecordingIntent, LiveActivityIntent {
     static let title: LocalizedStringResource = "Voice Mode"
     static let description = IntentDescription(
-        "Start a new voice conversation in your home directory with your choice of model, reasoning effort, and Fast Mode. App Default uses your new-chat settings."
+        "Start a new voice conversation in your home directory with your choice of model, reasoning effort, and speed. App Default uses your new-chat settings."
     )
     static let supportedModes: IntentModes = [.background, .foreground(.dynamic)]
     static let allowedExecutionTargets: IntentExecutionTargets = [.main]
@@ -41,7 +41,7 @@ struct RemoteCoderVoiceChatIntent: AudioRecordingIntent, LiveActivityIntent {
     @Parameter(title: "Reasoning Effort", default: .appDefault, optionsProvider: VoiceModeReasoningOptionsProvider())
     var reasoning: CodexIntentReasoning?
 
-    @Parameter(title: "Fast Mode", default: .appDefault, optionsProvider: VoiceModeFastOptionsProvider())
+    @Parameter(title: "Speed", default: .appDefault, optionsProvider: VoiceModeFastOptionsProvider())
     var fastMode: CodexIntentFastMode?
 
     @Dependency private var workspace: ChatWorkspaceModel
