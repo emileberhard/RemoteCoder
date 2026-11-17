@@ -127,7 +127,7 @@ struct VoiceModeIntentTests {
         let screen = try #require(fixture.workspace.selectedScreen)
         let intent = RemoteCoderVoiceChatIntent()
         intent.destination = .model(CodexModelEntity.resolving(CodexModelFixtures.solID, in: fixture.workspace))
-        intent.fastMode = try #require(CodexIntentFastMode(rawValue: savedValue))
+        intent.fastMode = try #require(CodexIntentFastMode.allCases.first { $0.rawValue == savedValue })
 
         try screen.prepareForVoiceModePresentation(startsFreshChat: true, configuration: try intent.voiceConfiguration)
 
