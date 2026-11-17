@@ -146,14 +146,16 @@ enum CodexIntentReasoning: String, AppEnum, Sendable {
 
 enum CodexIntentFastMode: String, AppEnum, Sendable {
     case appDefault = "app-default"
-    case on
-    case off
+    case on = "on"
+    case off = "off"
+    case ultrafast = "ultrafast"
 
-    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Fast Mode"
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Speed"
     static let caseDisplayRepresentations: [CodexIntentFastMode: DisplayRepresentation] = [
         .appDefault: "App Default",
-        .on: "On",
-        .off: "Off",
+        .on: "Fast",
+        .off: "Standard",
+        .ultrafast: "Ultrafast",
     ]
 
     var speed: ConversationSpeed {
@@ -161,6 +163,7 @@ enum CodexIntentFastMode: String, AppEnum, Sendable {
         case .appDefault: NewChatDefaults.speed()
         case .on: .fast
         case .off: .standard
+        case .ultrafast: .ultrafast
         }
     }
 }
