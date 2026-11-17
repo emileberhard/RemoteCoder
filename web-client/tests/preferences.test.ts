@@ -154,7 +154,7 @@ afterEach(() => {
 test("native speed seeds capable new Codex conversations and remains typed", async () => {
   const { workspace, gateway } = setup();
   gateway.catalog[0] = { ...model("gpt-6.1-sol"), serviceTiers: [{ id: "fast" }, { id: "ultrafast" }] };
-  gateway.document = { entries: { "codex.speed": entry("ultrafast"), "codex.fastModeEnabled": entry(true) } };
+  gateway.document = { entries: { "codex.fastModeEnabled": entry("ultrafast") } };
   await workspace.refreshHost("mini");
   await workspace.syncPreferences();
   expect(workspace.draft).toMatchObject({ model: "gpt-6.1-sol", fast: true, serviceTier: "ultrafast" });
@@ -162,8 +162,11 @@ test("native speed seeds capable new Codex conversations and remains typed", asy
   await workspace.syncPreferences();
   workspace.newConversation();
   expect(workspace.draft).toMatchObject({ fast: false, serviceTier: null });
-  gateway.changed({ entries: { "codex.speed": entry("future", 200) } });
-  expect(workspace.preference("codex.speed")).toBeNull();
+  gateway.changed({ entries: { "codex.fastModeEnabled": entry(true, 200) } });
+  workspace.newConversation();
+  expect(workspace.draft).toMatchObject({ fast: true, serviceTier: "fast" });
+  gateway.changed({ entries: { "codex.fastModeEnabled": entry("future", 210) } });
+  expect(workspace.preference("codex.fastModeEnabled")).toBeNull();
 });
 
 test("a saved Fast draft cannot overwrite an unknown live tier when changing models", async () => {

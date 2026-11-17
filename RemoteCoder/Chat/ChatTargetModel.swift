@@ -1538,7 +1538,9 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             guard screens.allSatisfy({ $0.pendingSettings[notification.threadId] == nil }),
                   let model = modelCatalog.option(id: notification.threadSettings.model, threadID: notification.threadId,
                                           modelProvider: shown?.activeModelProvider,
-                                          effort: notification.threadSettings.effort?.rawValue, reportedSpeed: reportedSpeed) else { return }
+                                          effort: notification.threadSettings.effort?.rawValue,
+                                          reportedSpeed: reportsTier ? reportedSpeed
+                                              : (shown?.selectedModel?.id == notification.threadSettings.model ? previousSpeed.selection : nil)) else { return }
             let reasoning = notification.threadSettings.effort.flatMap { ReasoningEffort(rawValue: $0.rawValue) }
                 .map(ReasoningSelection.effort) ?? .automatic
             if let shown {

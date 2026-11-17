@@ -113,12 +113,12 @@ actor FakeGatewayServer {
         if recordedRequests.contains(where: { $0.method == method }) { return }
         await withCheckedContinuation { requestWaiters[method, default: []].append($0) }
     }
-    init(threadID: String = "thread", model: String = "model") throws {
+    init(threadID: String = "thread", model: String = "model", modelProvider: String = "anthropic") throws {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         listener = try NWListener(using: parameters)
         thread = .object([
-            "id": .string(threadID), "preview": .string("Test"), "modelProvider": .string("anthropic"),
+            "id": .string(threadID), "preview": .string("Test"), "modelProvider": .string(modelProvider),
             "model": .string(model), "createdAt": .number(0), "updatedAt": .number(1), "cwd": .string("/repo"),
             "cliVersion": .string("test"), "source": .string("appServer"),
             "status": .object(["type": .string("notLoaded")]), "ephemeral": .bool(false), "turns": .array([])

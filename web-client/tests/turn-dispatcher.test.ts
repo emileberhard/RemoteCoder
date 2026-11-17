@@ -38,19 +38,32 @@ test("ultrafast readback survives browser changes and dispatch until Fast is exp
     displayName: "Limited",
     serviceTiers: [{ id: "fast" }],
   };
+  const historyStarted = deferred<void>();
+  const history = deferred<unknown>();
   harness.handler = (method) => {
     if (method === "model/list") return { data: [capable, second, limited], nextCursor: null };
+    if (method === "thread/items/list") {
+      historyStarted.resolve();
+      return history.promise;
+    }
     if (method === "thread/subscribe")
       return {
         status: "subscribed",
         subscriptionId: "s",
-        thread: { ...header(), extra: { serviceTier: "ultrafast" } },
-        checkpoint: { itemsBackwardsCursor: null, liveItems: [] },
+        thread: { ...header(), extra: { serviceTier: "priority" } },
+        checkpoint: { itemsBackwardsCursor: "tail", liveItems: [] },
       };
     if (method === "conversation/settings/update") return { status: "applied" };
   };
   await workspace.refreshHost("mini");
-  await workspace.selectConversation({ hostId: "mini", threadId: "shared" });
+  const loading = workspace.selectConversation({ hostId: "mini", threadId: "shared" });
+  await historyStarted.promise;
+  harness.emit("thread/settings/updated", {
+    threadId: "shared",
+    threadSettings: { model: capable.model, effort: "high", serviceTier: "ultrafast" },
+  });
+  history.resolve({ data: [], nextCursor: null });
+  await loading;
   expect(workspace.draft).toMatchObject({ fast: true, serviceTier: "ultrafast" });
   await workspace.chooseReasoning("high");
   expect(
@@ -92,8 +105,13 @@ test("ultrafast readback survives browser changes and dispatch until Fast is exp
   expect(
     harness.calls.filter((call) => call.method === "conversation/settings/update").at(-1)?.params.serviceTier,
   ).toBe("fast");
-  expect(workspace.preference("codex.speed")).toBe("fast");
   expect(workspace.preference("codex.fastModeEnabled")).toBe(true);
+  harness.emit("thread/settings/updated", {
+    threadId: "shared",
+    threadSettings: { model: "second", effort: "high", serviceTier: "ultrafast" },
+  });
+  workspace.selectWorkingDirectory("/different");
+  expect(workspace.draft).toMatchObject({ cwd: "/different", serviceTier: "ultrafast" });
 });
 
 for (const route of [

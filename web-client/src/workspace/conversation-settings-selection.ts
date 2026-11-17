@@ -56,11 +56,8 @@ export class ConversationSettingsSelection {
     };
   }
   private preferredSpeed() {
-    const speed = this.preferences.get("codex.speed");
-    const fast = this.preferences.get("codex.fastModeEnabled");
-    if (fast === null) return speed ?? "standard";
-    if (speed !== null && (speed !== "standard") === fast) return speed;
-    return fast ? "fast" : "standard";
+    const choice = this.preferences.get("codex.fastModeEnabled");
+    return choice === "ultrafast" ? choice : choice ? "fast" : "standard";
   }
   seedNewDraft() {
     const current = this.current();
@@ -220,19 +217,17 @@ export class ConversationSettingsSelection {
     if (this.isRetired()) return;
     const choice = this.currentModelChoice();
     if (enabled && !choice.fast) throw new Error("The selected model does not support Fast mode");
-    await this.applyPickerSettings(choice, this.current().draft.effort, enabled ? "fast" : null, () => {
-      this.preferences.set("codex.speed", enabled ? "fast" : "standard");
-      this.preferences.set("codex.fastModeEnabled", enabled);
-    });
+    await this.applyPickerSettings(choice, this.current().draft.effort, enabled ? "fast" : null, () =>
+      this.preferences.set("codex.fastModeEnabled", enabled),
+    );
   }
   observe(conversation: Conversation, settings: Record<string, unknown>, initial = false) {
     if (this.pickerSyncs.get(conversation)?.running) return;
     const key = addressKey(conversation.address);
     const draft = this.drafts.get(key);
     if (!draft) return;
-    const tier = Object.hasOwn(settings, "serviceTier")
-      ? reportedServiceTier(settings.serviceTier)
-      : undefined;
+    const reportsTier = Object.hasOwn(settings, "serviceTier");
+    const tier = reportsTier ? reportedServiceTier(settings.serviceTier) : undefined;
     this.drafts.update(
       {
         ...(typeof settings.model === "string" ? { model: settings.model } : {}),
@@ -241,7 +236,7 @@ export class ConversationSettingsSelection {
           : {}),
         ...(tier !== undefined
           ? { serviceTier: tier, fast: fastServiceTier(tier) }
-          : initial
+          : initial || reportsTier
             ? { serviceTier: undefined }
             : {}),
       },

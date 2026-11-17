@@ -20,7 +20,6 @@ import {
   array,
   type Frame,
   type Host,
-  identifier,
   object,
   optionalString,
   type Provider,
@@ -155,6 +154,7 @@ export class Workspace {
       () => this.dispatcher.pendingReceipts,
       (conversation) => this.dispatcher.reconcileReceipts(conversation),
       (target, notification) => this.event(target, notification),
+      (conversation, settings) => this.settings.observe(conversation, settings),
       (host, value) => this.sidebar.receiveActivity(host, value),
       (host, threadId, inventory) => this.sidebar.receiveQuestions(host, threadId, inventory),
       (hostId) =>
@@ -454,9 +454,9 @@ export class Workspace {
     if (!path) throw new Error("Choose a working directory");
     if (path === this.draft.cwd) return;
     if (this.startsNewConversation(path)) {
-      const { model, provider, effort, fast } = this.draft;
+      const { model, provider, effort, fast, serviceTier } = this.draft;
       this.newConversation();
-      this.updateDraft({ cwd: path, model, provider, effort, fast });
+      this.updateDraft({ cwd: path, model, provider, effort, fast, serviceTier });
       return;
     }
     this.updateDraft({ cwd: path });
@@ -1064,12 +1064,6 @@ export class Workspace {
       if (notification.method === "preferences/changed") {
         this.preferences.receive(preferenceDocument(params));
         return;
-      }
-      if (notification.method === "thread/settings/updated") {
-        const address = conversationAddress(target, identifier(params.threadId));
-        const conversation = this.sessions.get(address)?.snapshot;
-        if (conversation && conversation.header.provider === "codex")
-          this.settings.observe(conversation, object(params.threadSettings));
       }
       this.sessions.ingest(target, notification);
     } catch (error) {

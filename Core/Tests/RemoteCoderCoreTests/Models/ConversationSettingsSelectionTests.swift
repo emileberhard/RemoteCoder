@@ -93,7 +93,7 @@ struct ConversationSettingsSelectionTests {
         #expect(unsupported.changingModel(from: Self.otherCodex, to: Self.codex).selection == .ultrafast)
     }
 
-    @Test func anOlderClientsOffChoiceOverridesTheUltrafastDefault() throws {
+    @Test func anOlderClientsSpeedChoiceOverridesTheUltrafastDefault() throws {
         let suite = "remotecoder-test-\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -101,7 +101,7 @@ struct ConversationSettingsSelectionTests {
         #expect(NewChatDefaults.speed(defaults: defaults) == .ultrafast)
         defaults.set(false, forKey: "codex.fastModeEnabled")
         #expect(NewChatDefaults.speed(defaults: defaults) == .standard)
-        NewChatDefaults.recordSpeed(.fast, defaults: defaults)
+        defaults.set(true, forKey: "codex.fastModeEnabled")
         #expect(NewChatDefaults.speed(defaults: defaults) == .fast)
     }
 

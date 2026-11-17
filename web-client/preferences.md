@@ -30,8 +30,7 @@ Unknown keys remain with their owning client. Values native defaults cannot repr
 | `codex.defaultModelID` | Last explicitly selected model across both providers; its ID determines the provider. |
 | `codex.newChatReasoning` | Fixed `automatic` or `effort-<level>`, or `last-selected`. Legacy bare levels remain readable. |
 | `codex.defaultReasoningSelection` | Last explicit reasoning; absent/unrecognized means high. Clamp to nearest supported visible level, lower on a tie, or automatic if none. |
-| `codex.fastModeEnabled` | Last Fast choice, default false; applied only to models supporting Fast. |
-| `codex.speed` | Codex speed (`standard`, `fast` or `ultrafast`); when absent, use the legacy Fast choice. The browser preserves Ultrafast but its Fast control selects only Fast or Standard. |
+| `codex.fastModeEnabled` | Standard (`false`), Fast (`true`), or `"ultrafast"` |
 | `appearance.selectedThemeID` | Native theme ID; absent/unrecognized uses Caribbean Sunset in memory. |
 
 Pinned conversations are **not synced preferences**. Their per-host flags use the gateway's conversation marks replica, shared with native clients. Drawer folds/filter, working directories, host/installation identities, notifications and haptics stay device-local. Drawer mode, account nicknames, transcription, automatic speech and realtime voice stay with their existing owners.

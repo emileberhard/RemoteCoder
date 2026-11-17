@@ -2477,7 +2477,10 @@ model support. An unsupported preference resolves to Standard for the current
 model and is retained when switching back. Ultrafast is offered only for Codex
 models that advertise the tier. A short tap selects ordinary Fast from Standard
 or Ultrafast, and selects Standard from Fast. Holding the control switches
-between Ultrafast and Fast on models with both tiers. Opening a conversation or applying a shortcut's explicit configuration
+between Ultrafast and Fast on models with both tiers. New-chat speed uses one
+synced value at `codex.fastModeEnabled`. Existing Boolean values mean Standard
+and Fast, and the string `"ultrafast"` selects Ultrafast. An older client's next
+Boolean write replaces that choice in the same preference. Opening a conversation or applying a shortcut's explicit configuration
 never changes these preferences.
 
 New Chat actions use the configured provider on the physical host default,

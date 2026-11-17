@@ -10,7 +10,7 @@ struct ChatSettingsTests {
         removesModel: Bool, reasoning: ReasoningSelection
     ) async throws {
         let modelID = CodexModelFixtures.solID
-        let gateway = try FakeGatewayServer(threadID: "catalog-refresh", model: modelID)
+        let gateway = try FakeGatewayServer(threadID: "catalog-refresh", model: modelID, modelProvider: "openai")
         await gateway.serveHistory([])
         await gateway.serveThreadSettings(model: modelID, effort: "high")
         let blue = CodexModelFixtures.wireModel(modelID, name: "Selected model", efforts: ["low", "medium", "high"],

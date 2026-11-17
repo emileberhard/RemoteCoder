@@ -13,15 +13,14 @@ export type PreferenceValues = {
   "codex.newChatReasoning": ReasoningSelection | "last-selected";
   "codex.defaultModelID": string;
   "codex.defaultReasoningSelection": ReasoningSelection;
-  "codex.fastModeEnabled": boolean;
-  "codex.speed": "standard" | "fast" | "ultrafast";
+  "codex.fastModeEnabled": boolean | "ultrafast";
   "appearance.selectedThemeID": ThemeID;
   "conversationDrawer.mode": "priority" | "projects";
 };
 export type PreferenceKey = keyof PreferenceValues;
 export type PreferenceEntry = { value: JsonValue; updatedAt: number; device: string };
 export type PreferenceDocument = { entries: Partial<Record<PreferenceKey, PreferenceEntry>> };
-const kinds: Record<PreferenceKey, "string" | "boolean"> = {
+const kinds: Record<PreferenceKey, "string" | "speed"> = {
   "codex.modelVisibility": "string",
   "claude.modelVisibility": "string",
   "reasoning.visibleLevels.codex": "string",
@@ -30,8 +29,7 @@ const kinds: Record<PreferenceKey, "string" | "boolean"> = {
   "codex.newChatReasoning": "string",
   "codex.defaultModelID": "string",
   "codex.defaultReasoningSelection": "string",
-  "codex.fastModeEnabled": "boolean",
-  "codex.speed": "string",
+  "codex.fastModeEnabled": "speed",
   "appearance.selectedThemeID": "string",
   "conversationDrawer.mode": "string",
 };
@@ -126,9 +124,9 @@ export class SyncedPreferences {
   get<K extends PreferenceKey>(key: K): PreferenceValues[K] | null {
     const value = this.entries[key]?.value;
     if (value === undefined || value === null) return null;
-    if (typeof value !== kinds[key]) return null;
-    if (key === "codex.speed" && value !== "standard" && value !== "fast" && value !== "ultrafast")
-      return null;
+    if (kinds[key] === "speed") {
+      if (typeof value !== "boolean" && value !== "ultrafast") return null;
+    } else if (typeof value !== kinds[key]) return null;
     if (key === "conversationDrawer.mode" && value !== "priority" && value !== "projects") return null;
     if (key === "appearance.selectedThemeID" && !themes.includes(value as ThemeID)) return null;
     if (
