@@ -101,7 +101,7 @@ final class TranscriptLogicalRow {
             height += CGFloat(message.attachments.count) * (ComposerMetrics.attachmentTileHeight * scale + 12)
         } else {
             switch inputs.row.kind {
-            case .activity: height = 56 * scale
+            case .activity, .content(.activity): height = 56 * scale
             case .content(.question): height = 260 * scale
             case .content(.viewedMedia): height = 240 * scale
             case .content(.publishedVisual(let visual)):

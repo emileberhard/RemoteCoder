@@ -2607,10 +2607,10 @@ phantom active turns. Text and voice share the same progress instructions and
 agent process; leaving voice stops the output route without interrupting work.
 The shared conversation projection displays a native voice delegation's input
 with its spoken excerpt in an expandable row. A transcript-tail flush becomes an
-expandable “Voice conversation ended” row. The projection assembles hang-ups
-using their recorded item positions across turn boundaries. The original
-provider item remains in the canonical checkpoint. Malformed envelopes and
-local authored text stay intact.
+expandable “Voice conversation ended” row. Assembly orders hang-ups across turn
+boundaries using their recorded Codex item positions. Without positions, it
+keeps the turn order. The original provider item remains in the canonical
+checkpoint. Malformed envelopes and local authored text stay intact.
 Claude handoffs use escaped fields and pass native tail flushes through once
 as querying synthetic CLI context. Live and replay omit that internal user
 record, while the provider file and voice history retain the transcript.

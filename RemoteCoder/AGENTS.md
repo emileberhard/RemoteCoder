@@ -609,8 +609,8 @@ entrypoint linked above.
     submission status) discards the whole memo, and the memo holds at most one entry per
     current turn.
   - Per-turn projection may read only its own turn and those global inputs.
-    Question inventory, summary mapping and edge placement belong to the
-    assembly pass. Never write back an unchanged turn: every write re-stamps it
+    Question inventory, summary mapping, voice hang-up ordering and edge
+    placement belong to the assembly pass. Never write back an unchanged turn: every write re-stamps it
     and forces a re-projection. History merges and checkpoint restores store
     through `TurnTable.storeIfChanged`, so a repeated read re-projects only the
     turns it changed; live events write directly because they always change

@@ -144,8 +144,7 @@ struct ConversationStateTests: ConversationHistoryFixtures {
         }
     }
 
-    @Test(arguments: [true, false])
-    func hangupsStayBetweenSteersInLiveAndReopenedHistory(hasOrdinals: Bool) throws {
+    @Test func hangupsStayBetweenSteersInLiveAndReopenedHistory() throws {
         func user(_ id: String, _ text: String) -> CodexAppServerV2.ThreadItem {
             .userMessage(id: id, content: [.text(text: text, textElements: [])])
         }
@@ -167,16 +166,13 @@ struct ConversationStateTests: ConversationHistoryFixtures {
         var live = ConversationState(conversationID: UUID(), threadID: "thread")
         live.apply(try lifecycle("turn/started", turnID: "work", status: "inProgress"))
         let wire = try records.enumerated().map { offset, record in
-            let timestamp = 1000 * (offset + 1)
-            let ordinal = hasOrdinals ? offset + 1 : nil
-            live.apply(try GatewayEventFixture.item("item/completed", item: record.item,
-                threadID: "thread", turnID: record.turn, ordinal: ordinal, startedAtMs: timestamp, completedAtMs: timestamp))
+            let ordinal = offset + 1
+            live.apply(try itemEvent("item/completed", record.item, turnID: record.turn, ordinal: ordinal))
             if record.turn != "work" {
                 live.apply(try lifecycle("turn/completed", turnID: record.turn, status: "completed"))
             }
             return CodexAppServerV2.ThreadItemsListResponse.Entry(turnId: record.turn, item: record.item,
-                startedAtOrdinal: ordinal.map(Int64.init), startedAtMs: Int64(timestamp),
-                completedAtMs: Int64(timestamp), isComplete: true)
+                startedAtOrdinal: Int64(ordinal), isComplete: true)
         }
         live.apply(try lifecycle("turn/completed", turnID: "work", status: "completed"))
         var replay = ConversationState(conversationID: live.conversationID, threadID: "thread")

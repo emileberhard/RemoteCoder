@@ -1,7 +1,7 @@
 import Foundation
 
 enum RealtimeVoiceMessagePresentation {
-    case request(input: String, transcript: String)
+    case request(input: String, excerpt: String)
     case transcriptTail(String)
 
     static func parse(_ text: String) -> Self? {
@@ -21,7 +21,7 @@ enum RealtimeVoiceMessagePresentation {
             let spokenRequest = lastUtterance.hasPrefix("user:")
                 && lastUtterance.dropFirst("user:".count).trimmingCharacters(in: .whitespaces) == input
                     .trimmingCharacters(in: .whitespaces)
-            return .request(input: input, transcript: spokenRequest
+            return .request(input: input, excerpt: spokenRequest
                 ? excerpt[..<lastLine].trimmingCharacters(in: .whitespacesAndNewlines) : excerpt)
         case "transcript_tail_flush": return .transcriptTail(transcript)
         default: return nil

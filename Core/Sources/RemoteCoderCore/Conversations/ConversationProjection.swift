@@ -71,14 +71,7 @@ enum ConversationProjection {
         fileprivate struct Row: Sendable {
             var item: ChatStreamItem
             var ordinal: Int64? = nil
-            var date: Date? = nil
             var endsVoiceCall = false
-
-            func startsAfter(_ other: Self) -> Bool {
-                if let ordinal, let otherOrdinal = other.ordinal { return ordinal > otherOrdinal }
-                if let date, let otherDate = other.date { return date > otherDate }
-                return false
-            }
         }
 
         fileprivate struct EditCandidate: Sendable {
@@ -248,10 +241,12 @@ enum ConversationProjection {
         if let edge = state.window?.newerEdge { rows.append(Memo.Row(item: .historyEdge(edge))) }
         for index in rows.indices where rows[index].endsVoiceCall {
             let end = rows[index]
-            if let insertion = rows[..<index].firstIndex(where: { $0.startsAfter(end) }) {
-                rows.remove(at: index)
-                rows.insert(end, at: insertion)
-            }
+            guard let endOrdinal = end.ordinal,
+                  let insertion = rows[..<index].firstIndex(where: { row in
+                      row.ordinal.map { $0 > endOrdinal } == true
+                  }) else { continue }
+            rows.remove(at: index)
+            rows.insert(end, at: insertion)
         }
         return ConversationSnapshot(conversationID: state.conversationID, ownerID: state.ownerID, threadID: state.threadID,
                                     revision: state.revision, messages: messages, timelines: timelines, items: rows.map(\.item),
@@ -306,7 +301,7 @@ enum ConversationProjection {
         var endsWithRunningCompaction = false
 
         func append(_ item: ChatStreamItem, from record: ConversationState.Item?) {
-            rows.append(Memo.Row(item: item, ordinal: record?.position, date: record?.date))
+            rows.append(Memo.Row(item: item, ordinal: record?.position))
         }
 
         func flush(before next: Date?, terminal: Bool) {
@@ -341,7 +336,7 @@ enum ConversationProjection {
                         sequence: index, timestamp: record.date) else { continue }
                     flush(before: record.date, terminal: false)
                     let activity = ChatStreamItem.activity(event)
-                    rows.append(Memo.Row(item: activity, ordinal: record.position, date: record.date, endsVoiceCall: endsCall))
+                    rows.append(Memo.Row(item: activity, ordinal: record.position, endsVoiceCall: endsCall))
                     precedingBoundary = (activity.id, record.date ?? .distantPast)
                 }
             }
@@ -444,7 +439,7 @@ enum ConversationProjection {
         let isOnlyCallEnd = !rows.isEmpty && rows.allSatisfy(\.endsVoiceCall)
         if showsTurn,
            let outcome = outcome(of: turn, hasReply: hasReply || isOnlyCallEnd || (hasCompaction && timelines.isEmpty)) {
-            rows.append(Memo.Row(item: .turnOutcome(outcome), date: turn.completedAt))
+            rows.append(Memo.Row(item: .turnOutcome(outcome)))
         }
         for message in queuedSteers {
             messages.append(message)
