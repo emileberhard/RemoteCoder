@@ -32,7 +32,7 @@ struct CodexModelCatalog: Equatable, Sendable {
                     acceptsImages: model.inputModalities.contains(.image),
                     provider: model.agentProvider,
                     modelProvider: model.modelProvider,
-                    isListed: true, supportsUltrafast: model.agentProvider != .claude && speedTiers.contains(.ultrafast)
+                    isListed: true, supportsUltrafast: model.agentProvider == .codex && model.serviceTiers.contains(where: { $0.id == "ultrafast" })
                 ),
                 summary: model.description,
                 isHiddenUpstream: model.hidden,

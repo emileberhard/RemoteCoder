@@ -373,7 +373,7 @@ fileprivate struct ChatWindowActionContext {
             selectedModelID: screen.selectedModel?.id,
             reasoningLevels: settingsModel.map { workspace.modelPickerPreferences.reasoningEfforts(for: $0).map { .effort($0) } } ?? [],
             reasoning: screen.reasoningSelection,
-            isFastModeOn: fastModel != nil && screen.fastModeSelection == true,
+            isFastModeOn: fastModel != nil && screen.speedSelection == .fast,
             favoriteFolders: workspace.favoriteFolders,
             drawerMode: workspace.drawerPreferences.mode,
             isUnreadOnly: workspace.drawerPreferences.unreadOnly,

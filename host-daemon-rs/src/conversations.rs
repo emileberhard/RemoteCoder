@@ -23,8 +23,6 @@ pub(crate) enum Source {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Speed {
-    Standard,
-    Fast,
     Ultrafast,
 }
 
@@ -55,6 +53,10 @@ impl Selection {
                 "{name} must be nonempty, trimmed and at most {maximum} bytes"
             );
         }
+        ensure!(
+            self.speed.is_none() || self.fast_mode_enabled == Some(true),
+            "Ultrafast requires an enabled legacy Fast value"
+        );
         Ok(())
     }
 }
@@ -167,11 +169,25 @@ impl ConversationMetadataStore {
             if let Some(current) = current
                 && current.mutation_id.as_deref() == Some(&request.mutation_id)
             {
+                if current.selection == request.selection {
+                    return Ok((UpdateResult::Applied(current.clone()), false));
+                }
+                let mut legacy_selection = request.selection.clone();
+                legacy_selection.speed = None;
                 ensure!(
-                    current.selection == request.selection,
+                    request.selection.speed == Some(Speed::Ultrafast)
+                        && request.selection.fast_mode_enabled == Some(true)
+                        && current.selection == legacy_selection
+                        && request.expected_revision.checked_add(1)
+                            == Some(current.server_revision),
                     "mutationId reused with different settings"
                 );
-                return Ok((UpdateResult::Applied(current.clone()), false));
+                let mut restored = current.clone();
+                restored.selection = request.selection;
+                document
+                    .records
+                    .insert(restored.selection.session_id.clone(), restored.clone());
+                return Ok((UpdateResult::Applied(restored), true));
             }
             let revision = current.map_or(0, |entry| entry.server_revision);
             if revision != request.expected_revision {
@@ -374,6 +390,25 @@ mod tests {
             store.update(update("chat", "second", 1)).await.unwrap(),
             UpdateResult::Applied(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn an_ultrafast_retry_completes_the_same_mutation_after_a_legacy_gateway() {
+        let directory = tempfile::tempdir().unwrap();
+        let store =
+            ConversationMetadataStore::new(Some(directory.path().join("session-metadata-v2.json")));
+        let mut mutation = update("chat", "first", 0);
+        mutation.selection.fast_mode_enabled = Some(true);
+        let applied = store.update(mutation.clone()).await.unwrap();
+        mutation.selection.speed = Some(Speed::Ultrafast);
+        let restored = store.update(mutation.clone()).await.unwrap();
+        let UpdateResult::Applied(record) = &restored else {
+            panic!("the replay must acknowledge the applied mutation");
+        };
+        assert_eq!(record.server_revision, 1);
+        assert_eq!(record.selection.speed, Some(Speed::Ultrafast));
+        assert_eq!(store.update(mutation).await.unwrap(), restored);
+        assert_ne!(applied, restored);
     }
 
     #[tokio::test]

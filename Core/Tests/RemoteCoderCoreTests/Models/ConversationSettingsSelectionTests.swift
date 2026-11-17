@@ -91,6 +91,18 @@ struct ConversationSettingsSelectionTests {
         #expect(unsupported.changingModel(from: Self.otherCodex, to: Self.codex).selection == .ultrafast)
     }
 
+    @Test func anOlderClientsOffChoiceOverridesTheUltrafastDefault() throws {
+        let suite = "remotecoder-test-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        NewChatDefaults.recordSpeed(.ultrafast, defaults: defaults)
+        #expect(NewChatDefaults.speed(defaults: defaults) == .ultrafast)
+        defaults.set(false, forKey: "codex.fastModeEnabled")
+        #expect(NewChatDefaults.speed(defaults: defaults) == .standard)
+        NewChatDefaults.recordSpeed(.fast, defaults: defaults)
+        #expect(NewChatDefaults.speed(defaults: defaults) == .fast)
+    }
+
     @Test func loadingFailsOnlyWhileLoading() {
         var selection = fresh()
         selection.failIfLoading("offline")

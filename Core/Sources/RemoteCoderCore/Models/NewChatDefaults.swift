@@ -49,8 +49,11 @@ enum NewChatDefaults {
     }
 
     static func speed(defaults: UserDefaults = AppStorageScope.current.defaults) -> ConversationSpeed {
-        let legacy = ConversationSpeed(accelerated: defaults.bool(forKey: fastModeKey))
-        return defaults.string(forKey: speedKey).flatMap(ConversationSpeed.init(rawValue:)) ?? legacy
+        let stored = defaults.string(forKey: speedKey).flatMap(ConversationSpeed.init(rawValue:))
+        guard defaults.object(forKey: fastModeKey) != nil else { return stored ?? .standard }
+        let accelerated = defaults.bool(forKey: fastModeKey)
+        guard let stored, stored.isAccelerated == accelerated else { return ConversationSpeed(accelerated: accelerated) }
+        return stored
     }
 
     static func recordSpeed(_ speed: ConversationSpeed, defaults: UserDefaults = AppStorageScope.current.defaults) {

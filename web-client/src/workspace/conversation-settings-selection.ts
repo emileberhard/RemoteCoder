@@ -52,10 +52,15 @@ export class ConversationSettingsSelection {
         reasoning && reasoning !== "last-selected"
           ? reasoning
           : (this.preferences.get("codex.defaultReasoningSelection") ?? "effort-high"),
-      speed:
-        this.preferences.get("codex.speed") ??
-        (this.preferences.get("codex.fastModeEnabled") ? "fast" : "standard"),
+      speed: this.preferredSpeed(),
     };
+  }
+  private preferredSpeed() {
+    const speed = this.preferences.get("codex.speed");
+    const fast = this.preferences.get("codex.fastModeEnabled");
+    if (fast === null) return speed ?? "standard";
+    if (speed !== null && (speed !== "standard") === fast) return speed;
+    return fast ? "fast" : "standard";
   }
   seedNewDraft() {
     const current = this.current();
@@ -82,12 +87,7 @@ export class ConversationSettingsSelection {
       visible[0];
     const availableEfforts =
       choice?.efforts.filter((effort) => this.preferences.visibleEfforts(provider).has(effort)) ?? [];
-    const speed =
-      provider === "claude"
-        ? this.preferences.get("codex.fastModeEnabled")
-          ? "fast"
-          : "standard"
-        : defaults.speed;
+    const speed = defaults.speed;
     this.drafts.update({
       provider,
       model: choice?.id ?? "",
@@ -180,12 +180,7 @@ export class ConversationSettingsSelection {
     const currentChoice = this.choices().find(
       (value) => value.id === current.model && value.provider === current.provider,
     );
-    const rememberedFast =
-      choice.provider === "claude"
-        ? (this.preferences.get("codex.fastModeEnabled") ?? current.fast)
-        : this.preferences.get("codex.speed") === "fast" ||
-          (this.preferences.get("codex.speed") === null &&
-            (this.preferences.get("codex.fastModeEnabled") ?? current.fast));
+    const rememberedFast = this.preferredSpeed() === "fast";
     await this.applyPickerSettings(
       choice,
       clampedEffort(
@@ -226,7 +221,7 @@ export class ConversationSettingsSelection {
     const choice = this.currentModelChoice();
     if (enabled && !choice.fast) throw new Error("The selected model does not support Fast mode");
     await this.applyPickerSettings(choice, this.current().draft.effort, enabled ? "fast" : null, () => {
-      if (choice.provider === "codex") this.preferences.set("codex.speed", enabled ? "fast" : "standard");
+      this.preferences.set("codex.speed", enabled ? "fast" : "standard");
       this.preferences.set("codex.fastModeEnabled", enabled);
     });
   }

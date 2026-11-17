@@ -158,6 +158,9 @@ test("native speed seeds capable new Codex conversations and remains typed", asy
   await workspace.refreshHost("mini");
   await workspace.syncPreferences();
   expect(workspace.draft).toMatchObject({ model: "gpt-6.1-sol", fast: true, serviceTier: "ultrafast" });
+  gateway.changed({ entries: { "codex.fastModeEnabled": entry(false, 190) } });
+  await workspace.syncPreferences();
+  expect(workspace.draft).toMatchObject({ fast: false, serviceTier: null });
   gateway.changed({ entries: { "codex.speed": entry("future", 200) } });
   expect(workspace.preference("codex.speed")).toBeNull();
 });

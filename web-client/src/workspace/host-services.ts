@@ -450,11 +450,12 @@ export class HostServices {
                 hiddenUpstream: model.hidden,
                 upstreamDefault: model.isDefault,
                 fast:
-                  (model.serviceTiers?.some((tier) => tier.id === "fast") ?? false) ||
+                  (model.serviceTiers?.some((tier) => tier.id === "fast" || tier.id === "priority") ??
+                    false) ||
                   (model.additionalSpeedTiers?.includes("fast") ?? false),
                 ultrafast:
-                  (model.serviceTiers?.some((tier) => tier.id === "ultrafast") ?? false) ||
-                  (model.additionalSpeedTiers?.includes("ultrafast") ?? false),
+                  !runsOnClaude(model) &&
+                  (model.serviceTiers?.some((tier) => tier.id === "ultrafast") ?? false),
                 images: model.inputModalities?.includes("image") ?? false,
               })),
             ...(catalog.some((model) => runsOnClaude(model) && !external(model)) ? [] : claudeCatalog),

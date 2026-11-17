@@ -66,6 +66,19 @@ struct ConversationSpeedControl: View {
                 .accessibilityValue(value)
                 .accessibilityIdentifier("conversation-fast-mode-toggle")
                 .accessibilityAction { tap() }
+                .contextMenu {
+                    ForEach(ConversationSpeed.allCases, id: \.self) { choice in
+                        if model.supportsSpeed(choice) {
+                            Button { select(choice) } label: {
+                                if choice == speed {
+                                    Label(choice.label, systemImage: "checkmark")
+                                } else {
+                                    Text(choice.label)
+                                }
+                            }
+                        }
+                    }
+                }
                 .accessibilityActions {
                     ForEach(ConversationSpeed.allCases, id: \.self) { speed in
                         if model.supportsSpeed(speed) {
