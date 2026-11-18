@@ -31,12 +31,19 @@ private extension CallState {
 }
 
 private struct CallTimer: View {
+    @ScaledMetric private var maxWidth: CGFloat
     let startedAt: Date
+
+    init(startedAt: Date, maxWidth: CGFloat, relativeTo textStyle: Font.TextStyle) {
+        self.startedAt = startedAt
+        _maxWidth = ScaledMetric(wrappedValue: maxWidth, relativeTo: textStyle)
+    }
 
     var body: some View {
         Text(startedAt, style: .timer)
             .monospacedDigit()
             .multilineTextAlignment(.trailing)
+            .frame(maxWidth: maxWidth, alignment: .trailing)
     }
 }
 
@@ -116,7 +123,7 @@ private struct VoiceCallLockScreen: View {
     let state: CallState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 LiveActivityGlyph(size: 28, cornerRadius: 7)
                 VStack(alignment: .leading, spacing: 2) {
@@ -128,9 +135,8 @@ private struct VoiceCallLockScreen: View {
                         .font(.caption)
                 }
                 Spacer(minLength: 8)
-                CallTimer(startedAt: attributes.startedAt)
+                CallTimer(startedAt: attributes.startedAt, maxWidth: 80, relativeTo: .title3)
                     .font(.title3.weight(.semibold))
-                    .frame(maxWidth: 80, alignment: .trailing)
             }
             Caption(text: state.caption)
             CallControls(callID: attributes.callID, state: state)
@@ -176,10 +182,9 @@ struct RemoteCoderVoiceCallWidget: Widget {
                     LiveActivityGlyph(size: 26, cornerRadius: 7)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    CallTimer(startedAt: context.attributes.startedAt)
+                    CallTimer(startedAt: context.attributes.startedAt, maxWidth: 64, relativeTo: .headline)
                         .font(.headline)
                         .foregroundStyle(.orange)
-                        .frame(maxWidth: 64, alignment: .trailing)
                         .padding(.trailing, 8)
                 }
                 DynamicIslandExpandedRegion(.center) {
