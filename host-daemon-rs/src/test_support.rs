@@ -174,6 +174,8 @@ for line in sys.stdin:
         append(root / 'received.jsonl', frame)
         emit(frame)
         content = frame['message']['content']
+        if isinstance(content, list):
+            content = next((part['text'] for part in content if part.get('type') == 'text' and part.get('text', '').startswith('reply: ')), content)
         if content == 'initial':
             emit({'type': 'result', 'subtype': 'success', 'is_error': False, 'session_id': session, 'result': 'ready'})
         elif isinstance(content, str) and content.startswith('reply: '):

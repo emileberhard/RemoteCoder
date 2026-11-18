@@ -1,7 +1,8 @@
 use super::input_writer::InputSlot;
 use super::{
-    ClaudeRuntime, ClaudeSupervisor, InputWriter, ProcessAdmission, RuntimeTurn, TurnControlError,
-    TurnErrorData, TurnOrigin, TurnPhase, TurnStartError, annotate_agent_initiated, lifecycle,
+    ClaudeRuntime, ClaudeSupervisor, IdleEligibility, IdlePolicy, InputWriter, ProcessAdmission,
+    RuntimeTurn, TurnControlError, TurnErrorData, TurnOrigin, TurnPhase, TurnStartError,
+    WakeEvidence, annotate_agent_initiated, lifecycle,
 };
 use crate::ids::new_session_uuid;
 use crate::providers::claude::translate::TurnTranslator;
@@ -14,6 +15,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::MutexGuard;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::{debug, info, warn};
@@ -145,7 +147,7 @@ impl ClaudeSupervisor {
         self.recover_stored_cwd(&mut request, &policy).await?;
         request.input.client_id.get_or_insert_with(new_session_uuid);
         self.prepare_job_resume(&request, &policy).await?;
-        let prepared = super::input_writer::InputWriter::prepare_input(&request.input)
+        let mut prepared = super::input_writer::InputWriter::prepare_input(&request.input)
             .map_err(TurnStartError::from)?;
         let stop_generation = self
             .stop_generation(&request.thread_id)
@@ -158,19 +160,50 @@ impl ClaudeSupervisor {
         self.check_callback_generation(&request.thread_id, origin)
             .await?;
         self.refuse_while_user_turn_runs(&request).await?;
-        let retired_account = {
+        let account_group = self
+            .runtimes
+            .lock()
+            .await
+            .get(&request.thread_id)
+            .filter(|runtime| runtime.claude_account != request.claude_account)
+            .map(|runtime| runtime.process_group_id);
+        let retired_account = if let Some(group) = account_group {
+            let evidence = self.refresh_wakes(&request.thread_id, group).await;
             let mut runtimes = self.runtimes.lock().await;
-            match runtimes.get(&request.thread_id) {
-                Some(runtime) if runtime.claude_account != request.claude_account => {
-                    if !runtime.is_idle() {
-                        return Err(TurnStartError { data: None, code: RpcCode::ServerBusy, message: "This conversation has active Claude work under another account preference; retry when it finishes".into() });
-                    }
-                    let group = runtime.process_group_id;
-                    runtimes.remove(&request.thread_id);
-                    Some(group)
-                }
-                _ => None,
+            let runtime = runtimes
+                .get(&request.thread_id)
+                .filter(|runtime| runtime.process_group_id == group)
+                .ok_or_else(|| TurnStartError {
+                    data: None,
+                    code: RpcCode::ServerBusy,
+                    message: "Claude runtime changed while checking scheduled work; retry".into(),
+                })?;
+            let now = tokio::time::Instant::now();
+            if matches!(evidence, WakeEvidence::Unreadable)
+                || matches!(
+                    IdlePolicy::eligibility(runtime, evidence, now),
+                    IdleEligibility::Busy | IdleEligibility::WakesUnreadable
+                )
+            {
+                return Err(TurnStartError { data: None, code: RpcCode::ServerBusy, message: "Claude has active work or scheduled work could not be checked; retry when it finishes or its transcript is readable".into() });
             }
+            for wake in runtime.wakes.scheduled(now, SystemTime::now()) {
+                if let crate::providers::claude::wake_hold::ScheduledWork::Loop { next_wake } = wake
+                {
+                    let at = next_wake
+                        .and_then(|wake| wake.duration_since(UNIX_EPOCH).ok())
+                        .and_then(|duration| u64::try_from(duration.as_millis()).ok());
+                    request
+                        .input
+                        .append_note(&crate::providers::claude::restart::loop_ended_notice(at));
+                }
+            }
+            prepared = super::input_writer::InputWriter::prepare_input(&request.input)
+                .map_err(TurnStartError::from)?;
+            runtimes.remove(&request.thread_id);
+            Some(group)
+        } else {
+            None
         };
         if let Some(group) = retired_account {
             self.journal.runtime(

@@ -67,6 +67,19 @@ pub(crate) enum ScheduledWake {
     Cron { schedule: String },
 }
 
+pub(crate) fn loop_ended_notice(next_wake_unix_ms: Option<u64>) -> String {
+    match next_wake_unix_ms {
+        Some(at) => format!(
+            "Your /loop wake-up due at {} ended with the process; call ScheduleWakeup again to keep the loop going.",
+            local_time(at)
+        ),
+        None => {
+            "Your /loop ended with the process; call ScheduleWakeup again to keep the loop going."
+                .to_owned()
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Event {
@@ -223,13 +236,7 @@ impl Item {
         }
         for wake in &self.scheduled_wakes {
             if let ScheduledWake::Loop { next_wake_unix_ms } = wake {
-                notice.push(match next_wake_unix_ms {
-                    Some(at) => format!(
-                        "Your /loop wake-up due at {} ended with the process; call ScheduleWakeup again to keep the loop going.",
-                        local_time(*at)
-                    ),
-                    None => "Your /loop ended with the process; call ScheduleWakeup again to keep the loop going.".to_owned(),
-                });
+                notice.push(loop_ended_notice(*next_wake_unix_ms));
             }
         }
         let crons = self

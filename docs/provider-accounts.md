@@ -383,7 +383,12 @@ it when absent. Gateway-started continuations (queued messages, wakes, `/compact
 and restart recovery) inherit the recorded account. Recovery steering into an
 already running turn joins that turn's routing, as ordinary steering does. The
 account is fixed for a Claude process: an idle process is replaced for a change;
-a busy one refuses with retryable `ServerBusy` before dispatch.
+a busy one refuses with retryable `ServerBusy` before dispatch. If wake evidence
+is unreadable, the change is likewise refused. A pending `/loop` ends when the
+process is replaced, and the next turn receives a notice to schedule it again;
+cron jobs resume with the session. The gateway advertises `claudeAccount` in its
+ready capabilities, and `rc-gateway` refuses to dispatch a preferred turn when
+that capability is absent.
 
 `GET /accounts` retains `default-claude` with `isDefault: true` on each host.
 In router mode, readiness checks configuration and key readability; failures carry the

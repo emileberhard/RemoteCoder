@@ -737,7 +737,7 @@ async fn account_changes_require_a_new_claude_process() {
     let executable = home.root_path().join("claude-stub");
     crate::test_support::write_claude_cli_stub(
         &executable,
-        crate::test_support::ClaudeCliMode::MessagesAcknowledgeInterrupt(history),
+        crate::test_support::ClaudeCliMode::MessagesAcknowledgeInterrupt(history.clone()),
     );
     let mut settings = home.settings.clone();
     settings.claude_path = executable;
@@ -773,6 +773,37 @@ async fn account_changes_require_a_new_claude_process() {
                 break;
             }
         }
+        if index == 1 {
+            append_transcript(
+                &history,
+                &wake_tool_records(
+                    "toolu_account_wake",
+                    "ScheduleWakeup",
+                    json!({"delaySeconds": 1800}),
+                    json!({"scheduledFor": crate::time::unix_millis() + 1_800_000, "clampedDelaySeconds": 1800, "wasClamped": false}),
+                ),
+            );
+        }
+        if index == 2 {
+            let received =
+                fs::read_to_string(home.settings.claude_home.join("received.jsonl")).unwrap();
+            let frames: Vec<Value> = received
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let content = frames[2]["message"]["content"].to_string();
+            assert!(content.contains("Your /loop wake-up due at"), "{content}");
+            assert!(content.contains("call ScheduleWakeup again"), "{content}");
+            append_transcript(
+                &history,
+                &wake_tool_records(
+                    "toolu_account_cron",
+                    "CronCreate",
+                    json!({"cron": "*/10 * * * *", "prompt": "Check the build", "recurring": false}),
+                    json!({"id": "account-cron", "humanSchedule": "Every 10 minutes", "recurring": false, "durable": false}),
+                ),
+            );
+        }
         if index == 0 || index == 3 {
             let mut runtimes = agent.runtimes.lock().await;
             let runtime = runtimes.get_mut(&thread).unwrap();
@@ -796,6 +827,21 @@ async fn account_changes_require_a_new_claude_process() {
             let runtime = runtimes.get_mut(&thread).unwrap();
             assert_eq!(runtime.process_group_id, pid);
             runtime.background_tasks.clear();
+        }
+        if index == 0 {
+            assert!(matches!(
+                agent.refresh_wakes(&thread, pid).await,
+                WakeEvidence::Fresh
+            ));
+            let saved = fs::read(&history).unwrap();
+            fs::write(&history, b"").unwrap();
+            let mut blocked = request(&thread, false);
+            blocked.cwd = cwd.clone();
+            blocked.claude_account = None;
+            let error = agent.start_turn(blocked).await.unwrap_err();
+            assert_eq!(error.code, RpcCode::ServerBusy);
+            assert_eq!(agent.runtimes.lock().await[&thread].process_group_id, pid);
+            fs::write(&history, saved).unwrap();
         }
     }
     assert_eq!(pids[0], pids[1]);
