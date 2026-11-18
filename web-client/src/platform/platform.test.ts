@@ -218,7 +218,9 @@ describe("browser speech service ownership", () => {
     const service = new BrowserDictation(
       "host-1",
       () => undefined,
-      (text) => texts.push(text),
+      (text) => {
+        texts.push(text);
+      },
       scribe,
       {
         store,
@@ -253,7 +255,9 @@ describe("browser speech service ownership", () => {
     const service = new BrowserDictation(
       "host-1",
       () => undefined,
-      (text) => texts.push(text),
+      (text) => {
+        texts.push(text);
+      },
       scribe,
       {
         store: new MemoryRecordings(),
@@ -286,13 +290,79 @@ describe("browser speech service ownership", () => {
     service.dispose();
   });
 
+  test.each(["host", "relay"])("%s dictation retains audio until draft flush succeeds", async (path) => {
+    const store = new MemoryRecordings();
+    const flush = deferred<void>();
+    const texts: string[] = [];
+    const service = new BrowserDictation(
+      "host-1",
+      () => undefined,
+      async (text) => {
+        texts.push(text);
+        await flush.promise;
+      },
+      scribe,
+      {
+        store,
+        capture: async () => mediaStream().stream,
+        recorder,
+        decode: async () => new Float32Array(16_000),
+        uploadDictation: async (file) => ({ path: "/upload.wav", bytes: file.size, sha256: "digest" }),
+        request: async () => {
+          if (path === "relay") throw new Error("No host");
+          return { text: "host words", model: "batch" };
+        },
+        fetch: async () => new Response(JSON.stringify({ text: "relay words" })),
+      },
+    );
+    await service.start();
+    const finishing = service.finish();
+    await settle();
+    expect(texts).toEqual([`${path} words`]);
+    expect(await service.recoveries()).toHaveLength(1);
+    flush.resolve();
+    await finishing;
+    expect(await service.recoveries()).toHaveLength(0);
+    service.dispose();
+  });
+
+  test.each(["host", "relay"])("%s dictation retains audio when draft flush fails", async (path) => {
+    const service = new BrowserDictation(
+      "host-1",
+      () => undefined,
+      () => {
+        throw new Error("Draft storage unavailable");
+      },
+      scribe,
+      {
+        store: new MemoryRecordings(),
+        capture: async () => mediaStream().stream,
+        recorder,
+        decode: async () => new Float32Array(16_000),
+        uploadDictation: async (file) => ({ path: "/upload.wav", bytes: file.size, sha256: "digest" }),
+        request: async () => {
+          if (path === "relay") throw new Error("No host");
+          return { text: "host words", model: "batch" };
+        },
+        fetch: async () => new Response(JSON.stringify({ text: "relay words" })),
+      },
+    );
+    await service.start();
+    await expect(service.finish()).rejects.toThrow("Draft storage unavailable");
+    expect(await service.recoveries()).toHaveLength(1);
+    expect(service.state.status).toBe("failed");
+    service.dispose();
+  });
+
   test("an empty filtered host result completes without relay or draft insertion", async () => {
     const texts: string[] = [];
     let relayCalls = 0;
     const service = new BrowserDictation(
       "host-1",
       () => undefined,
-      (text) => texts.push(text),
+      (text) => {
+        texts.push(text);
+      },
       scribe,
       {
         store: new MemoryRecordings(),
@@ -332,7 +402,9 @@ describe("browser speech service ownership", () => {
     const service = new BrowserDictation(
       "host-1",
       () => undefined,
-      (text) => texts.push(text),
+      (text) => {
+        texts.push(text);
+      },
       scribe,
       {
         store: new MemoryRecordings(),
@@ -373,7 +445,9 @@ describe("browser speech service ownership", () => {
     const service = new BrowserDictation(
       "host-1",
       () => undefined,
-      (text) => texts.push(text),
+      (text) => {
+        texts.push(text);
+      },
       scribe,
       {
         store,
@@ -433,7 +507,9 @@ describe("browser speech service ownership", () => {
     const service = new BrowserDictation(
       "host-1",
       () => undefined,
-      (text) => texts.push(text),
+      (text) => {
+        texts.push(text);
+      },
       scribe,
       {
         store: new MemoryRecordings(),

@@ -102,6 +102,7 @@ export function DictationControl() {
         if (!draft)
           throw new Error("The original dictation draft is unavailable; the recording was retained.");
         workspace.updateDraft({ text: [draft.text.trimEnd(), text].filter(Boolean).join("\n") }, key);
+        workspace.flushDraftsRequired();
       },
       () => ({
         model: workspace.preference("transcription.model") ?? defaultTranscriptionModel,

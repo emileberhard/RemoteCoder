@@ -41,7 +41,7 @@ export class BrowserDictation {
   constructor(
     readonly hostId: string,
     private readonly onState: (state: DictationState) => void,
-    private readonly onTranscript: (text: string) => void,
+    private readonly onTranscript: (text: string) => void | Promise<void>,
     private readonly settings: () => TranscriptionSettings,
     private readonly options: DictationOptions = {},
   ) {
@@ -216,7 +216,8 @@ export class BrowserDictation {
         );
       }
       if (generation !== this.generation || this.retired) return;
-      if (text) this.onTranscript(text);
+      if (text) await this.onTranscript(text);
+      if (generation !== this.generation || this.retired) return;
       await this.store.remove(recording.id);
       if (this.unsaved?.id === recording.id) this.unsaved = undefined;
       if (generation === this.generation && !this.retired) this.publish({ status: "idle" });

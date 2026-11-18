@@ -592,8 +592,11 @@ export class Workspace {
   flushDrafts() {
     this.drafts.flush();
   }
-  prepareForReload() {
+  flushDraftsRequired() {
     this.drafts.flushRequired();
+  }
+  prepareForReload() {
+    this.flushDraftsRequired();
   }
   choices() {
     return this.settings.choices();
