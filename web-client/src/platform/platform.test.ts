@@ -293,12 +293,14 @@ describe("browser speech service ownership", () => {
   test.each(["host", "relay"])("%s dictation retains audio until draft flush succeeds", async (path) => {
     const store = new MemoryRecordings();
     const flush = deferred<void>();
+    const started = deferred<void>();
     const texts: string[] = [];
     const service = new BrowserDictation(
       "host-1",
       () => undefined,
       async (text) => {
         texts.push(text);
+        started.resolve();
         await flush.promise;
       },
       scribe,
@@ -317,7 +319,7 @@ describe("browser speech service ownership", () => {
     );
     await service.start();
     const finishing = service.finish();
-    await settle();
+    await started.promise;
     expect(texts).toEqual([`${path} words`]);
     expect(await service.recoveries()).toHaveLength(1);
     flush.resolve();
