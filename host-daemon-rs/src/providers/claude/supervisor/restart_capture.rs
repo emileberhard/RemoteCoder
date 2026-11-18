@@ -162,6 +162,7 @@ impl ClaudeSupervisor {
             let (notices, queued_inputs): (Vec<_>, Vec<_>) =
                 queued.into_iter().partition(|input| input.notice.is_some());
             let mut item = Item {
+                claude_account: None,
                 recovery_id: new_session_uuid(),
                 stop_generation: stop_generations.get(&thread_id).copied().flatten(),
                 thread_id,

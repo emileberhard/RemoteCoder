@@ -104,6 +104,7 @@ impl ClaudeSupervisor {
         selection: &ClaudeSelection,
     ) -> anyhow::Result<()> {
         let selection = crate::providers::claude::conversation_index::ParentSelection {
+            claude_account: None,
             cwd: cwd.to_owned(),
             model: selection.model.clone(),
             effort: selection.effort.clone(),

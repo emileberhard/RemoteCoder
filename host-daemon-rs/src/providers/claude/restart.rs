@@ -77,6 +77,8 @@ pub(crate) struct Event {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Item {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_account: Option<String>,
     pub recovery_id: String,
     pub thread_id: String,
     pub session_uuid: String,
@@ -625,6 +627,7 @@ pub(crate) mod test_support {
 
         pub(crate) fn item(&self, session_uuid: &str, status: ItemStatus) -> Item {
             Item {
+                claude_account: None,
                 recovery_id: crate::ids::new_session_uuid(),
                 thread_id: crate::providers::claude::claude_thread_id(session_uuid),
                 session_uuid: session_uuid.to_owned(),
@@ -664,6 +667,7 @@ mod tests {
 
     fn item(thread: &str, status: ItemStatus) -> Item {
         Item {
+            claude_account: None,
             recovery_id: format!("recovery-{thread}"),
             thread_id: format!("claude_{thread}"),
             session_uuid: format!("{thread}-session"),
@@ -692,6 +696,94 @@ mod tests {
             id: "family".to_owned(),
             generation: 3,
         })
+    }
+
+    #[test]
+    fn cross_version_account_records() {
+        let Ok(directory) = std::env::var("RC_ACCOUNT_COMPAT_DIRECTORY") else {
+            return;
+        };
+        let stage = std::env::var("RC_ACCOUNT_COMPAT_STAGE").unwrap();
+        let root = std::path::Path::new(&directory);
+        let store = Store::beside(&root.join("state/active-codex-turns.json"));
+        let parent_path = root.join("parent.json");
+        match stage.as_str() {
+            "source" => {
+                let journal = Journal::capture(
+                    None,
+                    vec![
+                        item("preferred", ItemStatus::Captured),
+                        item("ordinary", ItemStatus::Captured),
+                    ],
+                    None,
+                )
+                .unwrap();
+                store.write(&journal).unwrap();
+                std::fs::write(
+                    &parent_path,
+                    r#"{"cwd":"/work","model":"opus","effort":null}"#,
+                )
+                .unwrap();
+            }
+            "candidate" => {
+                let mut journal = store.load().unwrap().unwrap();
+                journal.items[0].claude_account = Some("emileberhard388".into());
+                store.write(&journal).unwrap();
+                let mut parent: crate::providers::claude::conversation_index::ParentSelection =
+                    serde_json::from_slice(&std::fs::read(&parent_path).unwrap()).unwrap();
+                parent.claude_account = Some("emileberhard388".into());
+                std::fs::write(&parent_path, serde_json::to_vec(&parent).unwrap()).unwrap();
+            }
+            "rollback" | "verify" => {
+                let journal = store.load().unwrap().unwrap();
+                assert_eq!(
+                    journal.items[0].claude_account.as_deref(),
+                    Some("emileberhard388")
+                );
+                assert_eq!(journal.items[1].claude_account, None);
+                let parent: crate::providers::claude::conversation_index::ParentSelection =
+                    serde_json::from_slice(&std::fs::read(&parent_path).unwrap()).unwrap();
+                assert_eq!(parent.claude_account.as_deref(), Some("emileberhard388"));
+                if stage == "rollback" {
+                    store.write(&journal).unwrap();
+                    std::fs::write(&parent_path, serde_json::to_vec(&parent).unwrap()).unwrap();
+                }
+            }
+            _ => panic!("invalid compatibility stage"),
+        }
+    }
+
+    #[test]
+    fn readers_preserve_preferred_and_ordinary_records() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::beside(&root.path().join("state/active-codex-turns.json"));
+        let journal = Journal::capture(
+            None,
+            vec![
+                item("preferred", ItemStatus::Captured),
+                item("ordinary", ItemStatus::Captured),
+            ],
+            None,
+        )
+        .unwrap();
+        let mut incoming = serde_json::to_value(journal).unwrap();
+        incoming["items"][0]["claudeAccount"] = serde_json::json!("emileberhard388");
+        let candidate: Journal = serde_json::from_value(incoming).unwrap();
+        store.write(&candidate).unwrap();
+        let restored = store.load().unwrap().unwrap();
+        assert_eq!(
+            restored.items[0].claude_account.as_deref(),
+            Some("emileberhard388")
+        );
+        assert_eq!(restored.items[1].claude_account, None);
+        let mut parent = serde_json::json!({"cwd":"/work", "model":"opus", "effort":null});
+        let old: crate::providers::claude::conversation_index::ParentSelection =
+            serde_json::from_value(parent.clone()).unwrap();
+        assert_eq!(old.claude_account, None);
+        parent["claudeAccount"] = serde_json::json!("emileberhard388");
+        let new: crate::providers::claude::conversation_index::ParentSelection =
+            serde_json::from_value(parent.clone()).unwrap();
+        assert_eq!(serde_json::to_value(new).unwrap(), parent);
     }
 
     #[test]

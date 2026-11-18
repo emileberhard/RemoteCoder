@@ -109,6 +109,8 @@ const MAX_EXECUTION_INDEX_BYTES: u64 = 64 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ParentSelection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_account: Option<String>,
     pub cwd: String,
     pub model: String,
     pub effort: Option<String>,

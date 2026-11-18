@@ -92,6 +92,7 @@ impl ClaudeSupervisor {
         stop_generation: u64,
     ) {
         let selection = ParentSelection {
+            claude_account: None,
             cwd: request.cwd.clone(),
             model: request.selection.model.clone(),
             effort: request.selection.effort.clone(),
@@ -1067,6 +1068,7 @@ mod tests {
             .conversation_index
             .update_parent(THREAD, move |parent| {
                 parent.selection = Some(ParentSelection {
+                    claude_account: None,
                     cwd,
                     model: "sonnet".into(),
                     effort: None,

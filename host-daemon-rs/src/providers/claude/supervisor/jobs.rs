@@ -475,6 +475,7 @@ impl ClaudeSupervisor {
             })
             .await?;
         let item = crate::providers::claude::restart::Item {
+            claude_account: None,
             recovery_id: recovery_input_id.to_owned(),
             thread_id: conversation.thread_id.clone(),
             session_uuid: session_uuid_from_thread_id(&conversation.thread_id)
