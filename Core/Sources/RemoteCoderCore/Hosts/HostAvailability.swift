@@ -77,6 +77,7 @@ final class HostAvailabilityTracker {
     @ObservationIgnored var requestsPeerView: @MainActor () -> Void = {}
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let now: @MainActor () -> Date
+    @ObservationIgnored private let sleep: @MainActor (Duration) async throws -> Void
     @ObservationIgnored private(set) var connectivity = GatewayConnectivity.disconnected
     @ObservationIgnored private var internalBattery: Bool?
     @ObservationIgnored private var lastSeen: Date?
@@ -87,10 +88,12 @@ final class HostAvailabilityTracker {
     @ObservationIgnored private var reevaluation: Task<Void, Never>?
     @ObservationIgnored private var isRetired = false
 
-    init(hostID: UUID, defaults: UserDefaults, now: @escaping @MainActor () -> Date = { .now }) {
+    init(hostID: UUID, defaults: UserDefaults, now: @escaping @MainActor () -> Date = { .now },
+         sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.hostID = hostID
         self.defaults = defaults
         self.now = now
+        self.sleep = sleep
         internalBattery = HostPreferences.internalBattery(hostID: hostID, defaults: defaults)
         lastSeen = HostPreferences.lastSeen(hostID: hostID, defaults: defaults)
         unreachableSince = HostPreferences.unreachableSince(hostID: hostID, defaults: defaults)
@@ -171,8 +174,8 @@ final class HostAvailabilityTracker {
         if derived.availability != current { current = derived.availability }
         guard let next = [derived.changesAt, peerViewDue].compactMap({ $0 }).min() else { return }
         let delay = max(0, next.timeIntervalSince(now))
-        reevaluation = Task { [weak self] in
-            guard (try? await Task.sleep(for: .seconds(delay))) != nil, let self, !self.isRetired else { return }
+        reevaluation = Task { [weak self, sleep] in
+            guard (try? await sleep(.seconds(delay))) != nil, let self, !self.isRetired else { return }
             self.reevaluation = nil
             self.reevaluate()
         }

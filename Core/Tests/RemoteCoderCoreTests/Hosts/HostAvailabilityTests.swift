@@ -54,7 +54,31 @@ struct HostAvailabilityTests {
 @MainActor
 private final class TestClock {
     var offset: TimeInterval = 0
+    private var sleepers: [CheckedContinuation<Void, Never>] = []
+    private var unseenSleeps = 0
+    private var sleepObserver: CheckedContinuation<Void, Never>?
+
     func now() -> Date { .now + offset }
+
+    func sleep(_: Duration) async throws {
+        try Task.checkCancellation()
+        unseenSleeps += 1
+        sleepObserver?.resume()
+        sleepObserver = nil
+        await withCheckedContinuation { sleepers.append($0) }
+        try Task.checkCancellation()
+    }
+
+    func nextSleep() async {
+        if unseenSleeps == 0 { await withCheckedContinuation { sleepObserver = $0 } }
+        unseenSleeps -= 1
+    }
+
+    func wake() {
+        let sleeping = sleepers
+        sleepers = []
+        sleeping.forEach { $0.resume() }
+    }
 }
 
 @MainActor
@@ -67,24 +91,29 @@ struct HostAvailabilityTrackerTests {
         let clock = TestClock()
         var trackers: [HostAvailabilityTracker] = []
         let relaunch = {
-            let tracker = HostAvailabilityTracker(hostID: hostID, defaults: defaults, now: clock.now)
+            let tracker = HostAvailabilityTracker(hostID: hostID, defaults: defaults, now: clock.now, sleep: clock.sleep)
             trackers.append(tracker)
             return tracker
         }
-        defer { trackers.forEach { $0.retire() } }
+        defer {
+            trackers.forEach { $0.retire() }
+            clock.wake()
+        }
         try await body(relaunch(), clock, relaunch)
     }
 
     @Test func aStationaryHostWarnsOnceTheGraceRunsOut() async throws {
         try await withTracker { tracker, clock, _ in
-            clock.offset = -HostAvailability.warningGrace + 0.2
+            tracker.reported(internalBattery: false)
             tracker.connectivityChanged(.connected(.lan), runningTasks: 0)
             tracker.connectivityChanged(.unreachable(.noAnswer), runningTasks: 1)
-            clock.offset = 0
-            tracker.reported(internalBattery: false)
             #expect(tracker.current.reach == .offline)
             #expect(tracker.current.tasksRunningAtLoss == 1)
-            #expect(await waitUntil(timeout: .seconds(3)) { tracker.current.reach == .unreachable })
+            await clock.nextSleep()
+            clock.offset = HostAvailability.warningGrace
+            clock.wake()
+            await clock.nextSleep()
+            #expect(tracker.current.reach == .unreachable)
         }
     }
 
