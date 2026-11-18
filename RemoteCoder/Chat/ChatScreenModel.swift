@@ -687,6 +687,37 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         let fileAttachments: [UploadedFile]
     }
 
+    private struct SendHeld: LocalizedError {
+        let reason: String
+        var errorDescription: String? { reason }
+    }
+
+    private(set) var isSendHeld = false
+
+    var sendHeldReason: String? {
+        guard isSendHeld, !target.isGatewayConnected else { return nil }
+        return hostPresentation.sendHeldReason
+    }
+
+    func clearSendHeld() { isSendHeld = false }
+
+    private var hostPresentation: HostPresentation {
+        HostPresentation(target.availability.current, historyFailure: nil,
+                         context: .current(hostName: target.hostDisplayName, device: ThisDevice.noun))
+    }
+
+    private func connectOnceForSend() async throws {
+        guard !target.isGatewayConnected else { return }
+        do { try await target.connectNow() }
+        catch where GatewayClient.meansUnreachable(error) { throw SendHeld(reason: hostPresentation.sendHeldReason) }
+    }
+
+    private func presentSendFailure(_ error: any Error, feedback: (HapticEvent) -> Void) {
+        if error is SendHeld { isSendHeld = true }
+        else { present(.draft(error.localizedDescription)) }
+        if !(error is CancellationError) { feedback(.error) }
+    }
+
     private struct MessageSaveError: LocalizedError {
         let underlying: Error
         var errorDescription: String? { "Could not save the message: \(underlying.localizedDescription)" }
@@ -726,11 +757,11 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         guard isDispatchable(resolved) else { return false }
         guard let admission = drafts.reserveSubmission(of: draft) else { return false }
         defer { drafts.releaseSubmission(admission) }
+        isSendHeld = false
         do {
             try await enqueue(resolved, draft: draft, threadID: threadID)
         } catch {
-            present(.draft(error.localizedDescription))
-            if !(error is CancellationError) { feedback(.error) }
+            presentSendFailure(error, feedback: feedback)
             return false
         }
         return true
@@ -739,6 +770,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
     private func enqueue(_ resolved: ResolvedDispatchMessage, draft: ComposerDraft, threadID: String) async throws {
         let feedback = target.feedbackForCurrentConversation()
         let conversationID = currentConversationID
+        try await connectOnceForSend()
         guard let outgoing = drafts.beginSending(draft) else { throw CancellationError() }
         var saved = false
         defer { if !saved { drafts.returnToComposer(outgoing) } }
@@ -924,11 +956,11 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         guard isDispatchable(resolved) else { return false }
         guard let admission = drafts.reserveSubmission(of: draft) else { return false }
         defer { drafts.releaseSubmission(admission) }
+        isSendHeld = false
         do {
             try await dispatch(resolved, draft: draft, interactionMode: interactionMode)
         } catch {
-            present(.draft(error.localizedDescription))
-            if !(error is CancellationError) { feedback(.error) }
+            presentSendFailure(error, feedback: feedback)
             return false
         }
         return true
@@ -956,6 +988,7 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             return (turn: turn, context: context)
         }
         let isSteering = steering != nil
+        try await connectOnceForSend()
         var outgoing: ComposerDraftStore.OutgoingMessage?
         if case .composed = resolved.content {
             guard let message = drafts.beginSending(draft) else { throw CancellationError() }

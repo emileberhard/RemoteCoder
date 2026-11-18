@@ -1,17 +1,31 @@
 import SwiftUI
 
+struct HostEdgeGlow: View {
+    let target: ChatTargetModel
+    let workspace: ChatWorkspaceModel
+
+    var body: some View {
+        let edge = workspace.presentation(of: target).edge
+        #if os(macOS)
+        if edge.route == nil { ConnectionEdgeGlow(edge: edge) }
+        #else
+        ConnectionEdgeGlow(edge: edge)
+        #endif
+    }
+}
+
 struct ConnectionEdgeGlow: View {
-    var connectivity: GatewayConnectivity
+    var edge: HostPresentation.Edge
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var opacity: Double {
-        connectivity == .disconnected || connectivity == .unreachable ? 0.72 : 0.58
+        edge == .warning ? 0.72 : 0.58
     }
 
     private var glowColor: Color {
-        switch connectivity {
-        case .disconnected, .unreachable: Color(red: 0.9, green: 0.2, blue: 0.2)
-        case .restarting: Color(white: 0.6)
+        switch edge {
+        case .warning: .orange
+        case .neutral: Color(white: 0.6)
         case .connected(.relay): Color(red: 0.35, green: 0.6, blue: 1)
         case .connected(.lan), .connected(.configured): Color(red: 0.3, green: 0.85, blue: 0.45)
         }
@@ -32,6 +46,6 @@ struct ConnectionEdgeGlow: View {
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: connectivity)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: edge)
     }
 }

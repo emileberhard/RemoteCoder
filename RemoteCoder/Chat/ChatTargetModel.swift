@@ -268,14 +268,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     @ObservationIgnored let realtimeVoice: VoiceCall
     @ObservationIgnored let gatewayPolicy: SharedGatewayPolicy
 
-    private(set) var gatewayUnreachableSince: Date?
-    private(set) var gatewayConnectivity = GatewayConnectivity.disconnected {
-        didSet {
-            if gatewayConnectivity != .unreachable { gatewayUnreachableSince = nil }
-            else if oldValue != .unreachable { gatewayUnreachableSince = .now }
-        }
-    }
-    var gatewayRoute: GatewayRoute.Kind? { gatewayConnectivity.route }
+    let availability: HostAvailabilityTracker
+    var gatewayRoute: GatewayRoute.Kind? { availability.current.route }
     var isGatewayConnected: Bool { gatewayRoute != nil }
 
     @ObservationIgnored private lazy var transcriptRecovery = TranscriptRecovery(source: self)
@@ -495,6 +489,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         )
         self.voiceHistoryStore = RealtimeVoiceHistoryStore(hostID: host.id, storage: storage)
         self.directories = hostServices.directories
+        self.availability = HostAvailabilityTracker(hostID: host.id, defaults: chatDefaults)
         startCodexModelCacheLoad()
     }
 
@@ -990,7 +985,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         fileImports.beginRetirement()
         turnsChanged(turns.removeAll())
         conversationActivity = ConversationActivity()
-        gatewayConnectivity = .disconnected
+        availability.connectivityChanged(.disconnected, runningTasks: 0)
+        availability.retire()
         eventPump.stop()
         backgroundExecution.release()
         retirementTask = Task {
@@ -1037,7 +1033,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         ownedTasks.cancel(.routeMove)
         cancelActivityReads()
         conversationList.suspendMarksSync()
-        gatewayConnectivity = .disconnected
+        availability.connectivityChanged(.disconnected, runningTasks: 0)
         // Clear our local guardrail immediately so reconnects can resume via the background listener.
         recoverDispatchedTurnsAfterConnectionLoss()
         turns.endAllDispatched()
@@ -1430,22 +1426,32 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     }
 
     func gatewayConnectivityChanged(_ connectivity: GatewayConnectivity) async {
-        guard connectivity != gatewayConnectivity else { return }
+        guard connectivity != availability.connectivity else { return }
         let wasConnected = isGatewayConnected
-        gatewayConnectivity = connectivity
+        availability.connectivityChanged(connectivity, runningTasks: turns.trackedTurnCount)
         scheduleRouteMove()
         guard isGatewayConnected else {
             if wasConnected { hostServices.automations.connectivityChanged(false) }
             return
         }
         guard !wasConnected else { return }
+        for screen in screens { screen.clearSendHeld() }
         for screen in presentingScreens { screen.refreshChangeSummary() }
         if hasConnectedGateway { onGatewayReconnect?() }
         hasConnectedGateway = true
         hostServices.automations.connectivityChanged(true)
         directories.connectionChanged()
         _ = try? await directories.resolveHomePath()
+        availability.reported(internalBattery: directories.information?.internalBattery)
         await refreshActiveConversationAfterDisconnectIfNeeded()
+    }
+
+    func connectNow() async throws {
+        try await gateway.connectNow()
+    }
+
+    func connectionFailureDetail() async -> String? {
+        await gateway.connectionFailureDetail
     }
 
     func gatewayNetworkPathChanged() {

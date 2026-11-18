@@ -37,6 +37,7 @@ final class ClusterModel {
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var refreshInputs: [GatewayHostConfiguration] = []
     @ObservationIgnored private var memberIndex: [UUID: [UUID: ClusterMember]] = [:]
+    @ObservationIgnored private var listedAt: [UUID: Date] = [:]
 
     init(defaults: UserDefaults) {
         self.defaults = defaults
@@ -59,6 +60,7 @@ final class ClusterModel {
         listings = listings.filter { ids.contains($0.key) }
         failures = failures.filter { ids.contains($0.key) }
         memberIndex = memberIndex.filter { ids.contains($0.key) }
+        listedAt = listedAt.filter { ids.contains($0.key) }
         pairs.removeAll { $0.complete && (!ids.contains($0.first) || !ids.contains($0.second)) }
         let generation = UUID()
         self.generation = generation
@@ -80,6 +82,7 @@ final class ClusterModel {
                 case .success(let prepared) where prepared.list.local.hostId == host.id:
                     self.listings[host.id] = prepared.list
                     self.memberIndex[host.id] = prepared.members
+                    self.listedAt[host.id] = prepared.listedAt
                     self.failures[host.id] = nil
                 case .success: self.failures[host.id] = ClusterFailure.identityChanged.localizedDescription
                 case .failure(let error): self.failures[host.id] = error.localizedDescription
@@ -98,11 +101,20 @@ final class ClusterModel {
     private struct PreparedList: Sendable {
         let list: ClusterList
         let members: [UUID: ClusterMember]
+        let listedAt: Date
     }
 
     @concurrent private static func read(_ host: Host) async throws -> PreparedList {
         let list = try await host.remote.clusterList()
-        return .init(list: list, members: Dictionary(list.members.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }))
+        return .init(list: list, members: Dictionary(list.members.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
+                     listedAt: .now)
+    }
+
+    func latestPeerSighting(of host: UUID) -> Date? {
+        memberIndex.compactMap { peer, members in
+            guard peer != host, members[host]?.state == .active, members[host]?.reachability.state == .reachable else { return nil }
+            return listedAt[peer]
+        }.max()
     }
 
     @concurrent private static func prepareMembers(_ lists: [UUID: [UUID: ClusterMember]]) async -> [UUID: ClusterMember] {

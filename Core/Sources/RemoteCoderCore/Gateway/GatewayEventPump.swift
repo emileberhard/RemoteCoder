@@ -201,8 +201,8 @@ final class GatewayEventPump {
             await sink?.gatewayConnectivityChanged(.connected(route))
         case .restarting:
             await sink?.gatewayConnectivityChanged(.restarting)
-        case .unreachable:
-            await sink?.gatewayConnectivityChanged(.unreachable)
+        case .unreachable(let failure):
+            await sink?.gatewayConnectivityChanged(.unreachable(failure))
         case .disconnected:
             await sink?.gatewayConnectivityChanged(.disconnected)
         case .historyGap(let threads, let allThreads):

@@ -184,11 +184,9 @@ struct ClusterModelTests {
         let lastSeen = try #require(member.reachability.lastSeenAt)
         #expect(abs(since.timeIntervalSince(lastSeen) - 0.123456789) < 0.000001)
         let coverage = try JSONDecoder().decode(ClusterCoverage.self, from: JSONSerialization.data(withJSONObject:
-            ["hostId": hostID.uuidString, "state": "future", "since": "2026-10-28T10:00:00.123456789Z",
-             "staleThrough": "2026-10-28T10:00:00Z"]))
+            ["hostId": hostID.uuidString, "state": "future", "since": "2026-10-28T10:00:00.123456789Z"]))
         #expect(coverage.state == .unknown)
         #expect(coverage.since == since)
-        #expect(coverage.staleThrough == lastSeen)
     }
 
     private func member(_ id: UUID, name: String) -> ClusterMember {

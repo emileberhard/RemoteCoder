@@ -12,6 +12,7 @@ extension GatewayClient {
         var codexItemFork: Bool? = nil
         var conversationSearch: Bool? = nil
         var conversationSearchByMeaning: Bool? = nil
+        var internalBattery: Bool? = nil
     }
 
     func registerDevice(_ request: DeviceRegistrationRequest) async throws -> DeviceRegistrationResponse {

@@ -28,13 +28,13 @@ final class ConversationList {
     private(set) var hasDiscardedHeaders = false
     private(set) var isLoadingOlder = false
     var isLoading = false
-    var errorMessage: String?
+    private(set) var readFailure: HistoryListFailure?
     private(set) var marksReplica = ConversationMarksReplica()
     private(set) var projects: [String: ProjectIdentity] = [:]
     private(set) var settlementEdits: [String: Int] = [:]
 
     var marks: ConversationMarks { marksReplica.effective }
-    var needsReconnectRefresh: Bool { errorMessage != nil || refreshDeferred }
+    var needsReconnectRefresh: Bool { readFailure != nil || refreshDeferred }
 
     @ObservationIgnored var lastSuccessfulRefreshAt: Date?
     @ObservationIgnored private var lastFullRefreshAt: Date?
@@ -514,7 +514,7 @@ final class ConversationList {
         if showsLoading { isLoading = true }
         locallyChangedDuringRefresh.removeAll()
         activeRefreshRequest = request
-        if errorMessage != nil { errorMessage = nil }
+        if readFailure != nil { readFailure = nil }
         refreshDeferred = false
         logger.info("refresh start (reason=\(reason), limit=\(limit), knownThreads=\(self.threads.count))")
 
@@ -540,7 +540,7 @@ final class ConversationList {
             let knownClassifications = classifications.threads.isEmpty ? [:]
                 : Dictionary(uniqueKeysWithValues: threads.map { ($0.id, $0.agentClassification) })
             let classificationsChanged = classifications.threads.contains { knownClassifications[$0.id] != $0.agentClassification }
-            if result.isUnchanged, result.failures.isEmpty, !result.isDeferred,
+            if result.isUnchanged, result.failure == nil, !result.isDeferred,
                !classificationsChanged, !threads.contains(where: { $0.pendingHistorySince != nil }) {
                 lastSuccessfulRefreshAt = .now
             } else {
@@ -555,7 +555,7 @@ final class ConversationList {
                     }
                     return header
                 }
-                let complete = result.failures.isEmpty && !result.isDeferred
+                let complete = result.failure == nil && !result.isDeferred
                 // A local create/remove/completion after this request began is newer evidence.
                 let merged = complete ? ConversationHeaderStore.refreshing(
                     current: threads, recent: fetched, continuation: result.continuation,
@@ -595,14 +595,13 @@ final class ConversationList {
                 }
                 lastSuccessfulRefreshAt = refreshDate
                 refreshDeferred = result.isDeferred
-                let failure = result.failures.isEmpty ? nil : result.failures.joined(separator: "\n")
-                if errorMessage != failure { errorMessage = failure }
+                if readFailure != result.failure { readFailure = result.failure }
                 let warnings = Set(result.agentWarnings + retained.warnings)
                 let warningSample = warnings.sorted().prefix(3).map { String($0.prefix(256)) }
                 logger.info("refresh success (reason=\(reason), requested=\(limit), fetched=\(result.threads.count), merged=\(merged.count), agentWarnings=\(warnings.count), warningSample=\(warningSample))")
                 persisted = nextHeaderSnapshot()
             }
-            if read == .full, result.failures.isEmpty, !result.isDeferred { lastFullRefreshAt = .now }
+            if read == .full, result.failure == nil, !result.isDeferred { lastFullRefreshAt = .now }
         } catch is CancellationError {
             // SwiftUI cancels refresh tasks opportunistically (e.g. gesture conflicts).
             // Treat cancellations as a no-op rather than surfacing them as user-facing errors.
@@ -613,7 +612,7 @@ final class ConversationList {
             logger.notice("refresh deferred until the gateway and Codex are ready (reason=\(reason))")
         } catch {
             guard !headerReadsRetired else { return }
-            errorMessage = error.localizedDescription
+            readFailure = .failed
             logger.error("refresh failed (reason=\(reason), limit=\(limit)): \(error.localizedDescription)")
         }
         if showsLoading { isLoading = false }
@@ -748,14 +747,17 @@ final class ConversationList {
             let next: AgentProvider = provider == .codex ? .claude : .codex
             continuation = advanced
             olderProvider = next
-            errorMessage = result.unavailable.isEmpty ? nil : "Some completion times couldn't be loaded; keeping their last known values."
+            readFailure = result.unavailable.isEmpty ? nil : .partial
             await threadStore.save(snapshot: nextHeaderSnapshot())
             guard !headerReadsRetired, generation == listReadGeneration, !Task.isCancelled else { return }
             await resolveProjects()
         } catch is CancellationError {
+        } catch where GatewayHistoryService.defersRead(error) {
+            refreshDeferred = true
         } catch {
             guard generation == listReadGeneration else { return }
-            errorMessage = error.localizedDescription
+            readFailure = .failed
+            logger.error("older history read failed: \(error.localizedDescription)")
         }
     }
 

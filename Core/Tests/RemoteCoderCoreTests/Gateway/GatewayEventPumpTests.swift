@@ -136,13 +136,13 @@ struct GatewayEventPumpTests {
             await socket.closeBeforeReady(code: .privateCode(4012))
             await socket.closeConnections(code: .privateCode(4012))
             #expect(await events.next() == .restarting)
-            #expect(await events.next() == .unreachable)
-            try #require(await waitUntil(timeout: .seconds(30)) { sink.connectivity.last == .unreachable })
+            #expect((await events.next())?.failureCause == .refused)
+            try #require(await waitUntil(timeout: .seconds(30)) { sink.connectivity.last?.failureCause != nil })
             #expect(sink.connectivity.contains(.restarting))
             #expect(await socket.acceptedConnections >= 2)
             let error = await #expect(throws: GatewayClient.ClientError.self) { try await client.connectIfNeeded() }
             #expect({ if case .gatewayNotReady = error { true } else { false } }())
-            #expect(await client.connectivity == .unreachable)
+            #expect(await client.connectivity.failureCause == .refused)
         }
     }
 
@@ -153,7 +153,7 @@ struct GatewayEventPumpTests {
             try #require(sink.connectivity.last == .connected(.configured))
             await socket.closeBeforeReady()
             await socket.closeConnections(code: .protocolCode(.internalServerError))
-            try #require(await waitUntil { sink.connectivity.last == .unreachable })
+            try #require(await waitUntil { sink.connectivity.last?.failureCause != nil })
 
             let before = await socket.acceptedConnections
             let started = ContinuousClock.now
@@ -275,4 +275,16 @@ private final class PausedReplaySink: GatewayEventSink {
     func gatewayQuestionsChanged(_ change: ServerNotification.QuestionsChanged) {}
     func defersReplay(_ event: RoutedGatewayEvent) -> Bool { false }
     func reconcile(gap: ReplayProgress.Gap) async {}
+}
+
+private extension GatewayConnectivity {
+    var failureCause: GatewayConnectionFailure.Cause? {
+        if case .unreachable(let failure) = self { failure.cause } else { nil }
+    }
+}
+
+private extension GatewayConnectionEvent {
+    var failureCause: GatewayConnectionFailure.Cause? {
+        if case .unreachable(let failure) = self { failure.cause } else { nil }
+    }
 }

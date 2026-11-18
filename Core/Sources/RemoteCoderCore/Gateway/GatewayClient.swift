@@ -58,6 +58,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         case connectionFailed(host: String, reason: String)
         case gatewayRestarting
         case gatewayNotReady(host: String, reason: String)
+        case credentialsRejected(host: String)
 
         var errorDescription: String? {
             switch self {
@@ -92,6 +93,8 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                 return "\(host) closed the connection: \(reason)"
             case .gatewayRestarting:
                 return "Gateway is restarting."
+            case .credentialsRejected(let host):
+                return "\(host) didn't accept this device's credentials."
             }
         }
     }
@@ -141,6 +144,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private var connectionInFlight: Task<Void, Error>?
     private var reconnect = GatewayReconnectPolicy()
     private var lastConnectionFailure: (any Error)?
+    private var unreachableSince: Date?
     private var reconnectWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private var expeditedBy: ReconnectTrigger?
     private var initializeInFlight: Task<Void, Error>?
@@ -166,7 +170,30 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     }
 
     var connectivity: GatewayConnectivity {
-        if isConnected, let route { .connected(route.kind) } else if isRestarting { .restarting } else if lastConnectionFailure != nil { .unreachable } else { .disconnected }
+        if isConnected, let route { return .connected(route.kind) }
+        if isRestarting { return .restarting }
+        guard let lastConnectionFailure, let unreachableSince else { return .disconnected }
+        return .unreachable(GatewayConnectionFailure(cause: Self.cause(of: lastConnectionFailure), since: unreachableSince))
+    }
+
+    var connectionFailureDetail: String? { lastConnectionFailure?.localizedDescription }
+
+    private static func cause(of failure: any Error) -> GatewayConnectionFailure.Cause {
+        switch failure {
+        case ClientError.credentialsRejected: .credentialsRejected
+        case ClientError.gatewayNotReady: .refused
+        default: .noAnswer
+        }
+    }
+
+    private func recordConnectionFailure(_ failure: any Error) {
+        if lastConnectionFailure == nil { unreachableSince = .now }
+        lastConnectionFailure = failure
+    }
+
+    private func clearConnectionFailure() {
+        lastConnectionFailure = nil
+        unreachableSince = nil
     }
 
     private var isRestarting: Bool {
@@ -178,7 +205,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         announced = connectivity
         let event: GatewayConnectionEvent = switch announced {
         case .restarting: .restarting
-        case .unreachable: .unreachable
+        case .unreachable(let failure): .unreachable(failure)
         case .connected, .disconnected: .disconnected
         }
         hub.emit(event)
@@ -253,6 +280,11 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         try await connect(waitingAtMost: timeouts.request)
     }
 
+    func connectNow() async throws {
+        expediteReconnect(.demand)
+        try await connect(waitingAtMost: timeouts.request)
+    }
+
     func connectWhenPermitted() async throws {
         try await connect(waitingAtMost: nil)
     }
@@ -262,7 +294,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         try Task.checkCancellation()
         let deadline = budget.map { ContinuousClock.now + $0 }
         while connectionInFlight == nil, let notBefore = reconnect.notBefore, notBefore > .now {
-            if let deadline, deadline < notBefore { throw lastConnectionFailure ?? ClientError.connectionClosed }
+            if let deadline, deadline < notBefore { throw lastConnectionFailure ?? ClientError.notConnected }
             await waitForReconnect(until: notBefore)
             guard !isRetired else { throw ClientError.retired }
             try Task.checkCancellation()
@@ -314,7 +346,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             } else {
                 error
             }
-            if !Task.isCancelled, !isRetired, !(error is CancellationError) { lastConnectionFailure = failure }
+            if !Task.isCancelled, !isRetired, !(error is CancellationError) { recordConnectionFailure(failure) }
             if !Task.isCancelled { await disconnectTransport(.failed(error)) }
             guard !Task.isCancelled, !isRetired, !(error is CancellationError) else { throw failure }
             let delay = reconnect.failed(at: .now, restartingSince: restartObservedAt)
@@ -402,7 +434,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         var unrecorded: [GatewayRoute] = []
         for (route, error) in outcome.failures {
             let blamesRoute = switch error {
-            case ClientError.gatewayNotReady, ClientError.gatewayRestarting: false
+            case ClientError.gatewayNotReady, ClientError.gatewayRestarting, ClientError.credentialsRejected: false
             default: !isRestarting
             }
             if blamesRoute, await routes?.failed(route, error: error, startedAt: started) == false { unrecorded.append(route) }
@@ -450,9 +482,11 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             return GatewaySocket(task: task, first: first)
         } catch {
             let closedByGateway = task.closeCode != .invalid
+            let refusedCredentials = [401, 403].contains((task.response as? HTTPURLResponse)?.statusCode)
             let restarting = observeRestart(closing: task)
             let reason = task.closeReason.flatMap { String(data: $0, encoding: .utf8) }.flatMap { $0.isEmpty ? nil : $0 }
             task.cancel(with: .goingAway, reason: nil)
+            if refusedCredentials, !(error is CancellationError) { throw ClientError.credentialsRejected(host: config.hostLabel) }
             guard closedByGateway, !(error is CancellationError) else { throw error }
             throw restarting ? ClientError.gatewayRestarting
                 : ClientError.gatewayNotReady(host: config.hostLabel, reason: reason ?? error.localizedDescription)
@@ -509,7 +543,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         }
         logger.notice("Gateway connected and initialized")
         restartObservedAt = nil
-        lastConnectionFailure = nil
+        clearConnectionFailure()
         reconnect.connected(at: .now)
         if !livenessSuspended { resumeLivenessChecks() }
         announced = .connected(route.kind)
@@ -704,6 +738,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     func disconnect() async {
         connectionInFlight?.cancel()
         connectionInFlight = nil
+        clearConnectionFailure()
         await disconnectTransport(.requested)
     }
 
@@ -1554,5 +1589,25 @@ nonisolated struct GatewayReceiveDeadline {
         let anchor = max(lastReceive, pendingPing?.sentAt ?? lastReceive)
         let expiresAt = min(anchor.advanced(by: grace), lastReceive.advanced(by: Self.maximumGrace + Self.probeInterval))
         return now >= expiresAt
+    }
+}
+
+extension GatewayClient {
+    static func failedBeforeSending(_ error: any Error) -> Bool {
+        switch error {
+        case ClientError.notConnected, ClientError.connectionFailed, ClientError.credentialsRejected,
+             ClientError.gatewayNotReady, ClientError.retired, ClientError.invalidURL: true
+        default: false
+        }
+    }
+
+    static func meansUnreachable(_ error: any Error) -> Bool {
+        if error is URLError { return true }
+        switch error {
+        case ClientError.notConnected, ClientError.connectionClosed, ClientError.connectionFailed,
+             ClientError.credentialsRejected, ClientError.gatewayRestarting, ClientError.gatewayNotReady,
+             ClientError.requestTimedOut, ClientError.retired: return true
+        default: return false
+        }
     }
 }

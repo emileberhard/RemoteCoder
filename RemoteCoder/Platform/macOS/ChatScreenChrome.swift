@@ -18,8 +18,12 @@ struct ChatScreenChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .safeAreaInset(edge: .top, spacing: 0) {
-                ScreenForkOriginHeader(screen: screen, onOpen: onOpenConversation)
-                    .padding(.top, 8)
+                VStack(spacing: 6) {
+                    HostAvailabilityLines(target: screen.target, workspace: workspace)
+                        .padding(.horizontal, 16)
+                    ScreenForkOriginHeader(screen: screen, onOpen: onOpenConversation)
+                }
+                .padding(.top, 8)
             }
             .navigationTitle(title)
             .navigationSubtitle(subtitle)

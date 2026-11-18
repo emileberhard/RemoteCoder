@@ -44,7 +44,7 @@ struct ConversationHistoryView: View {
                     .chatPresentationDiagnostics("sheet-move-agent")
             }
             .safeAreaInset(edge: .top) {
-                if isVisible { ClusterCoverageStrip(coverage: workspace.agentCoverage).padding(.horizontal) }
+                if isVisible { HostAvailabilityStrip(lines: workspace.availabilityStrip).padding(.horizontal) }
             }
             .chatRenamePrompt($renamingChat, workspace: workspace)
             .modifier(WindowActivations(count: $windowActivations))
@@ -255,24 +255,21 @@ extension ConversationHistoryView {
 }
 
 struct HostStatusText: View {
-    let state: ConversationSidebarHostState
-    let namingHost: Bool
+    let status: HostPresentation.DrawerStatus
 
     var body: some View {
-        switch state.status {
-        case .updating:
+        switch status {
+        case .updating(let words):
             HStack(spacing: 6) {
                 ProgressView().controlSize(.mini)
-                Text(verbatim: namingHost ? "Updating \(state.hostName)…" : "Updating the gateway…")
+                Text(verbatim: words)
             }
             .lineLimit(3)
             .foregroundStyle(.secondary)
-        case .failed(let message):
-            Text(verbatim: namingHost ? "\(state.hostName): \(message)" : message)
+        case .problem(let words):
+            Text(verbatim: words)
                 .lineLimit(3)
-                .foregroundStyle(.red)
-        case nil:
-            EmptyView()
+                .foregroundStyle(.orange)
         }
     }
 }

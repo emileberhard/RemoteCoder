@@ -146,7 +146,7 @@ final class ConversationAgentsModel: Identifiable {
             if failure is CancellationError { return }
             let state = ClusterCoverage.State.failure(failure)
             pendingCoverage[host.id] = .init(hostId: host.id, name: host.name, state: state,
-                since: state == .unreachable ? pendingCoverage[host.id]?.since ?? now() : nil, staleThrough: successfulReads[host.id])
+                since: state == .unreachable ? knownCoverage().first { $0.id == host.id }?.since : nil)
             if host.id == address.hostID { error = failure.localizedDescription }
         }
         projectionVersion += 1

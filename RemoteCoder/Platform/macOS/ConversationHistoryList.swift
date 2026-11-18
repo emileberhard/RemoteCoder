@@ -325,7 +325,7 @@ struct ConversationHistoryList: View {
                     .transition(.opacity)
             }
             ForEach(reporting) { state in
-                HostStatusText(state: state, namingHost: workspace.hasMultipleHosts)
+                if let status = state.status { HostStatusText(status: status) }
             }
             HStack(spacing: 2) {
                 ClaudeUsageRingButton(workspace: workspace, diameter: 20)
@@ -370,7 +370,7 @@ private extension ConversationHistoryList {
     }
 }
 
-private struct ConversationSourceRow: View, Equatable {
+struct ConversationSourceRow: View, Equatable {
     let row: ConversationSidebarRow
     let hostName: String?
     let settle: () -> Void
@@ -423,6 +423,11 @@ private struct ConversationSourceRow: View, Equatable {
                 if let hostName {
                     Text("·")
                     Text(hostName)
+                        .layoutPriority(1)
+                }
+                if let availability = row.availabilityLabel {
+                    Text("·")
+                    Text(availability)
                         .layoutPriority(1)
                 }
                 Spacer(minLength: 4)

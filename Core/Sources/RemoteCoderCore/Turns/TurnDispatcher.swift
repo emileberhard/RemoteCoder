@@ -569,7 +569,8 @@ final class TurnDispatcher {
             } catch {
                 feedback(.error)
                 let session = await conversations.session(conversationID: conversationID, threadID: resolvedSessionID ?? sessionID)
-                let failure = dispatchAttempted ? Self.inputDeliveryFailure(error) : .rejected(error.localizedDescription)
+                let failure: ConversationState.SubmissionFailure = if GatewayClient.failedBeforeSending(error) { .notDispatched }
+                    else if dispatchAttempted { Self.inputDeliveryFailure(error) } else { .rejected(error.localizedDescription) }
                 await session.submissionFailed(userMessageID, failure: failure)
                 if case .uncertain = failure, let threadID = resolvedSessionID {
                     await host.reconcileInputDelivery(threadID: threadID)
@@ -598,6 +599,7 @@ final class TurnDispatcher {
     }
 
     private static func inputDeliveryFailure(_ error: Error) -> ConversationState.SubmissionFailure {
+        if GatewayClient.failedBeforeSending(error) { return .notDispatched }
         if let failure = error as? GatewayRPCFailure {
             switch failure.kind {
             case .queueChangeUncertain, .inputDeliveryUncertain:
@@ -618,8 +620,7 @@ final class TurnDispatcher {
             "Couldn't stop the agent: \(message)"
         case GatewayClient.ClientError.requestTimedOut:
             "The gateway didn't confirm the Stop, so the agent may still be running."
-        case GatewayClient.ClientError.notConnected, GatewayClient.ClientError.connectionClosed,
-             GatewayClient.ClientError.connectionFailed, GatewayClient.ClientError.gatewayRestarting:
+        case _ where GatewayClient.meansUnreachable(error):
             "Couldn't reach the gateway, so the agent may still be running."
         default:
             "Couldn't stop the agent: \(error.localizedDescription)"

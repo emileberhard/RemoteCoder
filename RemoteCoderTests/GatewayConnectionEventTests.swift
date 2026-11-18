@@ -36,7 +36,11 @@ struct GatewayConnectionEventTests {
         await #expect(throws: (any Error).self) { try await gateway.connectIfNeeded() }
         await gateway.retire()
 
-        #expect(await events.next() == .unreachable)
+        guard case .unreachable(let failure)? = await events.next() else {
+            Issue.record("expected an unreachable event")
+            return
+        }
+        #expect(failure.cause == .noAnswer)
         #expect(await events.next() == nil)
     }
 }

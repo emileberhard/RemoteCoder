@@ -169,7 +169,7 @@ actor GatewayHistoryService {
 
     struct RecentThreads: Sendable {
         let threads: [ConversationHeader]
-        let failures: [String]
+        let failure: HistoryListFailure?
         let isDeferred: Bool
         let agentWarnings: [String]
         let unavailableCompletionTimes: Set<String>
@@ -217,7 +217,7 @@ actor GatewayHistoryService {
             agentWarnings += result.warnings
             continuation.codex = result.position
             if result.coverageIncomplete {
-                failures.append("Codex history reached its page limit; retaining cached conversations.")
+                failures.append("Codex history reached its page limit")
             }
         } catch is CancellationError {
             throw CancellationError()
@@ -232,7 +232,7 @@ actor GatewayHistoryService {
             agentWarnings += result.warnings
             continuation.claude = result.position
             if result.coverageIncomplete {
-                failures.append("Claude history reached its page limit; retaining cached conversations.")
+                failures.append("Claude history reached its page limit")
             }
         } catch is CancellationError {
             throw CancellationError()
@@ -249,15 +249,16 @@ actor GatewayHistoryService {
         let ordered = ConversationHeaderStore.merging(current: [], fetched: fetched)
         unavailable.formIntersection(ordered.map(\.id))
         if !unavailable.isEmpty {
-            failures.append("Completion times unavailable for \(unavailable.count) conversations; retaining their last known order.")
+            failures.append("Completion times unavailable for \(unavailable.count) conversations")
         }
-        return RecentThreads(threads: ordered, failures: failures, isDeferred: providerErrors.contains(where: Self.defersRead),
+        if !failures.isEmpty { logger.error("history list incomplete: \(failures.joined(separator: "; "))") }
+        return RecentThreads(threads: ordered, failure: failures.isEmpty ? nil : .partial, isDeferred: providerErrors.contains(where: Self.defersRead),
                              agentWarnings: Array(Set(agentWarnings)).sorted(),
                              unavailableCompletionTimes: unavailable, continuation: continuation, isUnchanged: unchangedProviders == 2)
     }
 
     static func defersRead(_ error: any Error) -> Bool {
-        if case GatewayClient.ClientError.gatewayRestarting = error { return true }
+        if GatewayClient.meansUnreachable(error) { return true }
         if case .providerUnavailable(.codex, _) = (error as? GatewayRPCFailure)?.kind { return true }
         return false
     }
@@ -939,4 +940,9 @@ actor GatewayHistoryService {
         let reads = await scheduler.statistics(hostID: gateway.historyHostID)
         return (reads.pending + reads.running, reads.waiters, await cache.totalMemoryBytes)
     }
+}
+
+enum HistoryListFailure: Sendable, Equatable {
+    case partial
+    case failed
 }

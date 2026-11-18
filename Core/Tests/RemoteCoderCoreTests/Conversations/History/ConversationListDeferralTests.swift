@@ -10,14 +10,14 @@ struct ConversationListDeferralTests {
             await gateway.setClaude(.success([.historyFixture(id: "claude_new", updatedAt: 5)]))
             await list.refresh(reason: "reconnect")
 
-            #expect(list.errorMessage == nil)
+            #expect(list.readFailure == nil)
             #expect(list.needsReconnectRefresh)
             #expect(Set(list.threads.map(\.id)) == ["cached", "claude_new"])
 
             await gateway.setCodex(.success([.historyFixture(id: "fresh", updatedAt: 6)]))
             await list.refreshAfterReconnect(isDrawerOpen: false)
 
-            #expect(list.errorMessage == nil)
+            #expect(list.readFailure == nil)
             #expect(!list.needsReconnectRefresh)
             #expect(list.threads.map(\.id).contains("fresh"))
         }
@@ -28,7 +28,7 @@ struct ConversationListDeferralTests {
             await gateway.setClaude(.failure(try Self.unavailable(.claude, "Claude sign-in needed")))
             await list.refresh(reason: "reconnect")
 
-            #expect(list.errorMessage == "Claude history: Claude sign-in needed")
+            #expect(list.readFailure == .partial)
             #expect(list.threads.map(\.id).contains("cached"))
         }
     }
@@ -50,7 +50,7 @@ struct ConversationListDeferralTests {
             let now = Date(timeIntervalSince1970: 1_000)
             #expect(list.setProtectedThreadIDs([id]))
             await list.recoverProtectedHeaders(now: now)
-            #expect(list.errorMessage == nil)
+            #expect(list.readFailure == nil)
             #expect(await gateway.headerReads == [id])
             await gateway.setHeader(.historyFixture(id: id, updatedAt: 2))
             await list.recoverProtectedHeaders(now: now.addingTimeInterval(29))
@@ -59,7 +59,7 @@ struct ConversationListDeferralTests {
             await list.recoverProtectedHeaders(now: now.addingTimeInterval(30))
             #expect(await gateway.headerReads == [id, id])
             #expect(list.header(id: id) != nil)
-            #expect(list.errorMessage == nil)
+            #expect(list.readFailure == nil)
         }
     }
 

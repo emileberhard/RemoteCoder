@@ -125,7 +125,7 @@ struct ConversationSessionTests: ConversationHistoryFixtures {
         let attention = AttentionSummary(hosts: [.init(hostID: hostID, hostName: "Host",
             threads: threads.map { .historyFixture(id: $0) }, marks: ConversationMarksReplica().effective,
             remoteHomePath: nil, activityByThreadID: Dictionary(uniqueKeysWithValues: threads.map { ($0, activity.state(for: $0)) }),
-            activeThreadID: "selected", loadingThreadID: nil, isLoading: false, errorMessage: nil,
+            activeThreadID: "selected", loadingThreadID: nil, isLoading: false,
             questionAskTimesByThreadID: [:])], limit: 8, at: .now)
         #expect(attention.runningCount == threads.count)
         #expect(attention.entries.count == 8)

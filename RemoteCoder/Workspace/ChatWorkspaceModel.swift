@@ -405,6 +405,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     private func install(_ model: ChatTargetModel) {
         model.agentHosts = { [weak self] in self?.conversationAgentHosts ?? [] }
         model.agentCoverage = { [weak self] in self?.agentCoverage ?? [] }
+        model.availability.requestsPeerView = { [weak self] in self?.refreshPeerView() }
         for window in windows { installScreen(of: model, in: window) }
         model.onConversationNavigation = { [weak self] in self?.supersedePendingNavigation() }
         model.onActiveSessionChange = { [weak self] _ in self?.openConversationDidChange() }
@@ -426,14 +427,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             guard let model = byID[host.id] else {
                 return .init(hostId: host.id, name: host.displayName, state: .unknown)
             }
-            let since = model.conversationList.lastSuccessfulRefreshAt
-            if model.gatewayConnectivity == .unreachable {
-                return .init(hostId: host.id, name: host.displayName, state: .unreachable, since: model.gatewayUnreachableSince)
+            let availability = model.availability.current
+            return switch availability.reach {
+            case .connected: .init(hostId: host.id, name: host.displayName, state: .ok)
+            case .connecting, .restarting: .init(hostId: host.id, name: host.displayName, state: .unknown)
+            case .offline, .unreachable, .unreachableFromHere:
+                .init(hostId: host.id, name: host.displayName, state: .unreachable, since: availability.lastSeen)
+            case .needsAttention: .init(hostId: host.id, name: host.displayName, state: .refused)
             }
-            if model.conversationList.errorMessage != nil {
-                return .init(hostId: host.id, name: host.displayName, state: .stale, staleThrough: since)
-            }
-            return .init(hostId: host.id, name: host.displayName, state: since == nil ? .unknown : .ok)
         }
         var seen = Set(coverage.map(\.id))
         for host in settings.invalidHosts where seen.insert(host.id).inserted {
@@ -450,7 +451,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         clusterRefreshTask = Task { [weak self] in
             guard let self else { return }
             await cluster.refresh(hosts: clusterHosts)
+            guard !Task.isCancelled else { return }
+            for model in models { model.availability.peerSighted(at: cluster.latestPeerSighting(of: model.hostID)) }
         }
+    }
+
+    private func refreshPeerView() {
+        guard models.contains(where: \.isGatewayConnected) else { return }
+        refreshCluster()
     }
 
     // MARK: - Selection
@@ -1030,8 +1038,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             activeThreadID: window.screen(for: model.target)?.openThreadID,
             loadingThreadID: window.screen(for: model.target)?.loadingTranscriptID,
             isLoading: model.conversationList.isLoading || model.conversationList.isLoadingOlder,
-            errorMessage: model.conversationList.errorMessage,
-            isGatewayRestarting: model.gatewayConnectivity == .restarting,
+            presentation: presentation(of: model),
             questionAskTimesByThreadID: model.questionAskTimesByThreadID,
             waitingSinceByThreadID: model.waitingSinceByThreadID(in: activity),
             projects: model.conversationList.projects,
@@ -1049,7 +1056,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
                 hostID: model.hostID, hostName: targetName(of: model),
                 threads: model.conversationList.threads, marks: model.conversationList.marks,
                 remoteHomePath: nil, activityByThreadID: activity,
-                activeThreadID: nil, loadingThreadID: nil, isLoading: false, errorMessage: nil,
+                activeThreadID: nil, loadingThreadID: nil, isLoading: false,
                 questionAskTimesByThreadID: model.questionAskTimesByThreadID,
                 waitingSinceByThreadID: model.waitingSinceByThreadID(in: activity)
             )
@@ -1057,6 +1064,13 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     func targetName(of model: ChatTargetModel) -> String { model.hostDisplayName }
+
+    func presentation(of model: ChatTargetModel) -> HostPresentation {
+        HostPresentation(model.availability.current, historyFailure: model.conversationList.readFailure,
+                         context: .current(hostName: targetName(of: model), device: ThisDevice.noun))
+    }
+
+    var availabilityStrip: [HostPresentation.Line] { models.compactMap { presentation(of: $0).strip } }
 
     func conversationTargetName(of screen: ChatScreenModel) -> String {
         targetName(of: screen.target)
@@ -1903,7 +1917,7 @@ private extension ChatTargetModel {
         return ConversationSearchHost(
             id: hostID, name: hostDisplayName, gatewayID: host.gatewayID,
             headers: conversationList.threads, marks: conversationList.marks,
-            availability: gatewayConnectivity.route == nil ? .unreachable : .connected(keyword: { params in
+            availability: !isGatewayConnected ? .unreachable : .connected(keyword: { params in
                 guard let information = await directories.resolveInformation() else {
                     throw GatewayClient.ClientError.notConnected
                 }

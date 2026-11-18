@@ -3,6 +3,8 @@ import Foundation
 enum HostPreferences {
     private static let workingDirectoryKey = "codexWorkingDirectory"
     private static let remoteHomePathKeyPrefix = "gateway.remoteHomePath"
+    private static let internalBatteryKeyPrefix = "gateway.internalBattery"
+    private static let lastSeenKeyPrefix = "gateway.lastSeen"
 
     /// Per-host so one gateway's selected repository can never become another's
     /// working directory. `hostID: nil` addresses the pre-multi-host key and
@@ -36,6 +38,22 @@ enum HostPreferences {
         defaults: UserDefaults = AppStorageScope.current.defaults
     ) {
         defaults.set(path, forKey: remoteHomePathKey(hostID: hostID))
+    }
+
+    static func internalBattery(hostID: UUID, defaults: UserDefaults) -> Bool? {
+        defaults.object(forKey: "\(internalBatteryKeyPrefix).\(hostID.uuidString)") as? Bool
+    }
+
+    static func setInternalBattery(_ internalBattery: Bool, hostID: UUID, defaults: UserDefaults) {
+        defaults.set(internalBattery, forKey: "\(internalBatteryKeyPrefix).\(hostID.uuidString)")
+    }
+
+    static func lastSeen(hostID: UUID, defaults: UserDefaults) -> Date? {
+        (defaults.object(forKey: "\(lastSeenKeyPrefix).\(hostID.uuidString)") as? Double).map(Date.init(timeIntervalSince1970:))
+    }
+
+    static func setLastSeen(_ date: Date, hostID: UUID, defaults: UserDefaults) {
+        defaults.set(date.timeIntervalSince1970, forKey: "\(lastSeenKeyPrefix).\(hostID.uuidString)")
     }
 
     static func remoteHomePathKey(hostID: UUID?) -> String {

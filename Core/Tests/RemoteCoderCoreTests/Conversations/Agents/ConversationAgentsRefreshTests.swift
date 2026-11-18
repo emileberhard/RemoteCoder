@@ -188,7 +188,6 @@ struct ConversationAgentsRefreshTests {
             await model.refresh()
             #expect(model.agents.first?.threadId == "child")
             #expect(model.coverage.first { $0.id == childHost }?.state == .stale)
-            #expect(model.coverage.first { $0.id == childHost }?.staleThrough != nil)
             var unknown = try #require(stub.objectValue)
             unknown["intentState"] = .string("unknown")
             await parentFixture.setResult(.object(["agents": .array([.object(unknown)]), "warnings": .array([]), "revision": .string("2")]), method: "conversation/agents/list")

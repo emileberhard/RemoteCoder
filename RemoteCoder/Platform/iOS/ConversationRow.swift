@@ -29,9 +29,21 @@ struct ConversationRow: View, Equatable {
                             Text(row.hostName)
                                 .font(.caption2)
                                 .fontWeight(.semibold)
-                                .foregroundStyle(themeStore.theme.colors.accentTint)
+                                .foregroundStyle(row.availabilityLabel == nil ? themeStore.theme.colors.accentTint : .secondary)
                                 .lineLimit(1)
                                 .accessibilityLabel("On \(row.hostName)")
+
+                            Text("·")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if let availability = row.availabilityLabel {
+                            Text(availability)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .layoutPriority(1)
 
                             Text("·")
                                 .font(.caption2)

@@ -415,7 +415,7 @@ struct ConversationHistoryList: View, Equatable {
                                 .lineLimit(3)
                         }
                         ForEach(reporting) { state in
-                            HostStatusText(state: state, namingHost: workspace.hasMultipleHosts)
+                            if let status = state.status { HostStatusText(status: status) }
                         }
                     }
                     .font(.footnote)

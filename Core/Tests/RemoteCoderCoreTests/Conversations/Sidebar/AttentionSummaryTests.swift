@@ -127,7 +127,6 @@ struct AttentionSummaryTests {
             activeThreadID: nil,
             loadingThreadID: nil,
             isLoading: false,
-            errorMessage: nil,
             questionAskTimesByThreadID: questions,
             waitingSinceByThreadID: waitingSince
         )

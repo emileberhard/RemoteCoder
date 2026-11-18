@@ -48,7 +48,7 @@ final class TelemetryContext {
     }
 
     private func runningTurns() -> Int {
-        workspace.models.reduce(0) { $0 + ($1.gatewayConnectivity.route == nil ? 0 : $1.turns.trackedTurnCount) }
+        workspace.models.reduce(0) { $0 + (!$1.isGatewayConnected ? 0 : $1.turns.trackedTurnCount) }
     }
 
     func sceneChanged() {
@@ -114,7 +114,7 @@ final class TelemetryContext {
             charging: device.charging,
             brightnessPercent: device.brightnessPercent,
             network: network.interface,
-            route: screen.map { Self.route($0.target.gatewayConnectivity) }
+            route: screen.map { Self.route($0.target.availability.current.reach) }
         )
     }
 
@@ -136,13 +136,13 @@ final class TelemetryContext {
         }
     }
 
-    private static func route(_ connectivity: GatewayConnectivity) -> UsageContext.Route {
-        switch connectivity {
+    private static func route(_ reach: HostAvailability.Reach) -> UsageContext.Route {
+        switch reach {
         case .connected(.lan): .lan
         case .connected(.configured): .configured
         case .connected(.relay): .relay
         case .restarting: .restarting
-        case .unreachable, .disconnected: .disconnected
+        case .connecting, .offline, .unreachable, .unreachableFromHere, .needsAttention: .disconnected
         }
     }
 }

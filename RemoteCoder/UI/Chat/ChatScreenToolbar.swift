@@ -13,6 +13,7 @@ struct ChatScreenToolbar: View {
     var body: some View {
         VStack(spacing: 8) {
             header
+            HostAvailabilityLines(target: screen.target, workspace: workspace)
             ScreenForkOriginHeader(screen: screen, onOpen: onOpenConversation)
         }
         .padding(.horizontal, 16)

@@ -9,6 +9,7 @@ struct ConversationSidebarRow: Identifiable, Equatable, Sendable {
     /// False while only one host is configured, so the one-host drawer looks
     /// exactly like it did before.
     let showsHostLabel: Bool
+    var availabilityLabel: String? = nil
     let title: String
     let preview: String
     let sidebarDate: Date
@@ -141,23 +142,18 @@ enum ConversationSidebarItem: Identifiable, Equatable, Sendable {
     }
 }
 
-enum ConversationSidebarHostStatus: Equatable, Sendable {
-    case updating
-    case failed(String)
-}
-
 struct UnloadedPinnedConversation: Identifiable, Equatable, Sendable {
     let id: String
     let title: String?
 }
 
-/// A host's own loading/error state, so an unreachable gateway is attributable
+/// A host's own loading and drawer status, so a failing host is attributable
 /// instead of silently missing from the merged list.
 struct ConversationSidebarHostState: Identifiable, Equatable, Sendable {
     let hostID: UUID
     let hostName: String
     let isLoading: Bool
-    let status: ConversationSidebarHostStatus?
+    let status: HostPresentation.DrawerStatus?
     let rowCount: Int
     var canLoadMore = false
     var hasDiscardedHeaders = false
@@ -191,8 +187,7 @@ struct ConversationSidebarHostInput {
     let activeThreadID: String?
     let loadingThreadID: String?
     let isLoading: Bool
-    let errorMessage: String?
-    var isGatewayRestarting = false
+    var presentation: HostPresentation? = nil
     var questionAskTimesByThreadID: [String: [Int64]] = [:]
     var waitingSinceByThreadID: [String: Int64] = [:]
     var projects: [String: ProjectIdentity] = [:]
@@ -306,6 +301,7 @@ enum ConversationSidebarProjection {
                     address: address,
                     hostName: host.hostName,
                     showsHostLabel: showsHostLabel,
+                    availabilityLabel: host.presentation?.rowLabel,
                     title: title(for: thread, pinnedName: pinnedName),
                     preview: thread.preview,
                     sidebarDate: sidebarDate,
@@ -486,7 +482,7 @@ enum ConversationSidebarProjection {
                 hostID: host.hostID,
                 hostName: host.hostName,
                 isLoading: host.isLoading,
-                status: host.isGatewayRestarting ? .updating : host.errorMessage.map(ConversationSidebarHostStatus.failed),
+                status: host.presentation?.drawerStatus,
                 rowCount: host.threads.filter { !$0.isDelegatedAgent }.count,
                 canLoadMore: host.canLoadMore,
                 hasDiscardedHeaders: host.hasDiscardedHeaders,

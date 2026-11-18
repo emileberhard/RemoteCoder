@@ -31,7 +31,7 @@ struct HistoryServiceTests {
         let reloaded = await ConversationHeaderStore(hostID: hostID, directory: directory).load()
         #expect(reloaded.threads == [kept])
         #expect(reloaded.revision == 1)
-        #expect(model.errorMessage == nil)
+        #expect(model.readFailure == nil)
     }
 
     @MainActor @Test func partialRecentCoverageReopensAnExhaustedProviderWithoutLosingItsOldRows() async throws {
@@ -521,7 +521,7 @@ struct HistoryServiceTests {
         await gateway.failPages(true)
         let failed = try await service.fetchRecentThreads(limit: 30, useStateDBOnly: true, knownHeaders: [], read: .full)
         #expect(failed.unavailableCompletionTimes == ["fixture"])
-        #expect(!failed.failures.isEmpty)
+        #expect(failed.failure == .partial)
         #expect(await gateway.pageReads == 0)
     }
 
@@ -556,7 +556,7 @@ struct HistoryServiceTests {
         await gateway.failPages(true)
         await model.refresh()
         #expect(model.threads.first?.lastTurnCompletedAt == 500)
-        #expect(model.errorMessage != nil)
+        #expect(model.readFailure != nil)
         await model.flushHeaders()
         let restored = await ConversationHeaderStore(hostID: hostID, directory: directory).load()
         #expect(restored.threads.first?.lastTurnCompletedAt == 500)
@@ -865,14 +865,14 @@ struct HistoryServiceTests {
         let service = GatewayHistoryService(gateway: gateway,
             cache: HistoryPageCache(directory: directory.appending(path: "pages")))
         let result = try await service.fetchRecentThreads(limit: 30, useStateDBOnly: true, knownHeaders: [], read: .full)
-        #expect(result.failures.isEmpty)
+        #expect(result.failure == nil)
         #expect(!result.agentWarnings.isEmpty)
         let model = ConversationList(service: service, marksRemote: gateway, hostID: hostID, threadStore: store,
             marksStore: ConversationMarksStore(directory: directory), defaults: temporary.defaults)
         await model.bootstrap()
         await model.refresh()
         #expect(!model.threads.contains { $0.id == "removed" })
-        #expect(model.errorMessage == nil)
+        #expect(model.readFailure == nil)
         #expect(await store.load().lastSuccessfulRefreshAt != nil)
     }
 
@@ -896,7 +896,7 @@ struct HistoryServiceTests {
             cache: HistoryPageCache(directory: directory.appending(path: "pages"))), marksRemote: gateway, hostID: hostID,
             threadStore: store, marksStore: ConversationMarksStore(directory: directory), defaults: temporary.defaults)
         await model.bootstrap()
-        #expect(model.errorMessage?.contains("Codex history reached its page limit") == true)
+        #expect(model.readFailure == .partial)
         #expect(model.threads.contains { $0.id == cached.id })
         #expect(await store.load().lastSuccessfulRefreshAt == nil)
     }
@@ -910,7 +910,7 @@ struct HistoryServiceTests {
         await gateway.setCodexCompletionAvailable()
 
         let result = try await GatewayHistoryService(gateway: gateway).fetchRecentThreads(limit: 2, useStateDBOnly: true, knownHeaders: [], read: .full)
-        #expect(result.failures.isEmpty)
+        #expect(result.failure == nil)
         #expect(result.threads.filter { !$0.isDelegatedAgent }.map(\.id) == ["root"])
         #expect(await gateway.listCursors.count == 20)
     }
@@ -925,7 +925,7 @@ struct HistoryServiceTests {
         await gateway.setCodexCompletionAvailable()
 
         let result = try await GatewayHistoryService(gateway: gateway).fetchRecentThreads(limit: 30, useStateDBOnly: true, knownHeaders: [], read: .full)
-        #expect(result.failures.isEmpty)
+        #expect(result.failure == nil)
         #expect(result.threads.filter { !$0.isDelegatedAgent }.count == 30)
         #expect(result.threads.contains { $0.id == lastRoot.id })
     }
@@ -941,7 +941,7 @@ struct HistoryServiceTests {
         await gateway.setClaudeHeaders(children)
         await gateway.setDelegatedIDs(Set(children.map(\.id)))
         let result = try await GatewayHistoryService(gateway: gateway).fetchRecentThreads(limit: 2, useStateDBOnly: true, knownHeaders: [], read: .full)
-        #expect(!result.failures.contains { $0.hasPrefix("Claude history") })
+        #expect(result.failure == nil)
         #expect(result.continuation.claude == .end)
         #expect(await gateway.claudeCursors.compactMap { $0 }.last == "450")
     }
@@ -980,8 +980,7 @@ struct HistoryServiceTests {
         let service = GatewayHistoryService(gateway: gateway)
         let result = try await service.fetchRecentThreads(limit: 30, useStateDBOnly: true, knownHeaders: [], read: .full)
         #expect(result.threads.map(\.id) == ["fixture"])
-        #expect(result.failures.count == 1)
-        #expect(result.failures[0].hasPrefix("Claude history:"))
+        #expect(result.failure == .partial)
     }
 
     private func header(_ id: String, time: Int) throws -> CodexAppServerV2.Thread {

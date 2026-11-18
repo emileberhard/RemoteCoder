@@ -299,13 +299,7 @@ private struct ChatScreen: View {
         .defaultFocus($inputFocused, true)
         #endif
         .modifier(conversationDetails)
-        .overlay {
-            #if os(macOS)
-            if !screen.target.isGatewayConnected { ConnectionEdgeGlow(connectivity: screen.target.gatewayConnectivity) }
-            #else
-            ConnectionEdgeGlow(connectivity: screen.target.gatewayConnectivity)
-            #endif
-        }
+        .overlay { HostEdgeGlow(target: screen.target, workspace: workspace) }
         .overlay {
             if let commandPalette {
                 CommandPalette(catalog: commandPalette, dismiss: { self.commandPalette = nil })

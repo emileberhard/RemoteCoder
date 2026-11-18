@@ -24,7 +24,7 @@ enum PerformanceReplayPreparation {
             try await settleSidebar()
             if model.conversationList.performanceReplayRefreshState.revision != previousRefresh { break }
             guard attempt == 0, model.conversationList.performanceReplayRefreshState.needsReconnect else {
-                throw PerformanceReplayScenario.Failure.invalidScenario("sidebar refresh did not succeed; reconnectNeeded=\(model.conversationList.performanceReplayRefreshState.needsReconnect), neverLoaded=\(model.conversationList.lastSuccessfulRefreshAt == nil), count=\(model.conversationList.threads.count), failure=\(model.conversationList.errorMessage ?? "none")")
+                throw PerformanceReplayScenario.Failure.invalidScenario("sidebar refresh did not succeed; reconnectNeeded=\(model.conversationList.performanceReplayRefreshState.needsReconnect), neverLoaded=\(model.conversationList.lastSuccessfulRefreshAt == nil), count=\(model.conversationList.threads.count), failure=\(String(describing: model.conversationList.readFailure))")
             }
             try await Task.sleep(for: .milliseconds(100))
         }
@@ -36,7 +36,7 @@ enum PerformanceReplayPreparation {
             await model.conversationList.loadOlder()
             try await settleSidebar()
             guard model.conversationList.threads.count != count || model.conversationList.continuation != position else {
-                throw PerformanceReplayScenario.Failure.invalidScenario("sidebar traversal made no progress; position=\(String(describing: model.conversationList.continuation)), failure=\(model.conversationList.errorMessage ?? "none")")
+                throw PerformanceReplayScenario.Failure.invalidScenario("sidebar traversal made no progress; position=\(String(describing: model.conversationList.continuation)), failure=\(String(describing: model.conversationList.readFailure))")
             }
         }
         let expectedHeaders = Set(scenario.conversations.compactMap { $0.thread.objectValue?["id"]?.stringValue })
@@ -49,7 +49,7 @@ enum PerformanceReplayPreparation {
         let childHeaders = Set(scenario.responses["conversation/agents/classify"]?.objectValue?["relations"]?.objectValue?.keys.map { $0 } ?? []).union(nativeChildren)
         let expectedRoots = expectedHeaders.subtracting(childHeaders)
         guard loadedHeaders.isSuperset(of: expectedRoots), expectedHeaders.isSuperset(of: loadedHeaders) else {
-            throw PerformanceReplayScenario.Failure.invalidScenario("sidebar preparation loaded \(loadedHeaders.count) of \(expectedHeaders.count) captured headers; failure=\(model.conversationList.errorMessage ?? "none")")
+            throw PerformanceReplayScenario.Failure.invalidScenario("sidebar preparation loaded \(loadedHeaders.count) of \(expectedHeaders.count) captured headers; failure=\(String(describing: model.conversationList.readFailure))")
         }
         func updated(_ conversation: PerformanceReplayScenario.Conversation) -> Double {
             if case .number(let value) = conversation.thread.objectValue?["updatedAt"] { return value }

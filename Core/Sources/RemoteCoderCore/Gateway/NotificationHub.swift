@@ -3,7 +3,7 @@ import Foundation
 enum GatewayConnectionEvent: Sendable, Equatable {
     case connected(connection: UUID, route: GatewayRoute.Kind)
     case restarting
-    case unreachable
+    case unreachable(GatewayConnectionFailure)
     case disconnected
     case historyGap(threads: Set<String>, allThreads: Bool)
 }

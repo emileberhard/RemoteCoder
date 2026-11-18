@@ -95,11 +95,10 @@ struct ClusterCoverage: Decodable, Equatable, Sendable, Identifiable {
     let name: String?
     let state: State
     var since: Date?
-    var staleThrough: Date?
     var detail: String? = nil
 
     var id: UUID { hostId }
-    private enum CodingKeys: String, CodingKey { case hostId, name, state, since, staleThrough }
+    private enum CodingKeys: String, CodingKey { case hostId, name, state, since }
 }
 
 extension ClusterReachability {
@@ -130,7 +129,6 @@ extension ClusterCoverage {
         name = try values.decodeIfPresent(String.self, forKey: .name)
         state = try values.decode(State.self, forKey: .state)
         since = try values.clusterDateIfPresent(forKey: .since)
-        staleThrough = try values.clusterDateIfPresent(forKey: .staleThrough)
     }
 }
 
@@ -218,14 +216,8 @@ extension ClusterCoverage.State {
             default: return .stale
             }
         }
-        if error is URLError { return .unreachable }
-        if let error = error as? GatewayClient.ClientError {
-            switch error {
-            case .serverError(_, let code) where code == -32601: return .unsupported
-            case .notConnected, .connectionClosed, .connectionFailed, .gatewayRestarting, .gatewayNotReady, .requestTimedOut: return .unreachable
-            default: break
-            }
-        }
+        if GatewayClient.meansUnreachable(error) { return .unreachable }
+        if case GatewayClient.ClientError.serverError(_, let code) = error, code == -32601 { return .unsupported }
         return .stale
     }
 }

@@ -1011,7 +1011,7 @@ entrypoint linked above.
   - It is a customizable `toolbar(id:)` with stable item ids, grouped with
     `ToolbarSpacer`, on system toolbar glass. `AppMenu(trigger: .toolbarItem)`
     leaves a toolbar menu in the system style. The connection edge glow appears
-    only while disconnected. Find spans the detail column below the toolbar.
+    only while not connected. Find spans the detail column below the toolbar.
 - **Conversation details.** `ConversationDetailsPresentation` presents change
   review: a sheet on iOS, and on the Mac a full-height trailing inspector,
   applied outside the split view. The Mac inspector's details show the host,

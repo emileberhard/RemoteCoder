@@ -118,7 +118,7 @@ struct ConversationSidebarProjectionTests {
         let hosts = [
             host(mini, name: "Mac Mini", threads: [try thread("mini-a", updatedAt: 10)]),
             host(book, name: "MacBook", threads: [try thread("book-a", updatedAt: 5)],
-                 isLoading: true, errorMessage: "MacBook (macbook:8787) is unreachable"),
+                 isLoading: true, presentation: presentation(.connected(.lan), name: "MacBook", historyFailure: .failed)),
         ]
 
         let rows = sidebarRows(hosts: hosts)
@@ -129,7 +129,7 @@ struct ConversationSidebarProjectionTests {
         let states = ConversationSidebarProjection.hostStates(hosts: hosts)
         #expect(states.map(\.hostID) == [mini, book])
         #expect(states[0].status == nil)
-        #expect(states[1].status == .failed("MacBook (macbook:8787) is unreachable"))
+        #expect(states[1].status == .problem("Couldn't load the chats from MacBook."))
         #expect(states[1].isLoading)
         #expect(states.map(\.rowCount) == [1, 1])
     }
@@ -137,12 +137,12 @@ struct ConversationSidebarProjectionTests {
     @Test func aRestartingHostReportsUpdatingInsteadOfItsConnectionError() throws {
         let hosts = [
             host(mini, name: "Mac Mini", threads: [try thread("mini-a", updatedAt: 10)],
-                 errorMessage: "Gateway is restarting.", isGatewayRestarting: true),
-            host(book, name: "MacBook", threads: [try thread("book-a", updatedAt: 5)], isGatewayRestarting: true),
+                 presentation: presentation(.restarting, name: "Mac Mini", historyFailure: .failed)),
+            host(book, name: "MacBook", threads: [try thread("book-a", updatedAt: 5)], presentation: presentation(.restarting, name: "MacBook")),
         ]
 
         let states = ConversationSidebarProjection.hostStates(hosts: hosts)
-        #expect(states.map(\.status) == [.updating, .updating])
+        #expect(states.map(\.status) == [.updating("Updating Mac Mini…"), .updating("Updating MacBook…")])
         #expect(sidebarRows(hosts: hosts).count == 2)
     }
 
@@ -798,6 +798,12 @@ struct ConversationSidebarProjectionTests {
         ProjectIdentity(cwd: cwd, kind: kind, key: key, name: name, root: cwd)
     }
 
+    private func presentation(_ reach: HostAvailability.Reach, name: String,
+                              historyFailure: HistoryListFailure? = nil) -> HostPresentation {
+        HostPresentation(HostAvailability(reach: reach, lastSeen: nil, tasksRunningAtLoss: 0), historyFailure: historyFailure,
+                         context: .init(hostName: name, device: "phone", now: .now, calendar: .current, locale: .current))
+    }
+
     private func host(
         _ hostID: UUID,
         name: String,
@@ -809,8 +815,7 @@ struct ConversationSidebarProjectionTests {
         activeThreadID: String? = nil,
         loadingThreadID: String? = nil,
         isLoading: Bool = false,
-        errorMessage: String? = nil,
-        isGatewayRestarting: Bool = false,
+        presentation: HostPresentation? = nil,
         projects: [String: ProjectIdentity] = [:],
         settlementEdits: [String: Int] = [:],
         waitingSince: [String: Int64] = [:]
@@ -825,8 +830,7 @@ struct ConversationSidebarProjectionTests {
             activeThreadID: activeThreadID,
             loadingThreadID: loadingThreadID,
             isLoading: isLoading,
-            errorMessage: errorMessage,
-            isGatewayRestarting: isGatewayRestarting,
+            presentation: presentation,
             questionAskTimesByThreadID: questions,
             waitingSinceByThreadID: waitingSince,
             projects: projects,

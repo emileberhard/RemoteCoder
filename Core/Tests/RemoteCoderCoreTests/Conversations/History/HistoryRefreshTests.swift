@@ -27,7 +27,7 @@ struct HistoryRefreshTests {
                 for _ in 0..<20 { list.refresh(after: event) }
             }
             try #require(await waitUntil { await gateway.requests == 2 })
-            #expect(list.errorMessage == nil)
+            #expect(list.readFailure == nil)
             for method in ["account/updated", "item/agentMessage/delta", "thread/tokenUsage/updated"] {
                 let note = CodexGatewayNotification(method: method, params: .object([:]),
                     server: ServerNotification.decode(method: method, params: .object([:])))

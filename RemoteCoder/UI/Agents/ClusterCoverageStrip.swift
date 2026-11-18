@@ -34,9 +34,9 @@ struct ClusterCoverageStrip: View {
         if let detail = member.detail { return detail }
         return switch member.state {
         case .ok: "OK"
-        case .unreachable: member.since.map { "Unreachable since \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Unreachable"
+        case .unreachable: member.since.map { "Unreachable · last seen \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Unreachable"
         case .unsupported: "Too old"
-        case .stale: member.staleThrough.map { "Stale through \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Stale"
+        case .stale: "Incomplete"
         case .unknown: "Unknown"
         case .refused: "Refused"
         case .unavailable: "Unavailable"
