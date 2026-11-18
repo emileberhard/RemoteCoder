@@ -569,19 +569,19 @@ test("all models hidden never changes the preferred provider or invents a model"
   expect(gateway.updates).toHaveLength(0);
 });
 
-test("native-only keys stay outside the browser replica and unknown theme values do not publish defaults", async () => {
+test("native-only keys stay outside the browser replica and unknown theme or language values do not publish defaults", async () => {
   const storage = new MemoryStorage();
   const { workspace, gateway } = setup(["mini"], storage);
   gateway.document = {
     entries: {
       "appearance.selectedThemeID": entry("future-theme"),
       "conversationDrawer.mode": entry("projects"),
+      "transcription.model": entry("azureMAITranscribe2"),
+      "transcription.language": entry("futureLanguage"),
     },
   };
   const nativeOnly = {
     "accounts.names-by-group.v1": entry({ "codex:group": "Personal" }),
-    "transcription.model": entry("elevenLabsScribeV2Realtime"),
-    "transcription.language": entry("englishAndSwedish"),
     ttsAutoSpeakEnabled: entry(true),
     "realtimeVoice.selectedVoice": entry("voice-id"),
   };
@@ -590,8 +590,15 @@ test("native-only keys stay outside the browser replica and unknown theme values
   expect(workspace.selectedThemeID).toBe("caribbeanSunset");
   expect(gateway.updates).toHaveLength(0);
   const saved = JSON.parse(storage.getItem("remotecoder.web.preferences.v1") ?? "{}");
-  expect(Object.keys(saved.entries)).toEqual(["appearance.selectedThemeID", "conversationDrawer.mode"]);
+  expect(Object.keys(saved.entries)).toEqual([
+    "appearance.selectedThemeID",
+    "conversationDrawer.mode",
+    "transcription.model",
+    "transcription.language",
+  ]);
   expect(workspace.drawerArrangement.mode).toBe("projects");
+  expect(workspace.preference("transcription.model")).toBe("azureMAITranscribe2");
+  expect(workspace.preference("transcription.language")).toBeNull();
   expect(gateway.document.entries).toMatchObject(nativeOnly);
 });
 
