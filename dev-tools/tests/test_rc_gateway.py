@@ -1108,8 +1108,8 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
         import tempfile
         from websockets.asyncio.server import serve
 
-        for resume in (False, True):
-            with self.subTest(resume=resume), tempfile.TemporaryDirectory() as directory:
+        for resume, account in ((False, "first"), (True, "first"), (False, "")):
+            with self.subTest(resume=resume, account=account), tempfile.TemporaryDirectory() as directory:
                 requests = []
 
                 async def respond(connection) -> None:
@@ -1121,7 +1121,7 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
                             await connection.send(json.dumps({"id": request["id"], "result": {}}))
 
                 event_log = Path(directory) / "gateway.jsonl"
-                flags = ["claude-turn", "run", "--claude-account", "first", "--event-log", str(event_log)]
+                flags = ["claude-turn", "run", "--claude-account", account, "--event-log", str(event_log)]
                 if resume:
                     flags.extend(["--resume", "claude_fixture"])
                 args = gateway_cli.build_parser().parse_args(flags)
