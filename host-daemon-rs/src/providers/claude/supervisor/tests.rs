@@ -803,6 +803,20 @@ async fn account_changes_require_a_new_claude_process() {
                     json!({"id": "account-cron", "humanSchedule": "Every 10 minutes", "recurring": false, "durable": false}),
                 ),
             );
+            assert!(matches!(
+                agent.refresh_wakes(&thread, pid).await,
+                WakeEvidence::Fresh
+            ));
+            assert!(
+                agent.runtimes.lock().await[&thread]
+                    .wakes
+                    .scheduled(tokio::time::Instant::now(), SystemTime::now())
+                    .iter()
+                    .any(|wake| matches!(
+                        wake,
+                        crate::providers::claude::wake_hold::ScheduledWork::Cron { .. }
+                    ))
+            );
         }
         if index == 0 || index == 3 {
             let mut runtimes = agent.runtimes.lock().await;
