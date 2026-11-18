@@ -349,6 +349,7 @@ struct HostFileStoreTests {
             let path: String
             switch source {
             case .file(let value, _): path = value
+            case .dictation(let value): path = value
             case .visual(let reference): path = "/different/store/" + reference.digest + ".html"
             }
             sources.append(source)
