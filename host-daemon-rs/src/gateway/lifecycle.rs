@@ -56,7 +56,7 @@ impl Gateway {
     }
 
     pub(crate) async fn shutdown_for_restart(&self) {
-        if self.draining.swap(true, Ordering::AcqRel) {
+        if self.draining.send_replace(true) {
             return;
         }
         self.jobs.quiesce().await;
@@ -675,7 +675,7 @@ mod tests {
         };
 
         assert!(!gateway.is_planned_interruption("turn/completed", &completion("interrupted")));
-        gateway.draining.store(true, Ordering::Release);
+        gateway.draining.send_replace(true);
         assert!(gateway.is_planned_interruption("turn/completed", &completion("interrupted")));
         assert!(!gateway.is_planned_interruption("turn/completed", &completion("completed")));
         assert!(!gateway.is_planned_interruption("turn/started", &completion("interrupted")));

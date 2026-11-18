@@ -310,7 +310,7 @@ pub(crate) struct Gateway {
     clients: DashMap<u64, ClientTx>,
     journal: Journal,
     core: Mutex<GatewayCoreState>,
-    draining: AtomicBool,
+    draining: watch::Sender<bool>,
     listening: tokio::sync::watch::Sender<bool>,
     claude_restart: ClaudeRestartDriver,
     claude_recovery_task: Mutex<Option<JoinHandle<()>>>,
@@ -579,7 +579,7 @@ impl Gateway {
             clients: DashMap::new(),
             journal,
             core: Mutex::new(GatewayCoreState::default()),
-            draining: AtomicBool::new(false),
+            draining: watch::channel(false).0,
             listening: tokio::sync::watch::channel(false).0,
             claude_restart: ClaudeRestartDriver::new(
                 restart_store,
@@ -863,7 +863,7 @@ impl Gateway {
     }
 
     pub(crate) fn is_draining(&self) -> bool {
-        self.draining.load(Ordering::Acquire)
+        *self.draining.borrow()
     }
 
     pub(crate) async fn active_turn_count(&self) -> usize {
@@ -955,7 +955,7 @@ impl Gateway {
     }
 
     pub(crate) async fn stop(&self) -> Result<()> {
-        self.draining.store(true, Ordering::Release);
+        self.draining.send_replace(true);
         self.jobs.quiesce().await;
         self.job_routes.stop().await;
         self.jobs.close_endpoints().await;

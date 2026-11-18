@@ -7,6 +7,107 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
+#[tokio::test]
+async fn ultrafast_admission_requires_the_model_and_effective_feature_policy() {
+    let directory = tempfile::tempdir_in("/tmp").unwrap();
+    let gateway = TestGateway::with_native_runtime(directory.path());
+    let mut control = FakeControl::attach(&gateway, 4).await;
+    let previous = register_job(&gateway, 1, None).await;
+    let settings = ExecutionSettings::Codex {
+        model: "fixture".into(),
+        model_provider: "openai".into(),
+        effort: "medium".into(),
+        service_tier: Some("ultrafast".into()),
+        cyber_access_program: None,
+    };
+
+    for (name, policy_enabled, advertised, error) in [
+        ("launch", true, true, None),
+        ("unsupported", true, false, Some("does not advertise")),
+        (
+            "resume-disabled",
+            false,
+            true,
+            Some("disabled by Codex feature policy"),
+        ),
+    ] {
+        let id = JobId::for_mutation(Provider::Codex, name).unwrap();
+        let admit = async {
+            if name == "resume-disabled" {
+                gateway
+                    .jobs
+                    .continue_job(
+                        ContinueParams {
+                            job_id: id.clone(),
+                            agent_id: previous.agent_id.clone(),
+                            prompt: "probe".into(),
+                            settings: Some(settings.clone()),
+                            expected_previous_job_id: Some(previous.job_id.clone()),
+                            intent: ContinueIntent::Explicit,
+                            recipient: ContinueRecipient::Current,
+                            caller: Caller::Operator,
+                        },
+                        Origin::TopLevel,
+                    )
+                    .await
+            } else {
+                gateway
+                    .jobs
+                    .start(
+                        StartParams {
+                            job_id: id.clone(),
+                            spec: JobSpec {
+                                prompt: "probe".into(),
+                                cwd: directory.path().to_owned(),
+                                settings: settings.clone(),
+                                tool_scope: ToolScope::Full,
+                                title: None,
+                            },
+                            caller: Caller::Operator,
+                        },
+                        Origin::TopLevel,
+                    )
+                    .await
+            }
+        };
+        let respond = async {
+            for _ in 0..2 {
+                let raw = control.requests.recv().await.unwrap();
+                let request: Value = serde_json::from_str(&raw).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "config/read" => {
+                        json!({"config":{"features":{"ultrafast_mode":policy_enabled}}})
+                    }
+                    "model/list" => {
+                        let tier = if advertised { "ultrafast" } else { "priority" };
+                        json!({"data":[{"model":"fixture","serviceTiers":[{"id":tier}]}],"nextCursor":null})
+                    }
+                    method => panic!("unexpected Ultrafast validation RPC {method}"),
+                };
+                gateway
+                    .control_requests
+                    .lock()
+                    .unwrap()
+                    .remove(request["id"].as_str().unwrap())
+                    .unwrap()
+                    .send(Ok(result))
+                    .unwrap();
+            }
+        };
+        let (receipt, ()) = tokio::join!(admit, respond);
+        let stored = gateway.jobs.store().await.unwrap().read(id).await;
+        if let Some(expected) = error {
+            assert!(receipt.unwrap_err().to_string().contains(expected));
+            assert!(stored.is_err(), "refused job was persisted");
+        } else {
+            assert!(receipt.is_ok());
+            assert!(
+                matches!(stored.unwrap().spec, SpecEvidence::Known { spec } if spec.settings == settings)
+            );
+        }
+    }
+}
+
 async fn register_job(gateway: &Gateway, sequence: u8, previous: Option<&JobRecord>) -> JobRecord {
     let id = JobId::for_mutation(Provider::Codex, &format!("scoped-{sequence}")).unwrap();
     let job = JobRecord {

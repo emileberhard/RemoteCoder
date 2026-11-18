@@ -528,7 +528,7 @@ async fn refusal_code(gateway: &Arc<Gateway>) -> u16 {
 async fn a_draining_gateway_refuses_clients_as_a_planned_restart() {
     let gateway = TestGateway::new();
     *gateway.control_init_result.lock().await = Some(json!({}));
-    gateway.draining.store(true, Ordering::Release);
+    gateway.draining.send_replace(true);
 
     assert_eq!(refusal_code(&gateway).await, RESTARTING_CLOSE_CODE);
 }

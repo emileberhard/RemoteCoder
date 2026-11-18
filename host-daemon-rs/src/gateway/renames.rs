@@ -430,10 +430,8 @@ impl Gateway {
         let generation = state.generation.load(Ordering::Acquire);
         let _serial =
             tokio::time::timeout(CALLER_WAIT, Arc::clone(&state.serial).lock_owned()).await?;
-        let is_current = || {
-            state.generation.load(Ordering::Acquire) == generation
-                && !self.draining.load(Ordering::Acquire)
-        };
+        let is_current =
+            || state.generation.load(Ordering::Acquire) == generation && !self.is_draining();
         if !is_current() {
             return Ok(());
         }
@@ -581,7 +579,7 @@ impl Gateway {
         state: &RenameState,
         rename: Rename,
     ) -> std::result::Result<Option<Value>, RpcError> {
-        if self.draining.load(Ordering::Acquire) {
+        if self.is_draining() {
             return Err(RpcError::draining());
         }
         if let Rename::Automatic {
@@ -590,10 +588,8 @@ impl Gateway {
             requested,
         } = &rename
         {
-            let current = || {
-                state.generation.load(Ordering::Acquire) == *generation
-                    && !self.draining.load(Ordering::Acquire)
-            };
+            let current =
+                || state.generation.load(Ordering::Acquire) == *generation && !self.is_draining();
             if !current() {
                 return Ok(None);
             }

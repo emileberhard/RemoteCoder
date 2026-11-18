@@ -1290,6 +1290,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ultrafast_is_an_explicit_launch_and_resume_tier() {
+        use clap::{Parser, error::ErrorKind};
+
+        for invocation in [
+            vec!["codex", "codex-sol", "prompt"],
+            vec!["--resume", "previous", "prompt"],
+        ] {
+            let mut args = vec!["gateway", "agent", "spawn"];
+            args.extend(invocation);
+            args.extend(["--service-tier", "ultrafast"]);
+            let parsed = crate::config::Args::try_parse_from(&args).unwrap();
+            let Some(crate::config::Command::Agent {
+                command: AgentCommand::Spawn(spawn),
+                ..
+            }) = parsed.command
+            else {
+                panic!("expected an agent spawn");
+            };
+            assert_eq!(spawn.service_tier.as_deref(), Some("ultrafast"));
+            args.push("--fast");
+            assert_eq!(
+                crate::config::Args::try_parse_from(&args)
+                    .err()
+                    .unwrap()
+                    .kind(),
+                ErrorKind::ArgumentConflict
+            );
+        }
+    }
+
+    #[test]
     fn every_agent_command_accepts_json() {
         use clap::Parser;
         for command in [

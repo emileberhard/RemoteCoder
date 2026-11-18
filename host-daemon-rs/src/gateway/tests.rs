@@ -652,7 +652,7 @@ async fn ended_turn_lookup_never_finishes_a_running_recovering_or_draining_turn(
         .await
         .recovered_turn_keys
         .remove(&TurnKey::new("thread-1", "019a-running"));
-    gateway.draining.store(true, Ordering::Release);
+    gateway.draining.send_replace(true);
     answer_ended_turn_lookup(
         &gateway,
         &mut control.requests,
@@ -2212,7 +2212,7 @@ async fn client_connections_preserve_protocol_identity_and_isolation() {
             .expect("parse error");
     assert_eq!(parse_error["error"]["code"], -32700);
 
-    gateway.draining.store(true, Ordering::Release);
+    gateway.draining.send_replace(true);
     client_a
         .send(UpstreamMessage::Text(
             r#"{"id":12,"m\u0065thod":"turn/start","params":{}}"#.to_string(),
@@ -2223,7 +2223,7 @@ async fn client_connections_preserve_protocol_identity_and_isolation() {
         .await
         .expect("draining refusal");
     assert_eq!(refusal["error"]["code"], RpcCode::ServerBusy.value());
-    gateway.draining.store(false, Ordering::Release);
+    gateway.draining.send_replace(false);
 
     client_a
         .send(UpstreamMessage::Text(
@@ -2558,7 +2558,7 @@ async fn draining_gateway_does_not_recover_persisted_observers() {
             Some(42),
         );
     }
-    gateway.draining.store(true, Ordering::Release);
+    gateway.draining.send_replace(true);
 
     gateway.spawn_persisted_observers().await;
     gateway.schedule_persisted_observer_scan();
@@ -3952,7 +3952,7 @@ async fn user_start_replaces_an_active_call_and_notifies_the_old_transport() {
 async fn realtime_handoff_request_during_restart_completes_as_a_visible_failure() {
     let gateway = test_gateway();
     gateway.voice.seed(None, Some(external_voice_session()));
-    gateway.draining.store(true, Ordering::Release);
+    gateway.draining.send_replace(true);
 
     let mut out_rx = crate::test_support::FakeControl::attach(&gateway, 16)
         .await

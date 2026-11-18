@@ -11,7 +11,7 @@ use crate::rpc::{RpcError, RpcResult};
 use crate::tasks::owned_tasks::OwnedTasks;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use std::sync::{Arc, Weak, atomic::Ordering};
+use std::sync::{Arc, Weak};
 
 mod done;
 mod early_title;
@@ -442,7 +442,7 @@ impl Gateway {
             } else {
                 self.call_control("thread/items/list", params).await?
             };
-            if self.draining.load(Ordering::Acquire) {
+            if self.is_draining() {
                 return Ok(None);
             }
             let entries = page["data"]

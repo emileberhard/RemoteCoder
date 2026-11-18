@@ -160,7 +160,39 @@ impl Gateway {
         self.call_control(method, params).await
     }
 
-    pub(crate) async fn job_validate_codex_ultrafast(&self, model: &str) -> Result<()> {
+    pub(crate) async fn job_validate_codex_ultrafast(
+        &self,
+        model: &str,
+        cwd: &std::path::Path,
+    ) -> Result<()> {
+        let mut draining = self.draining.subscribe();
+        let config = async {
+            let response = self
+                .job_native_call("config/read", json!({"cwd":cwd,"includeLayers":false}))
+                .await
+                .context("Could not read the Codex feature policy for Ultrafast")?;
+            let config = response["config"]
+                .as_object()
+                .context("Codex returned no effective configuration")?;
+            ensure!(
+                config
+                    .get("features")
+                    .and_then(|features| features["ultrafast_mode"].as_bool())
+                    != Some(false),
+                "Ultrafast is disabled by Codex feature policy (ultrafast_mode)"
+            );
+            Ok(())
+        };
+        tokio::select! {
+            biased;
+            _ = draining.wait_for(|value| *value) => Err(RpcError::draining().into()),
+            result = async { tokio::try_join!(config, self.require_advertised_ultrafast(model)) } => {
+                result.map(|_| ())
+            }
+        }
+    }
+
+    async fn require_advertised_ultrafast(&self, model: &str) -> Result<()> {
         let mut cursor = Value::Null;
         for _ in 0..50 {
             let page = self

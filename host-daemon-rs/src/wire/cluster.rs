@@ -9,11 +9,13 @@ pub(crate) const PROTOCOL: u32 = 1;
 pub(crate) const CAPABILITIES: &[&str] = &[
     "cluster.v1",
     "agent.jobs.v1",
+    ULTRAFAST_JOBS_CAPABILITY,
     "agent.parent.v1",
     "sessions.v1",
     LIVE_ACTIVITY_CAPABILITY,
 ];
 pub(crate) const LIVE_ACTIVITY_CAPABILITY: &str = "liveActivity.v1";
+pub(crate) const ULTRAFAST_JOBS_CAPABILITY: &str = "agent.jobs.ultrafast.v1";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

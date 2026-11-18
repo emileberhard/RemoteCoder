@@ -1,5 +1,22 @@
 use super::*;
 
+fn peer_lacks_ultrafast(hello: &HelloReceipt, operation: &AdmissionOperation) -> bool {
+    let settings = match operation {
+        AdmissionOperation::Start(spec) => Some(&spec.settings),
+        AdmissionOperation::Continue(request) => request.settings.as_ref(),
+    };
+    matches!(
+        settings,
+        Some(crate::agents::jobs::model::ExecutionSettings::Codex {
+            service_tier: Some(tier),
+            ..
+        }) if tier == "ultrafast"
+    ) && !hello
+        .capabilities
+        .iter()
+        .any(|capability| capability == ULTRAFAST_JOBS_CAPABILITY)
+}
+
 impl Gateway {
     pub(crate) async fn cluster_authority(&self, caller: &Caller) -> Result<CallerAuthority> {
         if let Caller::Forwarded { authority, .. } = caller {
@@ -74,6 +91,13 @@ impl Gateway {
                 )
             };
             let hello:HelloReceipt=decode(link.call(&member.host,"cluster/hello",json!({"protocol":PROTOCOL,"host":identity.host_id,"incarnation":identity.incarnation})).await.map_err(|error|crate::cluster::link::LinkError {class:if error.class==ErrorClass::Unsupported {ErrorClass::Unsupported}else{ErrorClass::Unavailable},transmitted:false,..error})?)?;
+            if peer_lacks_ultrafast(&hello, &operation) {
+                return Err(cluster_error(
+                    ErrorClass::Unsupported,
+                    format!("Target host {host} does not support delegated Ultrafast yet"),
+                )
+                .into());
+            }
             let origin = match &authority {
                 CallerAuthority::Operator => Origin::TopLevel,
                 CallerAuthority::Agent { conversation, .. } => Origin::RemoteParent {
@@ -337,10 +361,11 @@ impl Gateway {
                         .confirm_remote_stop(intent.request.job_id)
                         .await?;
                 }
-            } else if self
-                .send_remote_intent(intent.request.job_id)
-                .await
-                .is_err()
+            } else if peer_lacks_ultrafast(&hello, &intent.request.operation)
+                || self
+                    .send_remote_intent(intent.request.job_id)
+                    .await
+                    .is_err()
             {
                 retry = true;
             }

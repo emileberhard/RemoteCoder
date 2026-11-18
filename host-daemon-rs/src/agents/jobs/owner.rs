@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -239,7 +239,12 @@ impl JobOwner {
             .await
     }
 
-    async fn validate_settings(&self, settings: &ExecutionSettings, new: bool) -> Result<()> {
+    async fn validate_settings(
+        &self,
+        settings: &ExecutionSettings,
+        cwd: &Path,
+        new: bool,
+    ) -> Result<()> {
         match settings {
             ExecutionSettings::Codex {
                 model,
@@ -252,7 +257,9 @@ impl JobOwner {
                     "External models have no service tiers"
                 );
                 if service_tier.as_deref() == Some("ultrafast") {
-                    self.gateway()?.job_validate_codex_ultrafast(model).await?;
+                    self.gateway()?
+                        .job_validate_codex_ultrafast(model, cwd)
+                        .await?;
                 }
             }
             ExecutionSettings::Claude {
@@ -273,6 +280,38 @@ impl JobOwner {
             }
         }
         Ok(())
+    }
+
+    async fn validate_admission_settings(
+        &self,
+        settings: &ExecutionSettings,
+        cwd: &Path,
+        new: bool,
+        id: &JobId,
+        fingerprint: &str,
+    ) -> Result<Option<AdmissionReceipt>> {
+        let validation = self
+            .validate_settings(settings, cwd, new)
+            .await
+            .and_then(|()| {
+                ensure!(
+                    !self.gateway()?.is_draining(),
+                    crate::rpc::RpcError::draining()
+                );
+                Ok(())
+            });
+        if let Err(error) = validation {
+            if let Some(job) = self
+                .store()
+                .await?
+                .existing_request(id.clone(), fingerprint.to_owned())
+                .await?
+            {
+                return self.admission_receipt(job, true).await.map(Some);
+            }
+            return Err(error);
+        }
+        Ok(None)
     }
 
     pub(crate) async fn start(
@@ -331,7 +370,18 @@ impl JobOwner {
                 "working directory must be inside the target host's read-only root"
             );
         }
-        self.validate_settings(&request.spec.settings, true).await?;
+        if let Some(receipt) = self
+            .validate_admission_settings(
+                &request.spec.settings,
+                &request.spec.cwd,
+                true,
+                &request.job_id,
+                &request_fingerprint,
+            )
+            .await?
+        {
+            return Ok(receipt);
+        }
         let at_ms = now_ms();
         let job = JobRecord {
             agent_id: request.job_id.as_str().into(),
@@ -560,7 +610,18 @@ impl JobOwner {
             "conversation's permission scope is unresolved or conflicts with its latest job"
         );
         original_settings.validate_continuation(&settings)?;
-        self.validate_settings(&settings, false).await?;
+        if let Some(receipt) = self
+            .validate_admission_settings(
+                &settings,
+                &cwd,
+                false,
+                &request.job_id,
+                &request_fingerprint,
+            )
+            .await?
+        {
+            return Ok(receipt);
+        }
         let recipient = match request.recipient {
             ContinueRecipient::Previous => previous.recipient.clone(),
             ContinueRecipient::Current => recipient(&caller, &request.caller),
