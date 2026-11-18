@@ -4,6 +4,6 @@ import Foundation
 /// LiveCommunicationKit's `ConversationManager`. The app model creates one center
 /// and every construction path receives it rather than starting a second one.
 @MainActor
-final class VoiceCallCenter {
+final class VoiceCallCenter: Sendable {
     let call = VoiceCall()
 }

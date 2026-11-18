@@ -21,7 +21,7 @@ final class VoiceCall {
 
     func start(using model: any VoiceCallHost, resuming context: RealtimeVoiceConversationContext? = nil) async {}
 
-    func startWithLiveActivity(using model: any VoiceCallHost, hostName: String) async throws {}
+    func startWithLiveActivity(using model: any VoiceCallHost) async throws {}
 
     func applyConversationSettings(_ settings: ConversationSettingsUpdate, hostID: UUID) {}
 

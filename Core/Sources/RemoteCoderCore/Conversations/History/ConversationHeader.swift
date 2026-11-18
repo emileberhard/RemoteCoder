@@ -175,9 +175,11 @@ struct ConversationHeader: Codable, Identifiable, Equatable, Sendable {
 
     var acceptsDirectInput: Bool { canAcceptDirectInput ?? !spawnedAsSubAgent }
 
-    var displayTitle: String {
+    var title: String? {
         if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return name }
         let text = preview.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? "(untitled)" : text
+        return text.isEmpty ? nil : text
     }
+
+    var displayTitle: String { title ?? "(untitled)" }
 }

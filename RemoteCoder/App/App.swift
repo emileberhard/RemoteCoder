@@ -13,6 +13,7 @@ final class RemoteCoderAppDelegate: NSObject, UIApplicationDelegate, UNUserNotif
         willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         AppDependencyManager.shared.add(dependency: self.app.workspace)
+        AppDependencyManager.shared.add(dependency: self.app.voiceCalls as any VoiceCallControls)
         return true
     }
 

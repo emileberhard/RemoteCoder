@@ -785,6 +785,11 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         await primaryScreen?.discardProvisionalRealtimeVoiceConversation(threadID: threadID)
     }
 
+    func voiceCallTitle(threadID: String) -> String? {
+        if let pinned = conversationList.pinnedName(for: threadID) { return pinned }
+        return conversationList.header(id: threadID)?.title
+    }
+
     func setVoiceModeActive(_ active: Bool) {
         guard isVoiceModeActive != active else { return }
         VoiceModeDiagnostics.log("voice mode model active=\(active) appBackground=\(isInBackground)")

@@ -445,6 +445,12 @@
               "target-membership": [
                 "RemoteCoderLiveActivities/compile-sources"
               ]
+            },
+            {
+              "path": "RemoteCoderVoiceCallWidgetPreviews.swift",
+              "target-membership": [
+                "RemoteCoderLiveActivities/compile-sources"
+              ]
             }
           ]
         },
@@ -544,6 +550,12 @@
                 },
                 {
                   "path": "RemoteCoderVoiceCallAttributes.swift",
+                  "target-membership": [
+                    "RemoteCoderLiveActivities/compile-sources"
+                  ]
+                },
+                {
+                  "path": "VoiceCallControlIntents.swift",
                   "target-membership": [
                     "RemoteCoderLiveActivities/compile-sources"
                   ]
@@ -728,6 +740,7 @@
           "exclusions": [
             "AppExtensionContract/RemoteCoderActiveTasksAttributes.swift",
             "AppExtensionContract/RemoteCoderVoiceCallAttributes.swift",
+            "AppExtensionContract/VoiceCallControlIntents.swift",
             "LiveNavigationContract/LiveNavigationModels.swift",
             "LiveNavigationContract/LiveNavigationUploader.swift"
           ]

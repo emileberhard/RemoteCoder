@@ -767,7 +767,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         guard let voiceScreen = try await prepareVoiceCall(from: selected, startsFreshChat: true, configuration: configuration) else {
             return nil
         }
-        try await voiceCalls.call.startWithLiveActivity(using: voiceScreen.target, hostName: voiceScreen.target.hostDisplayName)
+        try await voiceCalls.call.startWithLiveActivity(using: voiceScreen.target)
         if case .failed(let message) = voiceCalls.call.state {
             throw VoiceCallUnavailable(message: message)
         }

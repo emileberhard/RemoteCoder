@@ -5,11 +5,13 @@ import Foundation
 @MainActor
 protocol VoiceCallHost: AnyObject {
     var hostID: UUID { get }
+    var hostDisplayName: String { get }
     var activeSessionID: String? { get }
     var gatewayClient: GatewayClient { get }
     var voiceHistoryStore: RealtimeVoiceHistoryStore { get }
 
     func setVoiceModeActive(_ active: Bool)
+    func voiceCallTitle(threadID: String) -> String?
     func prepareRealtimeVoiceConversation() async throws -> RealtimeVoiceConversationContext
     func refreshRealtimeVoiceConversation(
         _ context: RealtimeVoiceConversationContext, using voiceGateway: GatewayClient

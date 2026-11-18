@@ -1,7 +1,12 @@
 import AVFoundation
 import Foundation
 @preconcurrency import LiveCommunicationKit
+import UIKit
 @preconcurrency import WebRTC
+
+private func remoteHandle(displayName: String?) -> Handle {
+    Handle(type: .generic, value: "remotecoder-voice", displayName: displayName ?? "RemoteCoder")
+}
 
 /// LiveCommunicationKit explicitly supports fulfilling actions from asynchronous
 /// delegate work, but its reference types don't yet declare `Sendable` in the iOS 27 SDK.
@@ -24,7 +29,7 @@ private final class SystemConversationManager: @unchecked Sendable {
     }
 
     func reportIncoming(callID: UUID) async throws {
-        let handle = Handle(type: .generic, value: "remotecoder-voice", displayName: "RemoteCoder")
+        let handle = remoteHandle(displayName: nil)
         try await value.reportNewIncomingConversation(
             uuid: callID,
             update: Conversation.Update(members: [handle], activeRemoteMembers: [handle], capabilities: [])
@@ -73,15 +78,9 @@ protocol CallSystemBridgeDelegate: AnyObject {
 
 @MainActor
 final class CallSystemBridge: NSObject {
-    private static let remoteHandle = Handle(
-        type: .generic,
-        value: "remotecoder-voice",
-        displayName: "RemoteCoder"
-    )
-
     private static let configuration = ConversationManager.Configuration(
         ringtoneName: nil,
-        iconTemplateImageData: nil,
+        iconTemplateImageData: UIImage(named: "CallIconMask")?.pngData(),
         maximumConversationGroups: 1,
         maximumConversationsPerConversationGroup: 1,
         includesConversationInRecents: false,
@@ -113,10 +112,10 @@ final class CallSystemBridge: NSObject {
         conversation(for: callID) != nil
     }
 
-    func startOutgoing(callID: UUID) async throws {
+    func startOutgoing(callID: UUID, displayName: String?) async throws {
         let action = StartConversationAction(
             conversationUUID: callID,
-            handles: [Self.remoteHandle],
+            handles: [remoteHandle(displayName: displayName)],
             isVideo: false
         )
         let manager = managerForNewConversation()
@@ -151,6 +150,11 @@ final class CallSystemBridge: NSObject {
 
     func reportConnected(callID: UUID) {
         report(.conversationConnected(.now), callID: callID)
+    }
+
+    func reportDisplayName(_ displayName: String?, callID: UUID) {
+        let handle = remoteHandle(displayName: displayName)
+        report(.conversationUpdated(Conversation.Update(members: [handle], activeRemoteMembers: [handle])), callID: callID)
     }
 
     func reportEnded(callID: UUID, reason: CallEndReason) {

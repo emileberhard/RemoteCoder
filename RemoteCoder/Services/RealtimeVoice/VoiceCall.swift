@@ -33,6 +33,7 @@ final class VoiceCall {
     private static let selectedVoiceKey = "realtimeVoice.selectedVoice"
     static let syncedPreferenceKeys: Set<String> = [selectedVoiceKey]
     private static let audioActivationDeadline: Duration = .seconds(5)
+    private static let captionLimit = 200
     private let logger = AppLogger(category: "RealtimeVoice")
     private let diagnosticID: String
     private let systemBridge: CallSystemBridge
@@ -63,6 +64,8 @@ final class VoiceCall {
     private var teardownTask: Task<Void, Never>?
     private let orphanedLiveActivityCleanup: Task<Void, Never>
     private var liveActivity: VoiceCallLiveActivity?
+    private var callTitle: String?
+    private var caption: String?
     private var callEndWaiters: [CheckedContinuation<Void, Never>] = []
     private(set) var conversationContext: RealtimeVoiceConversationContext?
     private var acknowledgedSettings: ConversationSettingsUpdate?
@@ -204,6 +207,41 @@ final class VoiceCall {
     private func updateLifecycle(_ state: State, connectionID: UUID) {
         guard lifecycle.state != state else { return }
         lifecycle.update(state, connectionID: connectionID)
+        publishCallState()
+    }
+
+    private var liveActivityState: VoiceCallLiveActivity.ContentState {
+        let phase: VoiceCallLiveActivity.ContentState.Phase = switch lifecycle.state {
+        case .listening: .listening
+        case .speaking: .speaking
+        case .reconnecting: .reconnecting
+        case .idle, .ringing, .connecting, .stopping, .failed: .connecting
+        }
+        return .init(phase: phase, isMuted: isMuted, title: callTitle, caption: caption)
+    }
+
+    private func publishCallState() {
+        guard lifecycle.isActive else { return }
+        liveActivity?.show(liveActivityState)
+    }
+
+    private func showLiveActivity(callID: UUID, hostName: String) async {
+        await orphanedLiveActivityCleanup.value
+        guard lifecycle.isCurrentCall(callID), liveActivity?.isOngoing != true else { return }
+        do {
+            liveActivity = try .request(callID: callID, hostName: hostName, state: liveActivityState)
+        } catch {
+            diagnostic("live activity unavailable error=\(error.localizedDescription)")
+        }
+    }
+
+    private func refreshCallTitle() {
+        guard let model, let conversationThreadID else { return }
+        let title = model.voiceCallTitle(threadID: conversationThreadID)
+        guard title != callTitle else { return }
+        callTitle = title
+        if let callID = lifecycle.callID { systemBridge.reportDisplayName(title, callID: callID) }
+        publishCallState()
     }
 
     func refreshVoiceCatalog(using model: any VoiceCallHost) async {
@@ -366,14 +404,17 @@ final class VoiceCall {
         if let teardownTask { await teardownTask.value }
         let callID = UUID()
         guard lifecycle.start(callID: callID) else { return }
+        await showLiveActivity(callID: callID, hostName: model.hostDisplayName)
         await begin(callID, using: model, resuming: context)
     }
 
-    func startWithLiveActivity(using model: any VoiceCallHost, hostName: String) async throws {
+    func startWithLiveActivity(using model: any VoiceCallHost) async throws {
         await orphanedLiveActivityCleanup.value
         while let teardownTask { await teardownTask.value }
         let callID = lifecycle.callID ?? UUID()
-        if liveActivity?.isOngoing != true { liveActivity = try .request(callID: callID, hostName: hostName) }
+        if liveActivity?.isOngoing != true {
+            liveActivity = try .request(callID: callID, hostName: model.hostDisplayName, state: liveActivityState)
+        }
         guard lifecycle.start(callID: callID) else { return }
         await begin(callID, using: model, resuming: nil)
     }
@@ -385,6 +426,7 @@ final class VoiceCall {
         gateway = model.gatewayClient
         voiceHistoryStore = model.voiceHistoryStore
         conversationContext = context
+        callTitle = (context?.threadID ?? model.activeSessionID).flatMap { model.voiceCallTitle(threadID: $0) }
         acknowledgedSettings = nil
         acknowledgedModelAndEffortSuperseded = false
         acknowledgedFastModeSuperseded = false
@@ -392,6 +434,7 @@ final class VoiceCall {
         hasReportedConnected = false
         transcriptState.reset()
         model.setVoiceModeActive(true)
+        publishCallState()
 
         // Startup belongs to the call, so minimizing the SwiftUI cover cannot cancel it.
         let task = Task<Void, Never> { @MainActor [weak self] in
@@ -411,7 +454,7 @@ final class VoiceCall {
             audioRoute.startListening()
 
             diagnostic("performing outgoing system conversation action")
-            try await systemBridge.startOutgoing(callID: callID)
+            try await systemBridge.startOutgoing(callID: callID, displayName: callTitle)
             guard lifecycle.isCurrentCall(callID) else { return }
             diagnostic("outgoing system conversation action accepted")
         } catch {
@@ -451,9 +494,13 @@ final class VoiceCall {
     }
 
     func toggleMute() async {
-        guard isActive, let conversationUUID = lifecycle.callID else { return }
+        await setMuted(!isMuted)
+    }
+
+    func setMuted(_ muted: Bool) async {
+        guard isActive, muted != isMuted, let conversationUUID = lifecycle.callID else { return }
         do {
-            try await systemBridge.requestMute(!isMuted, callID: conversationUUID)
+            try await systemBridge.requestMute(muted, callID: conversationUUID)
         } catch {
             guard lifecycle.isCurrentCall(conversationUUID) else { return }
             logger.error("system mute action failed: \(error.localizedDescription)")
@@ -470,6 +517,7 @@ final class VoiceCall {
 
         systemBridge.reportStartedConnecting(callID: action.conversationUUID)
         action.fulfill(dateStarted: .now)
+        systemBridge.reportDisplayName(callTitle, callID: action.conversationUUID)
         scheduleAudioActivationDeadline(callID: action.conversationUUID)
         guard connectionTask == nil else { return }
         connectionTask = Task { @MainActor [weak self] in
@@ -506,10 +554,12 @@ final class VoiceCall {
         // Fulfilling lets the system activate audio; media readiness is acknowledged separately.
         action.fulfill(dateConnected: .now)
         scheduleAudioActivationDeadline(callID: action.conversationUUID)
-        guard connectionTask == nil else { return }
-        connectionTask = Task { @MainActor [weak self] in
-            await self?.connect(callID: action.conversationUUID)
+        if connectionTask == nil {
+            connectionTask = Task { @MainActor [weak self] in
+                await self?.connect(callID: action.conversationUUID)
+            }
         }
+        if let model { await showLiveActivity(callID: action.conversationUUID, hostName: model.hostDisplayName) }
     }
 
     private func handleMuteAction(_ action: MuteConversationAction) {
@@ -521,6 +571,7 @@ final class VoiceCall {
         isMuted = action.isMuted
         webRTCSession?.setInputEnabled(!action.isMuted && systemAudioSessionIsActive)
         action.fulfill()
+        publishCallState()
     }
 
     private func connect(callID: UUID) async {
@@ -534,6 +585,7 @@ final class VoiceCall {
         }
 
         reconnectRequiresReplacement = false
+        publishCallState()
         diagnostic("connecting call=\(callID) connection=\(connectionID)")
         do {
             try await gateway.connectIfNeeded()
@@ -581,6 +633,7 @@ final class VoiceCall {
             realtimeSessionID = context.realtimeSessionID
             provisionalConversationThreadID = context.isProvisionalThread ? context.threadID : nil
             conversationThreadID = context.threadID
+            refreshCallTitle()
             let offer = try await pendingOffer
             try await voiceCatalog
             guard lifecycle.isCurrentConnection(connectionID) else { return }
@@ -748,7 +801,10 @@ final class VoiceCall {
         case .transcriptDone(let event):
             guard event.threadID == realtimeThreadID else { return }
             let entry = transcriptState.complete(text: event.text, role: event.role)
+            if let entry, entry.role == .assistant { caption = String(entry.text.prefix(Self.captionLimit)) }
+            refreshCallTitle()
             updateLifecycle(.listening, connectionID: connectionID)
+            publishCallState()
             await persistTranscriptEntry(entry)
 
         case .error(let event):
@@ -1039,6 +1095,8 @@ final class VoiceCall {
             }
             await endingVoiceHistory?.flush()
             await endingLiveActivity?.end()
+            callTitle = nil
+            caption = nil
             endingModel?.setVoiceModeActive(false)
             callOwner = nil
             teardownTask = nil

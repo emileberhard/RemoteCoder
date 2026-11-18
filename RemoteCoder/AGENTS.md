@@ -1747,6 +1747,14 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   LiveCommunicationKit is the only call lifecycle: system and in-app mute and end flow through the same conversation
   actions, and WebRTC audio starts only after the system activates the call
   audio session.
+- The system call UI shows the conversation's title (`VoiceCallHost.voiceCallTitle`:
+  the pinned name, else the header's title), or RemoteCoder when it has none.
+  iOS ignores a `StartConversationAction` handle's display name, so
+  `CallSystemBridge.reportDisplayName` reports it as a `conversationUpdated`
+  member once the start is fulfilled, again when the thread is known, and after
+  each finished utterance when the title changed. The handle value
+  `remotecoder-voice` stays fixed. `CallIconMask` is the template icon of the
+  in-call screen's button back to the app.
 - `CallSystemBridge` creates its `ConversationManager` lazily and replaces it
   before every new outgoing or incoming conversation while no conversation is
   live or being created, and ignores every callback from a replaced manager,
@@ -2038,11 +2046,26 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   question symbol, else the waiting count, else the running ring, else the
   unavailable symbol. Content is always visible, never `privacySensitive`. The glyph is
   `Assets.xcassets/LiveActivityAppGlyph.imageset`.
-- `RemoteCoderVoiceCallWidget` renders the call activity Voice Mode's intent
-  starts: host name and call timer. A tap opens `remotecoder://chat/call?id=`,
-  which presents only that exact call while it is live, never starting one.
-  Its `RemoteCoderVoiceCallAttributes` carry no content state, so nothing
-  updates it while the call runs.
+- Every call requests its `VoiceCallLiveActivity`: the Voice Mode intent
+  requires one (see below); in-app starts and answered agent calls request it
+  best effort, since ActivityKit refuses a request from the background.
+  `VoiceCall` owns its content state (phase, mute, title and the agent's last
+  finished line, at most 200 characters) and publishes only when one of them
+  changes, never per transcript delta. `VoiceCallLiveActivity` runs updates one
+  at a time and coalesces to the newest state, and its end waits for the update
+  in flight.
+- `RemoteCoderVoiceCallWidget` renders that activity. The Lock Screen and the
+  expanded island show the title, phase, timer, caption and Mute and End
+  buttons; compact shows the glyph and a phase symbol, limited width and
+  minimal only the phase symbol, which shows mute first. A tap opens `remotecoder://chat/call?id=`, which presents
+  only that exact call while it is live, never starting one.
+- The buttons run `SetVoiceCallMutedIntent` and `EndVoiceCallIntent`
+  (`Shared/AppExtensionContract/VoiceCallControlIntents.swift`, iOS app and
+  widget only). They are `LiveActivityIntent`s that run in the app and reach
+  the call through `VoiceCallControls`, which `VoiceCallCenter` implements and
+  the app delegate registers with `AppDependencyManager`. They act only on the
+  exact live call id and go through the same LiveCommunicationKit actions as
+  the system and in-app controls.
 - `RemoteCoderLiveActivitiesBundle` registers the active-tasks and voice-call
   Live Activities. App Intents provide New Chat and Voice Mode quick actions.
 - The app's generated Info.plist sets `NSSupportsLiveActivities=YES`.
@@ -2070,7 +2093,8 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
     `VoiceCall.startWithLiveActivity` requests the call's
     `VoiceCallLiveActivity` under the call's own id in the same main-actor
     step that reserves the call, before any audio, and also when the intent
-    rejoins a live call; it fails the intent when Live Activities are off.
+    rejoins a live call without one; it fails the intent when Live Activities
+    are off.
     That call's teardown ends only its own activity, and `VoiceCall` ends any
     a crashed process left behind before its first intent start. On an unlocked
     device it then enqueues `.presentVoiceCall` with that call's id and
