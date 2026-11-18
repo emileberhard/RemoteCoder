@@ -242,6 +242,7 @@ impl JobOwner {
     async fn validate_settings(&self, settings: &ExecutionSettings, new: bool) -> Result<()> {
         match settings {
             ExecutionSettings::Codex {
+                model,
                 model_provider,
                 service_tier,
                 ..
@@ -250,6 +251,9 @@ impl JobOwner {
                     model_provider == "openai" || service_tier.is_none(),
                     "External models have no service tiers"
                 );
+                if service_tier.as_deref() == Some("ultrafast") {
+                    self.gateway()?.job_validate_codex_ultrafast(model).await?;
+                }
             }
             ExecutionSettings::Claude {
                 model,

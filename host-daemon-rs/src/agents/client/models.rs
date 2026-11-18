@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 
 use crate::agents::jobs::model::{CyberAccessProgram, ExecutionSettings, Provider};
@@ -180,16 +180,11 @@ pub(super) fn codex(
         _ => selected.default_reasoning_effort.as_str(),
     };
     let effort = resolve_effort(selected, effort, default)?;
-    let service_tier = match service_tier {
-        Some("fast" | "flex") => service_tier.map(str::to_owned),
-        Some("standard") | None => None,
-        _ => bail!("Service tier must be standard, fast or flex"),
-    };
     Ok(ExecutionSettings::Codex {
         model: selected.model.clone(),
         model_provider: "openai".into(),
         effort,
-        service_tier,
+        service_tier: super::codex_service_tier(service_tier)?,
         cyber_access_program: (normalized == "codex-daybreak-blue")
             .then_some(CyberAccessProgram::DaybreakBlue),
     })

@@ -26,6 +26,7 @@ use crate::wire::agent_jobs::*;
 
 const SCOPED_SOCKET_ENV: &str = "RC_AGENT_JOB_SOCKET";
 const MAX_INVENTORY_PAGES: usize = 50;
+const SERVICE_TIERS: [&str; 4] = ["standard", "fast", "flex", "ultrafast"];
 
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum AgentCommand {
@@ -100,7 +101,7 @@ pub(crate) struct SpawnArgs {
     model_override: Option<String>,
     #[arg(long)]
     effort: Option<String>,
-    #[arg(long, value_parser = ["standard", "fast", "flex"])]
+    #[arg(long, value_parser = SERVICE_TIERS)]
     service_tier: Option<String>,
     #[arg(long, conflicts_with = "service_tier")]
     fast: bool,
@@ -664,11 +665,7 @@ fn update_settings(
                 *selected_effort = effort.to_owned();
             }
             if let Some(tier) = tier {
-                ensure!(
-                    matches!(tier, "standard" | "fast" | "flex"),
-                    "Service tier must be standard, fast or flex"
-                );
-                *service_tier = (tier != "standard").then(|| tier.to_owned());
+                *service_tier = codex_service_tier(Some(tier))?;
             }
         }
         ExecutionSettings::Claude {
@@ -690,6 +687,14 @@ fn update_settings(
     }
     current.validate_continuation(&selected)?;
     Ok(selected)
+}
+
+fn codex_service_tier(tier: Option<&str>) -> Result<Option<String>> {
+    match tier {
+        None | Some("standard") => Ok(None),
+        Some(tier) if SERVICE_TIERS.contains(&tier) => Ok(Some(tier.to_owned())),
+        Some(tier) => bail!("Unknown Codex service tier {tier:?}"),
+    }
 }
 
 async fn formatting_context(

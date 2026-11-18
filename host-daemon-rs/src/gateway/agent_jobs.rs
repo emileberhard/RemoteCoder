@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -158,6 +158,39 @@ impl Gateway {
 
     pub(crate) async fn job_native_call(&self, method: &str, params: Value) -> Result<Value> {
         self.call_control(method, params).await
+    }
+
+    pub(crate) async fn job_validate_codex_ultrafast(&self, model: &str) -> Result<()> {
+        let mut cursor = Value::Null;
+        for _ in 0..50 {
+            let page = self
+                .job_native_call(
+                    "model/list",
+                    json!({"cursor":cursor,"limit":100,"includeHidden":true}),
+                )
+                .await
+                .context("Could not read the Codex model catalog for Ultrafast")?;
+            let models = page["data"]
+                .as_array()
+                .context("Codex returned no model catalog data")?;
+            if let Some(row) = models
+                .iter()
+                .find(|row| row["model"].as_str() == Some(model))
+            {
+                ensure!(
+                    row["serviceTiers"].as_array().is_some_and(|tiers| {
+                        tiers.iter().any(|tier| tier["id"] == "ultrafast")
+                    }),
+                    "Codex model {model} does not advertise the Ultrafast service tier"
+                );
+                return Ok(());
+            }
+            cursor = page["nextCursor"].clone();
+            if cursor.is_null() {
+                bail!("Codex model {model} is absent from the native model catalog");
+            }
+        }
+        bail!("Codex model catalog exceeded its page limit")
     }
 
     pub(crate) fn job_codex_home(&self) -> Result<std::path::PathBuf> {
