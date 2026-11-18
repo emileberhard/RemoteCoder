@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { MemoryStorage } from "../../tests/fixtures/workspace";
 import type { Frame } from "../protocol/boundary";
 import type { TranscriptionSettings } from "../transcription-settings";
+import { ComposerDraftStore } from "../workspace/composer-draft-store";
 import type { FeatureTransport, VoiceContext } from "./contracts";
 import { BrowserDictation } from "./dictation";
 import type { RecordingStore, SavedRecording } from "./recordings";
@@ -245,6 +247,57 @@ describe("browser speech service ownership", () => {
     expect(texts).toEqual(["Recovered dictation"]);
     expect(await service.recoveries()).toEqual([]);
     expect(media.stops()).toBe(1);
+    service.dispose();
+  });
+
+  test("an oversized dictated document keeps all saved drafts and the recording", async () => {
+    const storage = new MemoryStorage();
+    const drafts = new ComposerDraftStore(
+      storage,
+      () => ({ key: "draft-0", host: undefined }),
+      () => new Set(),
+      () => undefined,
+      () => undefined,
+    );
+    for (let index = 0; index < 5; index += 1) drafts.update({ text: "a".repeat(209_400) }, `draft-${index}`);
+    drafts.flushRequired();
+    const previous = storage.getItem("remotecoder.web.drafts.v1");
+    if (!previous) throw new Error("Missing saved drafts");
+    expect(previous.length).toBeGreaterThan(1_040_000);
+    expect(previous.length).toBeLessThanOrEqual(1024 * 1024);
+    drafts.update({ text: `${"a".repeat(209_400)}z` }, "draft-0");
+    const recordings = new MemoryRecordings();
+    const service = new BrowserDictation(
+      "host-1",
+      () => undefined,
+      (text) => drafts.applyDictation("draft-0", text),
+      scribe,
+      {
+        store: recordings,
+        capture: async () => mediaStream().stream,
+        recorder,
+        decode: async () => new Float32Array(16_000),
+        uploadDictation: async (file) => ({ path: "/upload.wav", bytes: file.size, sha256: "digest" }),
+        request: async () => ({ text: "b".repeat(2_000), model: "batch" }),
+      },
+    );
+    await service.start();
+    await expect(service.finish()).rejects.toThrow("storage limits");
+    expect(storage.getItem("remotecoder.web.drafts.v1")).toBe(previous);
+    expect(drafts.get("draft-0")?.text).toBe(`${"a".repeat(209_400)}z`);
+    expect(await service.recoveries()).toHaveLength(1);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const restored = new ComposerDraftStore(
+      storage,
+      () => ({ key: "draft-0", host: undefined }),
+      () => new Set(),
+      () => undefined,
+      () => undefined,
+    );
+    restored.restore();
+    expect(restored.snapshot.size).toBe(5);
+    expect(restored.get("draft-0")?.text).toBe(`${"a".repeat(209_400)}z`);
+    expect(await service.recoveries()).toHaveLength(1);
     service.dispose();
   });
 

@@ -50,6 +50,32 @@ export function supportedServiceTier(
   return tier;
 }
 
+const draftStorageKey = "remotecoder.web.drafts.v1";
+const maximumDraftDocumentLength = 1024 * 1024;
+const maximumDraftTextLength = 256_000;
+const maximumDraftCount = 32;
+
+function restorableDraft(key: unknown, draft: Record<string, unknown>) {
+  return (
+    typeof key === "string" &&
+    typeof draft.text === "string" &&
+    draft.text.length <= maximumDraftTextLength &&
+    Array.isArray(draft.attachments)
+  );
+}
+
+function serializeDrafts(drafts: ReadonlyMap<string, Draft>) {
+  const raw = JSON.stringify([...drafts]);
+  if (raw.length > maximumDraftDocumentLength || drafts.size > maximumDraftCount)
+    throw new Error("The draft exceeds browser storage limits. Keep this tab open until it is sent.");
+  for (const pair of array(JSON.parse(raw), maximumDraftCount)) {
+    const [key, value] = array(pair, 2);
+    if (!restorableDraft(key, object(value)))
+      throw new Error("The draft exceeds browser storage limits. Keep this tab open until it is sent.");
+  }
+  return raw;
+}
+
 export class ComposerDraftStore {
   private drafts = new Map<string, Draft>();
   private persistence?: ReturnType<typeof setTimeout>;
@@ -67,17 +93,12 @@ export class ComposerDraftStore {
     return this.drafts.get(key);
   }
   restore() {
-    const raw = this.storage?.getItem("remotecoder.web.drafts.v1");
-    if (raw && raw.length <= 1024 * 1024) {
-      for (const pair of array(JSON.parse(raw), 32)) {
+    const raw = this.storage?.getItem(draftStorageKey);
+    if (raw && raw.length <= maximumDraftDocumentLength) {
+      for (const pair of array(JSON.parse(raw), maximumDraftCount)) {
         const [key, value] = array(pair, 2);
         const draft = object(value);
-        if (
-          typeof key === "string" &&
-          typeof draft.text === "string" &&
-          draft.text.length <= 256000 &&
-          Array.isArray(draft.attachments)
-        )
+        if (typeof key === "string" && restorableDraft(key, draft))
           this.drafts.set(key, {
             ...(value as Draft),
             modifiedAt:
@@ -113,7 +134,7 @@ export class ComposerDraftStore {
         Math.max(drafts.get(key)?.revision ?? 0, change.revision ?? 0) +
         (Object.keys(change).some((field) => field !== "uncertain") ? 1 : 0),
     });
-    while (drafts.size > 32) {
+    while (drafts.size > maximumDraftCount) {
       const protectedKeys = this.protectedKeys();
       const oldest = [...drafts.keys()].find(
         (candidate) => candidate !== key && candidate !== this.current().key && !protectedKeys.has(candidate),
@@ -135,8 +156,9 @@ export class ComposerDraftStore {
     if (!draft) throw new Error("The original dictation draft is unavailable; the recording was retained.");
     const candidate = this.candidate({ text: [draft.text.trimEnd(), text].filter(Boolean).join("\n") }, key);
     if (!this.storage) throw new Error("Browser draft storage is unavailable. Keep this tab open.");
+    const serialized = serializeDrafts(candidate);
     try {
-      this.storage.setItem("remotecoder.web.drafts.v1", JSON.stringify([...candidate]));
+      this.storage.setItem(draftStorageKey, serialized);
     } catch {
       throw new Error("The browser could not save your draft. Keep this tab open until it is sent.");
     }
@@ -145,8 +167,16 @@ export class ComposerDraftStore {
     this.publish();
   }
   persist(required = false) {
+    let serialized: string;
     try {
-      this.storage?.setItem("remotecoder.web.drafts.v1", JSON.stringify([...this.drafts]));
+      serialized = serializeDrafts(this.drafts);
+    } catch (error) {
+      if (required) throw error;
+      this.report(error);
+      return;
+    }
+    try {
+      this.storage?.setItem(draftStorageKey, serialized);
     } catch {
       if (required)
         throw new Error("The browser could not save your draft. Keep this tab open until it is sent.");
