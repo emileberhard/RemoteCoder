@@ -1301,11 +1301,10 @@ mod tests {
             args.extend(invocation);
             args.extend(["--service-tier", "ultrafast"]);
             let parsed = crate::config::Args::try_parse_from(&args).unwrap();
-            let Some(crate::config::Command::Agent {
-                command: AgentCommand::Spawn(spawn),
-                ..
-            }) = parsed.command
-            else {
+            let Some(crate::config::Command::Agent { command, .. }) = parsed.command else {
+                panic!("expected an agent spawn");
+            };
+            let AgentCommand::Spawn(spawn) = *command else {
                 panic!("expected an agent spawn");
             };
             assert_eq!(spawn.service_tier.as_deref(), Some("ultrafast"));

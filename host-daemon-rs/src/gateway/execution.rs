@@ -388,9 +388,7 @@ mod tests {
         ])
         .await;
         let agent = gateway.claude_agent().unwrap();
-        gateway
-            .draining
-            .store(true, std::sync::atomic::Ordering::Release);
+        gateway.draining.send_replace(true);
         agent
             .record_turn_recovery("claude_exact", "original", TurnRecovery::Pending)
             .await
@@ -401,9 +399,7 @@ mod tests {
             .unwrap();
         assert_eq!(pending["activity"], "recovering");
         assert_eq!(pending["outcome"]["state"], "unknown");
-        gateway
-            .draining
-            .store(false, std::sync::atomic::Ordering::Release);
+        gateway.draining.send_replace(false);
         let stale = gateway
             .inspect_execution(json!({"threadId":"claude_exact","turnId":"original"}))
             .await
@@ -667,9 +663,7 @@ mod tests {
             .recovered_turn_keys
             .insert(TurnKey::new("ours", "exact"));
         for (draining, activity) in [(false, "running"), (true, "recovering")] {
-            gateway
-                .draining
-                .store(draining, std::sync::atomic::Ordering::Release);
+            gateway.draining.send_replace(draining);
             let result = gateway
                 .inspect_execution(json!({"threadId":"ours","turnId":"exact"}))
                 .await
@@ -680,9 +674,7 @@ mod tests {
                 assert_eq!(result["outcome"]["reason"], "turnRunning");
             }
         }
-        gateway
-            .draining
-            .store(false, std::sync::atomic::Ordering::Release);
+        gateway.draining.send_replace(false);
         assert!(
             gateway
                 .core
