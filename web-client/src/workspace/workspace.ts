@@ -28,7 +28,7 @@ import {
 } from "../protocol/boundary";
 import type { MarkdownBlocks } from "../rendering";
 import type { AccountUsageSnapshot, AccountUsageStore } from "./account-usage-store";
-import { blank, ComposerDraftStore, type Draft } from "./composer-draft-store";
+import { blank, ComposerDraftStore, type Draft, maximumDraftCount } from "./composer-draft-store";
 import { contextWindowUsage } from "./context-window-usage";
 import {
   type ConversationDrawerMode,
@@ -920,7 +920,8 @@ export class Workspace {
     else this.publish();
     return drawerUndo(1, () => {
       if (this.drafts.get(key)) throw new Error("A draft already occupies this saved location");
-      if (this.drafts.snapshot.size >= 32) throw new Error("Discard another draft before restoring this one");
+      if (this.drafts.snapshot.size >= maximumDraftCount)
+        throw new Error("Discard another draft before restoring this one");
       const previous = this.drafts.snapshot;
       this.drafts.restoreSnapshot(new Map([...previous, [key, draft]]));
       try {

@@ -24,6 +24,8 @@ import {
   type ComposerDraftStore,
   type Draft,
   fastServiceTier,
+  maximumDraftDocumentLength,
+  maximumDraftTextLength,
   reportedServiceTier,
   supportedServiceTier,
 } from "./composer-draft-store";
@@ -604,7 +606,7 @@ export class TurnDispatcher {
     const text = alreadyInDraft
       ? draft.text
       : [draft.text, input.text].filter((text) => text.length).join("\n");
-    if (text.length > 256000)
+    if (text.length > maximumDraftTextLength)
       throw new Error("Restoring this steer would exceed the saved draft text capacity");
     const previousDrafts = this.drafts.snapshot;
     this.drafts.update(
@@ -616,7 +618,7 @@ export class TurnDispatcher {
       key,
     );
     try {
-      if (JSON.stringify([...this.drafts.snapshot]).length > 1024 * 1024)
+      if (JSON.stringify([...this.drafts.snapshot]).length > maximumDraftDocumentLength)
         throw new Error("Restoring this steer would exceed the saved draft capacity");
       this.drafts.persist(true);
       this.receipts.delete(clientId);

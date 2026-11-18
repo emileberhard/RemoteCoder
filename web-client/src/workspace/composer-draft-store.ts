@@ -51,9 +51,9 @@ export function supportedServiceTier(
 }
 
 const draftStorageKey = "remotecoder.web.drafts.v1";
-const maximumDraftDocumentLength = 1024 * 1024;
-const maximumDraftTextLength = 256_000;
-const maximumDraftCount = 32;
+export const maximumDraftDocumentLength = 1024 * 1024;
+export const maximumDraftTextLength = 256_000;
+export const maximumDraftCount = 32;
 
 function restorableDraft(key: unknown, draft: Record<string, unknown>) {
   return (
@@ -64,15 +64,15 @@ function restorableDraft(key: unknown, draft: Record<string, unknown>) {
   );
 }
 
-function serializeDrafts(drafts: ReadonlyMap<string, Draft>) {
-  const raw = JSON.stringify([...drafts]);
-  if (raw.length > maximumDraftDocumentLength || drafts.size > maximumDraftCount)
+function serializeDictationDrafts(drafts: ReadonlyMap<string, Draft>) {
+  if (
+    drafts.size > maximumDraftCount ||
+    [...drafts.values()].some((draft) => draft.text.length > maximumDraftTextLength)
+  )
     throw new Error("The draft exceeds browser storage limits. Keep this tab open until it is sent.");
-  for (const pair of array(JSON.parse(raw), maximumDraftCount)) {
-    const [key, value] = array(pair, 2);
-    if (!restorableDraft(key, object(value)))
-      throw new Error("The draft exceeds browser storage limits. Keep this tab open until it is sent.");
-  }
+  const raw = JSON.stringify([...drafts]);
+  if (raw.length > maximumDraftDocumentLength)
+    throw new Error("The draft exceeds browser storage limits. Keep this tab open until it is sent.");
   return raw;
 }
 
@@ -156,7 +156,7 @@ export class ComposerDraftStore {
     if (!draft) throw new Error("The original dictation draft is unavailable; the recording was retained.");
     const candidate = this.candidate({ text: [draft.text.trimEnd(), text].filter(Boolean).join("\n") }, key);
     if (!this.storage) throw new Error("Browser draft storage is unavailable. Keep this tab open.");
-    const serialized = serializeDrafts(candidate);
+    const serialized = serializeDictationDrafts(candidate);
     try {
       this.storage.setItem(draftStorageKey, serialized);
     } catch {
@@ -167,16 +167,8 @@ export class ComposerDraftStore {
     this.publish();
   }
   persist(required = false) {
-    let serialized: string;
     try {
-      serialized = serializeDrafts(this.drafts);
-    } catch (error) {
-      if (required) throw error;
-      this.report(error);
-      return;
-    }
-    try {
-      this.storage?.setItem(draftStorageKey, serialized);
+      this.storage?.setItem(draftStorageKey, JSON.stringify([...this.drafts]));
     } catch {
       if (required)
         throw new Error("The browser could not save your draft. Keep this tab open until it is sent.");

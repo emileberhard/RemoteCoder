@@ -23,6 +23,30 @@ import {
 
 afterEach(cleanupWorkspaces);
 
+test.each(["send", "queue"] as const)(
+  "%s still submits a short draft when other drafts exceed the document restore limit",
+  async (mode) => {
+    const storage = new MemoryStorage();
+    const { workspace, harness } = await setup(["mini"], storage);
+    for (let index = 0; index < 5; index += 1) {
+      const key = addressKey({ hostId: "mini", threadId: `other-${index}` });
+      workspace.updateDraft({ text: "a".repeat(index === 0 ? 213_000 : 209_000) }, key);
+    }
+    await workspace.selectConversation({ hostId: "mini", threadId: "shared" });
+    workspace.updateDraft({ text: "Short prompt" });
+    workspace.flushDrafts();
+    expect(storage.getItem("remotecoder.web.drafts.v1")?.length).toBeGreaterThan(1024 * 1024);
+    await workspace.send(mode);
+    const request = harness.calls.find(
+      (call) => call.method === (mode === "queue" ? "thread/queue/add" : "turn/start"),
+    );
+    expect(request?.params).toMatchObject({
+      threadId: "shared",
+      input: [{ type: "text", text: "Short prompt" }],
+    });
+  },
+);
+
 test("ultrafast readback survives browser changes and dispatch until Fast is explicitly changed", async () => {
   let harness: Harness | undefined;
   const workspace = new Workspace((_host, event) => (harness = new Harness(event)), new MemoryStorage());
