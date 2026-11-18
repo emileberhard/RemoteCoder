@@ -56,7 +56,7 @@ export class BrowserDictation {
           if (!navigator.mediaDevices?.getUserMedia)
             throw new Error("Microphone capture requires HTTPS or localhost");
           return navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true },
+            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
           });
         })
       )();
