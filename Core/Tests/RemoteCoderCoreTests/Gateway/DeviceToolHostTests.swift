@@ -109,7 +109,7 @@ struct DeviceToolHostTests {
         let gateway = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(port)")),
             authToken: "fixture", hostLabel: "Fixture"), routes: nil, browserDictation: binding)
         let notifications = await gateway.notifications()
-        let next = Task { await notifications.first { $0.method == "test/afterHost" || $0.method == "dictation/host/transcribe" } }
+        let next = Task { await notifications.first { $0.method == "test/afterHost" || $0.method.hasPrefix("dictation/host/") } }
         defer { next.cancel() }
         do {
             try await gateway.connectIfNeeded()
@@ -117,6 +117,7 @@ struct DeviceToolHostTests {
                 "operationId": .string("one"), "path": .string("/upload/recording.wav"),
                 "deadlineUnixMs": .number(Double(Int64(Date.now.timeIntervalSince1970 * 1000) + 60_000))
             ]))))
+            try await fixture.send(.notification(.init(method: "dictation/host/future", params: .object([:]))))
             try await fixture.send(.notification(.init(method: "test/afterHost", params: .object([:]))))
             #expect(await next.value?.method == "test/afterHost")
             let result = await fixture.requests.first { $0.method == "dictation/host/result" }

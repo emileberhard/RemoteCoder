@@ -1396,7 +1396,8 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     }
 
     private func routeBrowserDictationNotification(method: String, params: JSONValue?, generation: UUID) async -> Bool {
-        guard method == "dictation/host/transcribe" || method == "dictation/host/cancel" else { return false }
+        guard method.hasPrefix("dictation/host/") else { return false }
+        guard method == "dictation/host/transcribe" || method == "dictation/host/cancel" else { return true }
         guard let browserDictation else { return true }
         do {
             guard generation == connectionGeneration, let params else { throw ClientError.invalidMessage }
