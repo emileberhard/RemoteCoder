@@ -127,6 +127,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private var browserMayHaveDeclared = false
     private var browserDictationActive: String?
     private var browserDeclaration: (id: UUID, task: Task<Void, Never>)?
+    private var browserAdmission: (id: UUID, task: Task<Void, Never>)?
     private var deviceResultTasks: [UUID: Task<Void, Never>] = [:]
     private var browserDictationResultTasks: [UUID: Task<Void, Never>] = [:]
     let timeouts: Timeouts
@@ -725,7 +726,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     }
 
     var isIdleForRouteHandover: Bool {
-        isConnected && connectionInFlight == nil && pending.isEmpty && browserDictationActive == nil && browserDictationResultTasks.isEmpty
+        isConnected && connectionInFlight == nil && pending.isEmpty && browserAdmission == nil && browserDictationActive == nil && browserDictationResultTasks.isEmpty
     }
 
     /// Retirement is terminal: late callbacks cannot reconnect a removed host.
@@ -792,6 +793,8 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         connectionGeneration = UUID()
         browserDeclaration?.task.cancel()
         browserDeclaration = nil
+        browserAdmission?.task.cancel()
+        browserAdmission = nil
         browserDeclaredServing = nil
         browserLastSentServing = nil
         browserMayHaveDeclared = false
@@ -1362,11 +1365,11 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         return true
     }
 
-    func browserDictationRoleChanged() {
+    func browserDictationRoleChanged() async {
         guard browserDictation != nil else { return }
         browserDeclarationRevision += 1
-        guard didInitialize, webSocket != nil else { return }
-        _ = queueBrowserDeclaration(generation: connectionGeneration)
+        if didInitialize, webSocket != nil { _ = queueBrowserDeclaration(generation: connectionGeneration) }
+        await browserAdmission?.task.value
     }
 
     private func queueBrowserDeclaration(generation: UUID) -> Task<Void, Never> {
@@ -1424,31 +1427,48 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                 await browserDictation.host.cancel(try JSONDecoder().decode(BrowserDictationCancel.self, from: data), generation: generation)
             } else {
                 let request = try JSONDecoder().decode(BrowserDictationRequest.self, from: data)
-                let enabled = await browserDictation.enabled()
-                guard generation == connectionGeneration else { return true }
-                guard enabled, browserLastSentServing == true else {
-                    scheduleBrowserDictationResult(BrowserDictationResult(operationId: request.operationId, outcome: .failed), generation: generation)
-                    return true
+                let id = UUID()
+                let revision = browserDeclarationRevision
+                let task = Task { [weak self] in
+                    guard let self else { return }
+                    await self.admitBrowserDictation(request, binding: browserDictation, generation: generation, revision: revision)
                 }
-                if let active = browserDictationActive {
-                    if active != request.operationId {
-                        scheduleBrowserDictationResult(BrowserDictationResult(operationId: request.operationId, outcome: .failed, reason: "busy"), generation: generation)
-                    }
-                    return true
-                }
-                browserDictationActive = request.operationId
-                let result = await browserDictation.host.invoke(request, generation: generation, execute: browserDictation.execute) { [weak self] result in
-                    await self?.deliverBrowserDictationResult(result, generation: generation)
-                }
-                if let result {
-                    if generation == connectionGeneration, browserDictationActive == request.operationId { browserDictationActive = nil }
-                    scheduleBrowserDictationResult(result, generation: generation)
-                }
+                browserAdmission = (id, task)
+                await task.value
+                if browserAdmission?.id == id { browserAdmission = nil }
             }
         } catch {
             logger.error("Invalid browser dictation notification: \(error.localizedDescription)")
         }
         return true
+    }
+
+    private func admitBrowserDictation(_ request: BrowserDictationRequest, binding: BrowserDictationConnection,
+                                       generation: UUID, revision: Int) async {
+        let enabled = await binding.enabled()
+        guard generation == connectionGeneration, !Task.isCancelled else { return }
+        guard enabled, revision == browserDeclarationRevision, browserLastSentServing == true else {
+            scheduleBrowserDictationResult(BrowserDictationResult(operationId: request.operationId, outcome: .failed), generation: generation)
+            return
+        }
+        if let active = browserDictationActive {
+            if active != request.operationId {
+                scheduleBrowserDictationResult(BrowserDictationResult(operationId: request.operationId, outcome: .failed, reason: "busy"), generation: generation)
+            }
+            return
+        }
+        browserDictationActive = request.operationId
+        let result = await binding.host.invoke(request, generation: generation, execute: binding.execute) { [weak self] result in
+            await self?.deliverBrowserDictationResult(result, generation: generation)
+        }
+        guard generation == connectionGeneration, !Task.isCancelled else {
+            await binding.host.connectionLost(generation: generation)
+            return
+        }
+        if let result {
+            if browserDictationActive == request.operationId { browserDictationActive = nil }
+            scheduleBrowserDictationResult(result, generation: generation)
+        }
     }
 
     private func deliverBrowserDictationResult(_ result: BrowserDictationResult, generation: UUID) async {

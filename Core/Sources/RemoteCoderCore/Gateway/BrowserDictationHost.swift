@@ -27,7 +27,7 @@ struct BrowserDictationResult: Codable, Sendable {
 
 struct BrowserDictationConnection: Sendable {
     let host: BrowserDictationHost
-    let enabled: @Sendable @MainActor () -> Bool
+    let enabled: @Sendable @MainActor () async -> Bool
     let execute: @Sendable (BrowserDictationRequest) async throws -> BrowserDictationOutput
 }
 
