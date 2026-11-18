@@ -598,6 +598,7 @@ async fn a_client_without_codex_is_served_and_moved_to_codex_once_it_is_ready() 
     let ready = next_json(&mut socket).await;
     assert_eq!(ready["method"], "daemon/ready");
     assert_eq!(ready["params"]["providers"]["codex"], not_running);
+    assert_eq!(ready["params"]["capabilities"]["claudeAccount"], true);
 
     send_json(
         &mut socket,

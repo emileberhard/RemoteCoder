@@ -535,7 +535,12 @@ async def cmd_claude_turn(args: argparse.Namespace) -> int:
                 item = params.get("item") or {}
                 print(f"  [{method}] {item.get('type')} {str(item.get('id') or '')}")
 
-        async with _turn_connection(args, args.timeout, record) as (ws, _ready):
+        async with _turn_connection(args, args.timeout, record) as (ws, ready):
+            params = ready.get("params")
+            capabilities = params.get("capabilities") if isinstance(params, dict) else None
+            if args.claude_account and (not isinstance(capabilities, dict) or capabilities.get("claudeAccount") is not True):
+                record({"type": "dispatch.not_started", "retryable": False})
+                raise RuntimeError("This gateway does not support Claude account preferences; upgrade it before dispatch")
             ids = iter(range(1, 1_000_000))
             thread_id = ""
 

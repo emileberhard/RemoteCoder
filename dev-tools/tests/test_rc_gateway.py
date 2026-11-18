@@ -1075,7 +1075,7 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
                 requests = []
 
                 async def respond(connection, requests=requests) -> None:
-                    await connection.send(json.dumps({"method": "ready", "params": {}}))
+                    await connection.send(json.dumps({"method": "ready", "params": {"capabilities": {"claudeAccount": True}}}))
                     async for raw in connection:
                         request = json.loads(raw)
                         if "id" not in request:
@@ -1103,6 +1103,38 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(call["params"]["claudeAccount"], "emileberhard388")
                 if not resume:
                     self.assertFalse(calls[0]["params"]["acceptProviderFallback"])
+
+    async def test_claude_account_refuses_older_gateway_before_dispatch(self) -> None:
+        import tempfile
+        from websockets.asyncio.server import serve
+
+        for resume in (False, True):
+            with self.subTest(resume=resume), tempfile.TemporaryDirectory() as directory:
+                requests = []
+
+                async def respond(connection) -> None:
+                    await connection.send(json.dumps({"method": "ready", "params": {"capabilities": {"cancelRequest": True}}}))
+                    async for raw in connection:
+                        request = json.loads(raw)
+                        requests.append(request["method"])
+                        if "id" in request:
+                            await connection.send(json.dumps({"id": request["id"], "result": {}}))
+
+                event_log = Path(directory) / "gateway.jsonl"
+                flags = ["claude-turn", "run", "--claude-account", "first", "--event-log", str(event_log)]
+                if resume:
+                    flags.extend(["--resume", "claude_fixture"])
+                args = gateway_cli.build_parser().parse_args(flags)
+                async with serve(respond, "127.0.0.1", 0) as server:
+                    config = gateway_config.GatewayConfig("127.0.0.1", server.sockets[0].getsockname()[1], "synthetic", "ws")
+                    with patch.object(gateway_cli, "_resolve_config", return_value=config):
+                        with self.assertRaisesRegex(RuntimeError, "does not support Claude account"):
+                            await args.func(args)
+                self.assertNotIn("thread/start", requests)
+                self.assertNotIn("turn/start", requests)
+                rows = [json.loads(line) for line in event_log.read_text().splitlines()]
+                self.assertEqual([row for row in rows if row.get("type") == "dispatch.not_started"],
+                                 [{"type": "dispatch.not_started", "retryable": False}])
 
     async def test_fresh_commands_follow_the_admitted_provider_model_and_effort(self) -> None:
         import tempfile

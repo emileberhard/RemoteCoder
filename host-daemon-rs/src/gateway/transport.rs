@@ -123,7 +123,7 @@ impl Gateway {
         let ready = serde_json::json!({
             "notificationEpoch": notification_epoch,
             "notificationSequence": opened_after,
-            "capabilities": {"cancelRequest": true}
+            "capabilities": {"cancelRequest": true, "claudeAccount": true}
         });
         self.admit_client(&out_tx, upstream.is_none(), ready);
         if waiting_for_codex && self.codex_ready().await {
