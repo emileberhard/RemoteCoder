@@ -409,7 +409,7 @@ final class VoiceCall {
     func startWithLiveActivity(using model: any VoiceCallHost) async throws {
         await orphanedLiveActivityCleanup.value
         while let teardownTask { await teardownTask.value }
-        guard model.acceptsWork else { return }
+        guard model.acceptsWork else { throw VoiceCallUnavailable(message: "This host is no longer available.") }
         let callID = lifecycle.callID ?? UUID()
         if liveActivity?.isOngoing != true {
             liveActivity = try .request(callID: callID, hostName: model.hostDisplayName, state: liveActivityState)

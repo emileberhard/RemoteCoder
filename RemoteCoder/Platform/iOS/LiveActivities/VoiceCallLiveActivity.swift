@@ -26,7 +26,7 @@ final class VoiceCallLiveActivity {
         do {
             let activity = try Activity.request(
                 attributes: RemoteCoderVoiceCallAttributes(
-                    callID: callID, startedAt: .now, hostName: hostName.prefix(utf8Bytes: 64)
+                    callID: callID, startedAt: .now, hostName: hostName.displayPrefix(utf8Bytes: 64)
                 ),
                 content: Self.content(state)
             )
@@ -60,8 +60,8 @@ final class VoiceCallLiveActivity {
 
     private static func content(_ state: ContentState) -> ActivityContent<ContentState> {
         var bounded = state
-        bounded.title = state.title?.prefix(utf8Bytes: 128)
-        bounded.caption = state.caption?.prefix(utf8Bytes: 512)
+        bounded.title = state.title?.displayPrefix(utf8Bytes: 128)
+        bounded.caption = state.caption?.displayPrefix(utf8Bytes: 512)
         return ActivityContent(state: bounded, staleDate: nil, relevanceScore: 1_000)
     }
 
@@ -74,14 +74,16 @@ final class VoiceCallLiveActivity {
 }
 
 private extension String {
-    func prefix(utf8Bytes limit: Int) -> String {
+    func displayPrefix(utf8Bytes limit: Int) -> String {
+        var result = ""
         var bytes = 0
-        var end = startIndex
         for character in self {
-            bytes += character.utf8.count
+            let isControl = character.unicodeScalars.contains { $0.properties.generalCategory == .control }
+            let shown: Character = isControl ? " " : character
+            bytes += shown.utf8.count
             guard bytes <= limit else { break }
-            end = index(after: end)
+            result.append(shown)
         }
-        return String(self[..<end])
+        return result
     }
 }
