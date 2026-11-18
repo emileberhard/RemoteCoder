@@ -20,6 +20,29 @@ use tokio::sync::MutexGuard;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::{debug, info, warn};
 
+fn account_replacement_ready(
+    runtime: Option<&ClaudeRuntime>,
+    group: i32,
+    evidence: WakeEvidence,
+) -> Result<&ClaudeRuntime, TurnStartError> {
+    let runtime = runtime
+        .filter(|runtime| runtime.process_group_id == group)
+        .ok_or_else(|| TurnStartError {
+            data: None,
+            code: RpcCode::ServerBusy,
+            message: "Claude runtime changed while checking scheduled work; retry".into(),
+        })?;
+    if matches!(evidence, WakeEvidence::Unreadable)
+        || matches!(
+            IdlePolicy::eligibility(runtime, evidence, tokio::time::Instant::now()),
+            IdleEligibility::Busy
+        )
+    {
+        return Err(TurnStartError { data: None, code: RpcCode::ServerBusy, message: "Claude has active work or scheduled work could not be checked; retry when it finishes or its transcript is readable".into() });
+    }
+    Ok(runtime)
+}
+
 impl ClaudeSupervisor {
     /// Starts a turn and returns its id once the prompt reaches Claude's stdin.
     ///
@@ -167,26 +190,20 @@ impl ClaudeSupervisor {
             .get(&request.thread_id)
             .filter(|runtime| runtime.claude_account != request.claude_account)
             .map(|runtime| runtime.process_group_id);
+        let mut early_admission = None;
+        let mut prepared_runtime = None;
         let retired_account = if let Some(group) = account_group {
             let evidence = self.refresh_wakes(&request.thread_id, group).await;
-            let mut runtimes = self.runtimes.lock().await;
-            let runtime = runtimes
-                .get(&request.thread_id)
-                .filter(|runtime| runtime.process_group_id == group)
-                .ok_or_else(|| TurnStartError {
-                    data: None,
-                    code: RpcCode::ServerBusy,
-                    message: "Claude runtime changed while checking scheduled work; retry".into(),
-                })?;
-            let now = tokio::time::Instant::now();
-            if matches!(evidence, WakeEvidence::Unreadable)
-                || matches!(
-                    IdlePolicy::eligibility(runtime, evidence, now),
-                    IdleEligibility::Busy | IdleEligibility::WakesUnreadable
-                )
             {
-                return Err(TurnStartError { data: None, code: RpcCode::ServerBusy, message: "Claude has active work or scheduled work could not be checked; retry when it finishes or its transcript is readable".into() });
+                let runtimes = self.runtimes.lock().await;
+                account_replacement_ready(runtimes.get(&request.thread_id), group, evidence)?;
             }
+            early_admission = Some(self.reserve_start(&request).await?);
+            prepared_runtime = Some(self.prepare_runtime(&request, &policy, &route)?);
+            let mut runtimes = self.runtimes.lock().await;
+            let runtime =
+                account_replacement_ready(runtimes.get(&request.thread_id), group, evidence)?;
+            let now = tokio::time::Instant::now();
             for wake in runtime.wakes.scheduled(now, SystemTime::now()) {
                 if let crate::providers::claude::wake_hold::ScheduledWork::Loop { next_wake } = wake
                 {
@@ -271,7 +288,10 @@ impl ClaudeSupervisor {
                 return Ok(turn_id);
             }
         }
-        let _admission = self.reserve_start(&request).await?;
+        let _admission = match early_admission {
+            Some(admission) => admission,
+            None => self.reserve_start(&request).await?,
+        };
 
         let (turn_id, mut translator) = self.new_turn(&request.thread_id, &request.cwd);
         self.record_job_turn(&request.thread_id, &policy, &turn_id)
@@ -349,7 +369,11 @@ impl ClaudeSupervisor {
                 )
             } else {
                 drop(runtimes);
-                let spawned = self.spawn_runtime(&request, &policy, &route)?;
+                let runtime = match prepared_runtime {
+                    Some(runtime) => runtime,
+                    None => self.prepare_runtime(&request, &policy, &route)?,
+                };
+                let spawned = self.spawn_runtime(&request, &policy, runtime)?;
                 let slot = spawned.runtime.input.reserve().await?;
                 let process_admission = spawned.admission;
                 let process_group_id = spawned.process_group_id;

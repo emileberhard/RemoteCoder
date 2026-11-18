@@ -20,6 +20,12 @@ use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 use tracing::warn;
 
+pub(super) struct PreparedRuntime {
+    command: ClaudeCommand,
+    mcp: Option<McpRuntimeAccess>,
+    wakes: WakeHold,
+}
+
 impl ClaudeSupervisor {
     fn session_launch_history(
         &self,
@@ -193,12 +199,10 @@ impl ClaudeSupervisor {
         Ok(())
     }
 
-    pub(super) fn spawn_runtime(
+    pub(super) fn validate_runtime_launch(
         &self,
         request: &ClaudeTurnRequest,
-        launch: &super::jobs::LaunchPolicy,
-        route: &claude_exec::Route,
-    ) -> Result<SpawnedRuntime, TurnStartError> {
+    ) -> Result<Option<PathBuf>, TurnStartError> {
         let history = match self.session_launch_history(request) {
             Ok(history) => history,
             Err(message) => {
@@ -237,7 +241,17 @@ impl ClaudeSupervisor {
                 ),
             });
         }
-        self.spawn_process(request, launch, history.as_deref(), route)
+        Ok(history)
+    }
+
+    pub(super) fn prepare_runtime(
+        &self,
+        request: &ClaudeTurnRequest,
+        launch: &super::jobs::LaunchPolicy,
+        route: &claude_exec::Route,
+    ) -> Result<PreparedRuntime, TurnStartError> {
+        let history = self.validate_runtime_launch(request)?;
+        self.prepare_process(request, launch, history.as_deref(), route)
             .map_err(|err| TurnStartError {
                 data: None,
                 code: RpcCode::Internal,
@@ -245,13 +259,13 @@ impl ClaudeSupervisor {
             })
     }
 
-    fn spawn_process(
+    fn prepare_process(
         &self,
         request: &ClaudeTurnRequest,
         launch: &super::jobs::LaunchPolicy,
         history: Option<&Path>,
         route: &claude_exec::Route,
-    ) -> std::io::Result<SpawnedRuntime> {
+    ) -> std::io::Result<PreparedRuntime> {
         let wakes = if request.first_turn {
             WakeHold::default()
         } else {
@@ -261,13 +275,6 @@ impl ClaudeSupervisor {
                     .map_or(0, |metadata| metadata.len()),
             )
         };
-        let mut registry = self
-            .process_registry
-            .lock()
-            .expect("Claude process registry poisoned");
-        if registry.closing {
-            return Err(std::io::Error::other("Claude runtime owner is stopping"));
-        }
         // Tools ride each spawn: nothing is written to Claude's own config, so
         // they follow the runtime's dimensions and vanish when it retires.
         let mcp = match launch.scope() {
@@ -320,6 +327,42 @@ impl ClaudeSupervisor {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        Ok(PreparedRuntime {
+            command,
+            mcp,
+            wakes,
+        })
+    }
+
+    pub(super) fn spawn_runtime(
+        &self,
+        request: &ClaudeTurnRequest,
+        launch: &super::jobs::LaunchPolicy,
+        prepared: PreparedRuntime,
+    ) -> Result<SpawnedRuntime, TurnStartError> {
+        self.spawn_prepared_runtime(request, launch, prepared)
+            .map_err(|err| TurnStartError {
+                data: None,
+                code: RpcCode::Internal,
+                message: format!("failed to spawn claude in {}: {err}", request.cwd),
+            })
+    }
+
+    fn spawn_prepared_runtime(
+        &self,
+        request: &ClaudeTurnRequest,
+        launch: &super::jobs::LaunchPolicy,
+        prepared: PreparedRuntime,
+    ) -> std::io::Result<SpawnedRuntime> {
+        let PreparedRuntime {
+            command,
+            mcp,
+            wakes,
+        } = prepared;
+        let mut registry = self
+            .process_registry
+            .lock()
+            .expect("Claude process registry poisoned");
         let OwnedGroup {
             admission,
             process_group_id,

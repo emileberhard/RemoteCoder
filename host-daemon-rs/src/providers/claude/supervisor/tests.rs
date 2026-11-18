@@ -783,6 +783,35 @@ async fn account_changes_require_a_new_claude_process() {
                     json!({"scheduledFor": crate::time::unix_millis() + 1_800_000, "clampedDelaySeconds": 1800, "wasClamped": false}),
                 ),
             );
+            let invalid_cwd = home.root_path().join("not-a-directory");
+            fs::write(&invalid_cwd, b"file").unwrap();
+            let mut blocked = request(&thread, false);
+            blocked.cwd = invalid_cwd.to_string_lossy().into_owned();
+            blocked.claude_account = Some("second".into());
+            let error = agent.start_turn(blocked).await.unwrap_err();
+            assert_eq!(error.code, RpcCode::InvalidParams);
+            assert!(error.message.contains("not a directory"));
+            assert_eq!(agent.runtimes.lock().await[&thread].process_group_id, pid);
+
+            let key = home.root_path().join("router-key");
+            let held_key = home.root_path().join("router-key-held");
+            fs::rename(&key, &held_key).unwrap();
+            let mut blocked = request(&thread, false);
+            blocked.cwd = cwd.clone();
+            blocked.claude_account = Some("second".into());
+            let error = agent.start_turn(blocked).await.unwrap_err();
+            assert_eq!(error.code, RpcCode::Internal);
+            assert_eq!(agent.runtimes.lock().await[&thread].process_group_id, pid);
+            fs::rename(&held_key, &key).unwrap();
+
+            let mut blocked = request(&thread, false);
+            blocked.cwd = cwd.clone();
+            blocked.claude_account = Some("second".into());
+            let reservation = agent.reserve_start(&blocked).await.unwrap();
+            let error = agent.start_turn(blocked).await.unwrap_err();
+            assert_eq!(error.code, RpcCode::ServerBusy);
+            assert_eq!(agent.runtimes.lock().await[&thread].process_group_id, pid);
+            drop(reservation);
         }
         if index == 2 {
             let received =
@@ -791,7 +820,11 @@ async fn account_changes_require_a_new_claude_process() {
                 .lines()
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect();
-            let content = frames[2]["message"]["content"].to_string();
+            let content = frames
+                .iter()
+                .map(|frame| frame["message"]["content"].to_string())
+                .find(|content| content.contains("Your /loop wake-up due at"))
+                .expect("replacement input carries the loop notice");
             assert!(content.contains("Your /loop wake-up due at"), "{content}");
             assert!(content.contains("call ScheduleWakeup again"), "{content}");
             append_transcript(
@@ -1238,13 +1271,14 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
     };
     agent.recover_stored_cwd(&mut turn, &full).await.unwrap();
     assert_eq!(Path::new(&turn.cwd), cwd);
-    let mut spawned = agent
-        .spawn_runtime(
+    let prepared = agent
+        .prepare_runtime(
             &turn,
             &full,
             &crate::providers::claude::exec::Route::Default,
         )
         .unwrap();
+    let mut spawned = agent.spawn_runtime(&turn, &full, prepared).unwrap();
     let mut lines = BufReader::new(&mut spawned.stdout).lines();
     let observed = tokio::time::timeout(Duration::from_secs(5), async {
         let mut lines_seen = Vec::new();
@@ -1288,14 +1322,7 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
         .recover_stored_cwd(&mut arbitrary, &full)
         .await
         .unwrap();
-    let error = agent
-        .spawn_runtime(
-            &arbitrary,
-            &full,
-            &crate::providers::claude::exec::Route::Default,
-        )
-        .err()
-        .unwrap();
+    let error = agent.validate_runtime_launch(&arbitrary).err().unwrap();
     assert_eq!(error.code, RpcCode::InvalidParams);
     assert!(error.message.contains(&arbitrary.cwd));
     let restricted = super::jobs::LaunchPolicy::Conversation {
@@ -1309,15 +1336,7 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
         .await
         .unwrap();
     assert_eq!(Path::new(&turn.cwd), missing);
-    assert!(
-        agent
-            .spawn_runtime(
-                &turn,
-                &restricted,
-                &crate::providers::claude::exec::Route::Default
-            )
-            .is_err()
-    );
+    assert!(agent.validate_runtime_launch(&turn).is_err());
     drop(spawned);
     turn.cwd = cwd.to_string_lossy().into_owned();
     let duplicate = crate::providers::claude::timeline::session_path_for_cwd(
@@ -1327,14 +1346,7 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
     );
     fs::create_dir_all(duplicate.parent().unwrap()).unwrap();
     fs::copy(&transcript, &duplicate).unwrap();
-    let error = agent
-        .spawn_runtime(
-            &turn,
-            &full,
-            &crate::providers::claude::exec::Route::Default,
-        )
-        .err()
-        .unwrap();
+    let error = agent.validate_runtime_launch(&turn).err().unwrap();
     assert!(error.message.contains("duplicate Claude session UUID"));
 }
 
