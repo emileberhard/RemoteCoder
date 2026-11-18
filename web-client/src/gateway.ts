@@ -207,6 +207,13 @@ export class GatewayConnection implements Rpc {
       const abort = () => {
         this.pending.delete(id);
         cleanup();
+        if (method === "dictation/transcribe" && socket.readyState === WebSocket.OPEN) {
+          try {
+            socket.send(JSON.stringify({ method: "$/cancelRequest", params: { id } }));
+          } catch {
+            socket.close();
+          }
+        }
         reject(new DOMException("Canceled", "AbortError"));
       };
       const timer = setTimeout(() => {

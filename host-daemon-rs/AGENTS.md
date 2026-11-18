@@ -867,6 +867,8 @@ blocks startup or provider journal retirement.
 
 Browser dictation's gateway relay owns only bounded operations and connection
 lifetimes; it never interprets audio or transcripts. A timeout stays unknown.
+The journal excludes dictation transcripts, and request cancellation drops the
+relay operation and sends host cancellation.
 See `docs/browser-dictation.md`.
 
 `GET /dictation` requires an authorized gateway caller admitted by the shared

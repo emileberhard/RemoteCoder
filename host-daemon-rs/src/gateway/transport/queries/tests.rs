@@ -110,6 +110,23 @@ impl Connection {
 }
 
 #[tokio::test]
+async fn command_cancellation_is_scoped_to_the_exact_connection_and_id() {
+    let mut first = Connection::new();
+    let mut second = Connection::new();
+    let first_work = first.queries.register_command(&json!("one")).unwrap();
+    let second_work = second.queries.register_command(&json!("one")).unwrap();
+    first.cancel("other").await;
+    assert!(!first_work.cancellation.is_cancelled());
+    first.cancel("one").await;
+    assert_eq!(first.response().await["error"]["code"], -32800);
+    assert!(first_work.cancellation.is_cancelled());
+    assert!(!second_work.cancellation.is_cancelled());
+    assert!(!first_work.response.claim());
+    drop(first_work);
+    assert!(first.queries.register_command(&json!("one")).is_ok());
+}
+
+#[tokio::test]
 async fn burst_beyond_eight_waits_and_finishes_in_fifo_order() {
     let mut connection = Connection::new();
     let gateway = Arc::clone(&connection.gateway);

@@ -7,11 +7,11 @@ use crate::tasks::owned_tasks::OwnedTasks;
 use anyhow::{Context as _, Result};
 use futures_util::future::{BoxFuture, poll_fn};
 use serde_json::{Map, Value, json};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Instant, Sleep};
@@ -47,6 +47,32 @@ impl ResponseClaim {
 
     pub(in crate::gateway) fn claim(&self) -> bool {
         !self.0.swap(true, Ordering::AcqRel)
+    }
+}
+
+struct CommandEntry {
+    serial: u64,
+    cancellation: CancellationToken,
+    response: Arc<ResponseClaim>,
+}
+
+pub(super) struct CancellableCommand {
+    key: String,
+    serial: u64,
+    entries: Arc<Mutex<HashMap<String, CommandEntry>>>,
+    pub cancellation: CancellationToken,
+    pub response: Arc<ResponseClaim>,
+}
+
+impl Drop for CancellableCommand {
+    fn drop(&mut self) {
+        let mut entries = self.entries.lock().expect("command cancellation poisoned");
+        if entries
+            .get(&self.key)
+            .is_some_and(|entry| entry.serial == self.serial)
+        {
+            entries.remove(&self.key);
+        }
     }
 }
 
@@ -100,6 +126,8 @@ pub(super) struct ConnectionQueries {
     admitting: Option<AdmissionFuture>,
     running: Vec<RunningQuery>,
     tasks: Arc<OwnedTasks>,
+    commands: Arc<Mutex<HashMap<String, CommandEntry>>>,
+    next_command: u64,
 }
 
 impl ConnectionQueries {
@@ -113,7 +141,59 @@ impl ConnectionQueries {
             admitting: None,
             running: Vec::new(),
             tasks,
+            commands: Arc::default(),
+            next_command: 0,
         }
+    }
+
+    pub fn register_command(&mut self, id: &Value) -> Result<CancellableCommand, RpcError> {
+        let key = id.to_string();
+        let query_pending = self
+            .queued
+            .iter()
+            .any(|query| query.request.object["id"] == *id)
+            || self.running.iter().any(|query| query.info.id == *id);
+        let mut entries = self.commands.lock().expect("command cancellation poisoned");
+        if id.is_null() || query_pending || entries.contains_key(&key) {
+            return Err(RpcError::new(
+                RpcCode::InvalidRequest,
+                "Request id is already pending",
+            ));
+        }
+        if entries.len() >= 4 {
+            return Err(capacity_error("connection dictation commands"));
+        }
+        let serial = self.next_command;
+        self.next_command = self.next_command.wrapping_add(1);
+        let cancellation = CancellationToken::new();
+        let response = Arc::new(ResponseClaim::default());
+        entries.insert(
+            key.clone(),
+            CommandEntry {
+                serial,
+                cancellation: cancellation.clone(),
+                response: Arc::clone(&response),
+            },
+        );
+        Ok(CancellableCommand {
+            key,
+            serial,
+            entries: Arc::clone(&self.commands),
+            cancellation,
+            response,
+        })
+    }
+
+    pub fn cancel_command(&mut self, id: &Value) -> bool {
+        let entries = self.commands.lock().expect("command cancellation poisoned");
+        let Some(entry) = entries.get(&id.to_string()) else {
+            return false;
+        };
+        if !entry.response.claim() {
+            return false;
+        }
+        entry.cancellation.cancel();
+        true
     }
 
     pub fn queue_depth(&self) -> usize {
@@ -129,9 +209,14 @@ impl ConnectionQueries {
     ) -> Result<(), RpcError> {
         let id = &request.object["id"];
         if self
-            .queued
-            .iter()
-            .any(|query| query.request.object["id"] == *id)
+            .commands
+            .lock()
+            .expect("command cancellation poisoned")
+            .contains_key(&id.to_string())
+            || self
+                .queued
+                .iter()
+                .any(|query| query.request.object["id"] == *id)
             || self.running.iter().any(|query| query.info.id == *id)
         {
             return Err(RpcError::new(

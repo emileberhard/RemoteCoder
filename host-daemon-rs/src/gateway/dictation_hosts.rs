@@ -77,6 +77,9 @@ impl DictationHosts {
 
     pub(super) fn declare(&self, client: &ClientTx, declaration: Declaration) -> RpcResult {
         let mut state = self.state.lock().expect("dictation hosts poisoned");
+        if client.closed.is_cancelled() {
+            return Err(reason("hostLost"));
+        }
         state.hosts.shift_remove(&client.id);
         if declaration.serving {
             if state.hosts.len() >= MAX_HOSTS {
@@ -338,6 +341,15 @@ mod tests {
             panic!("missing reason")
         };
         data["reason"].clone()
+    }
+
+    #[tokio::test]
+    async fn closed_connection_cannot_declare_a_host() {
+        let (hosts, _directory, _path) = fixture().await;
+        let (host, _rx) = client(7);
+        host.closed.cancel();
+        assert!(hosts.declare(&host, Declaration { serving: true }).is_err());
+        assert!(hosts.state.lock().unwrap().hosts.is_empty());
     }
 
     #[tokio::test]

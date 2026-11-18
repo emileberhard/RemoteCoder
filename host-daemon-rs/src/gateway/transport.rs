@@ -179,6 +179,7 @@ impl Gateway {
             let _ = voice_done.send(());
             Ok(())
         }) {
+            cancelled.cancel();
             self.device_tools.disconnected(client_id);
             self.dictation_hosts.disconnected(client_id);
             self.forget_degraded_client(client_id);
@@ -275,9 +276,9 @@ impl Gateway {
             _ = tasks.join_next() => false,
             _ = cancelled.cancelled() => false,
         };
+        cancelled.cancel();
         self.device_tools.disconnected(client_id);
         self.dictation_hosts.disconnected(client_id);
-        cancelled.cancel();
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
         if !writer_finished
@@ -654,18 +655,23 @@ impl Gateway {
                 .object
                 .get("params")
                 .and_then(|params| params.get("id"))
-                && let Some(info) = queries.cancel(cancel_id)
             {
-                self.journal.transport(
-                    "query_cancelled",
-                    serde_json::json!({
-                        "clientId": client_id, "method": info.method, "threadId": info.thread,
-                        "resource": "connection query", "queueDepth": queries.queue_depth(),
-                    }),
-                );
-                let _ = self
-                    .send_error_to(out_tx, Some(&info.id), &queries::cancelled_error())
-                    .await;
+                if let Some(info) = queries.cancel(cancel_id) {
+                    self.journal.transport(
+                        "query_cancelled",
+                        serde_json::json!({
+                            "clientId": client_id, "method": info.method, "threadId": info.thread,
+                            "resource": "connection query", "queueDepth": queries.queue_depth(),
+                        }),
+                    );
+                    let _ = self
+                        .send_error_to(out_tx, Some(&info.id), &queries::cancelled_error())
+                        .await;
+                } else if queries.cancel_command(cancel_id) {
+                    let _ = self
+                        .send_error_to(out_tx, Some(cancel_id), &queries::cancelled_error())
+                        .await;
+                }
             }
             return Ok(());
         }
@@ -800,8 +806,22 @@ impl Gateway {
             }
             return Ok(());
         }
+        let command = if method == "dictation/transcribe" {
+            match queries.register_command(object.get("id").unwrap_or(&Value::Null)) {
+                Ok(command) => Some(command),
+                Err(error) => {
+                    self.send_error_to(out_tx, object.get("id"), &error).await?;
+                    return Ok(());
+                }
+            }
+        } else {
+            None
+        };
         let gateway = Arc::clone(self);
-        let response_tx = out_tx.clone();
+        let mut response_tx = out_tx.clone();
+        if let Some(command) = &command {
+            response_tx.query_response = Some(Arc::clone(&command.response));
+        }
         let work = async move {
             let _admission = admission;
             let _permit = global_permit;
@@ -821,6 +841,17 @@ impl Gateway {
             gateway
                 .handle_owned_rpc(client_id, &response_tx, &method, owned.target, &object)
                 .await
+        };
+        let work = async move {
+            if let Some(command) = command {
+                tokio::select! {
+                    biased;
+                    _ = command.cancellation.cancelled() => Ok(()),
+                    result = work => result,
+                }
+            } else {
+                work.await
+            }
         };
         if !self.command_tasks.spawn("gateway RPC", work) {
             let _ = self.reject_draining(out_tx, id.as_ref()).await;

@@ -28,10 +28,14 @@ try {
     const host = await gateway.connect();
     const previous = host.ws.onmessage;
     let mode = "success";
+    let holdStarted;
+    let holdCancelled;
     host.ws.onmessage = async event => {
         previous(event);
         const message = JSON.parse(String(event.data));
+        if (message.method === "dictation/host/cancel") { holdCancelled?.(message.params.operationId); return; }
         if (message.method !== "dictation/host/transcribe") return;
+        if (mode === "hold") { holdStarted?.(message.params.operationId); return; }
         if (mode === "disconnect") { host.ws.close(); return; }
         const download = await fetch(`${gateway.base}/files/download`, {
             method: "POST", headers: { Authorization: `Bearer ${gateway.token}`, "Content-Type": "application/json" },
@@ -46,10 +50,18 @@ try {
     assert(!((await host.rpc("dictation/host/declare", { serving: true })).error));
     const success = await requester.rpc("dictation/transcribe", { path, durationMs: 10 });
     assert.deepEqual(success.result, { text: "Isolated dictation", model: "batch" });
+    mode = "hold";
+    const started = new Promise(resolve => { holdStarted = resolve; });
+    const cancelled = new Promise(resolve => { holdCancelled = resolve; });
+    const requestId = "dictation-cancel-probe";
+    requester.ws.send(JSON.stringify({ id: requestId, method: "dictation/transcribe", params: { path, durationMs: 10 } }));
+    const operationId = await gateway.within(started, 5000, "Host did not receive the cancel probe");
+    requester.ws.send(JSON.stringify({ method: "$/cancelRequest", params: { id: requestId } }));
+    assert.equal(await gateway.within(cancelled, 5000, "Host did not receive cancellation"), operationId);
     mode = "disconnect";
     const lost = await requester.rpc("dictation/transcribe", { path, durationMs: 10 });
     assert.equal(lost.error.data.reason, "hostLost");
-    console.log(JSON.stringify({ status: "passed", upload: true, download: true, transcript: true, noHost: true, hostLost: true }));
+    console.log(JSON.stringify({ status: "passed", upload: true, download: true, transcript: true, noHost: true, cancelled: true, hostLost: true }));
 } finally {
     await gateway.stop();
     await gateway.stopNativeDaemon(gateway.nativeDefault);
