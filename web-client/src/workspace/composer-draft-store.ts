@@ -99,7 +99,7 @@ export class ComposerDraftStore {
   restoreSnapshot(snapshot: ReadonlyMap<string, Draft>) {
     this.drafts = new Map(snapshot);
   }
-  update(change: Partial<Draft>, key = this.current().key) {
+  private candidate(change: Partial<Draft>, key: string) {
     const drafts = new Map(this.drafts);
     const previous = drafts.get(key);
     const edited =
@@ -122,10 +122,27 @@ export class ComposerDraftStore {
         throw new Error("All saved drafts are awaiting delivery. Resolve one before adding another.");
       drafts.delete(oldest);
     }
-    this.drafts = drafts;
+    return drafts;
+  }
+  update(change: Partial<Draft>, key = this.current().key) {
+    this.drafts = this.candidate(change, key);
     this.publish();
     clearTimeout(this.persistence);
     this.persistence = setTimeout(() => this.persist(), 1000);
+  }
+  applyDictation(key: string, text: string) {
+    const draft = this.drafts.get(key);
+    if (!draft) throw new Error("The original dictation draft is unavailable; the recording was retained.");
+    const candidate = this.candidate({ text: [draft.text.trimEnd(), text].filter(Boolean).join("\n") }, key);
+    if (!this.storage) throw new Error("Browser draft storage is unavailable. Keep this tab open.");
+    try {
+      this.storage.setItem("remotecoder.web.drafts.v1", JSON.stringify([...candidate]));
+    } catch {
+      throw new Error("The browser could not save your draft. Keep this tab open until it is sent.");
+    }
+    clearTimeout(this.persistence);
+    this.drafts = candidate;
+    this.publish();
   }
   persist(required = false) {
     try {
