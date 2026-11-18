@@ -8,7 +8,10 @@ plus that duration. A failed conversion, upload, request or host operation
 falls back to the browser's existing relay using the original recording. A
 failed relay leaves the saved recording available for Retry. A nonempty
 transcript is inserted and durably flushed as one draft operation; a failed
-flush restores the previous draft and retains the recording.
+flush restores the previous draft and retains the recording. A successful host
+result is authoritative even when its filtered text is empty: the browser
+inserts nothing and never falls back to the relay, which would restore other
+voices.
 
 An opted-in Mac app declares `dictation/host/declare` on each connection. The
 newest serving declaration receives new operations; declarations are applied in
@@ -58,7 +61,7 @@ calibration. An empty profile can leave everyone in the result. Changing the
 wire contract or the newest-serving-host rule later would require coordinating
 browser, gateway and app versions.
 
-The current SpeechKit pin can still be checking a rapidly fed recording when
-the batch transcript returns. Its current native behavior then fails open to
-everyone. A SpeechKit fix to wait for that check is required for dependable
-Only Mine filtering on this path.
+The host feeds a complete recording faster than real time, so its voice check
+can still be running when the batch transcript returns. SpeechKit 0.10.1 waits
+for that check within the delivery budget; a check still running at the budget's
+deadline keeps everyone's text.
