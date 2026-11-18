@@ -599,6 +599,7 @@ export class Workspace {
       this.drafts.flushRequired();
     } catch (error) {
       this.drafts.restoreSnapshot(previous);
+      this.drafts.persist();
       this.publish();
       throw error;
     }

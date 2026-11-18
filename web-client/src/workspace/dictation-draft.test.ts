@@ -21,6 +21,8 @@ test("a failed required flush restores the draft so retry inserts dictated text 
   storage.fail = true;
   expect(() => workspace.applyDictation(key, "dictated words")).toThrow("could not save your draft");
   expect(workspace.getSnapshot().drafts.get(key)?.text).toBe("Existing words");
+  expect(storage.getItem("remotecoder.web.drafts.v1")).toContain("Existing words");
+  expect(storage.getItem("remotecoder.web.drafts.v1")).not.toContain("dictated words");
   workspace.applyDictation(key, "dictated words");
   expect(workspace.getSnapshot().drafts.get(key)?.text).toBe("Existing words\ndictated words");
   expect(storage.getItem("remotecoder.web.drafts.v1")).toContain("Existing words\\ndictated words");
