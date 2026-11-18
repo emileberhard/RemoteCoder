@@ -568,8 +568,9 @@ so a route that keeps stalling backs off further instead of flapping.
 
 The connection event carries its route's kind, so the chat model knows which
 route carries its gateway connection. On iOS the top-edge glow is green on the
-LAN or configured route and blue on the relay, gray while the host restarts on
-purpose and red when it is otherwise unreachable, and Settings → Hosts names the
+LAN or configured route and blue on the relay, gray while connecting, offline or
+restarting on purpose, and orange only when [host availability](#host-availability)
+warns; it is never red. Settings → Hosts names the
 route: "local network", "relay", or for the configured route "Tailscale" when
 its address is a tailnet name or address, otherwise the address itself.
 
@@ -578,6 +579,43 @@ initial dictation credential delivery. Native speech traffic uses the cached
 public router origin directly and does not follow gateway route changes.
 An account read that ran before a replaced host's model existed is repeated
 once the model is installed.
+
+### Host availability
+
+Each chat target model owns one `HostAvailabilityTracker`, the only place that
+decides whether a host is available. It derives one `HostAvailability` value
+from three facts: this device's `GatewayConnectivity` (whose `.unreachable`
+carries a typed `GatewayConnectionFailure` cause and the time this device first
+failed), the newest cluster listing in which another connected peer reports the
+host reachable, and the host's role. The role comes from `host/info.internalBattery`:
+a battery means portable, none means stationary, and an unread value stays
+unknown and takes the calm path. The tracker remembers the role and the last time
+this device was connected (`HostPreferences`), and the number of tasks that were
+running when the connection dropped.
+
+- A portable or unknown host that stops answering is offline, never a warning.
+- A stationary host warns only after `HostAvailability.warningGrace` (5 minutes)
+  without an answer. The tracker's single re-evaluation task owns that grace; a
+  reconnect re-derives and cancels it, and retirement cancels it for good.
+- A peer view counts only if this device read the cluster listing after it lost
+  the host and within `HostAvailability.peerFreshness` (2 minutes). Entering
+  unreachable asks the workspace for a cluster refresh, repeated every two minutes
+  while the host stays unreachable, and only when another host is connected.
+  Then the host is unreachable from this device rather than offline.
+- Rejected credentials (HTTP 401/403 on the upgrade) and a gateway that closes
+  the connection with a reason need fixing and say so at once.
+- Backgrounding disconnects deliberately, which reads as connecting, not as
+  unreachable.
+
+`HostPresentation` is the one pure rule from that value, plus the drawer's history
+read failure, to every surface: the gray "offline" label on drawer rows, the
+drawer's warning strip, the drawer's host status line, the chat header lines
+(with the connection detail and Retry behind a tap), the top-edge glow and the
+reason a held send gives. Sending to a host that is not connected tries one
+connection first; if it fails, the text stays in the composer with that reason.
+There is no app-side send queue, and a message that provably never left the
+device reads "Not sent", never "Unconfirmed". Agent coverage in the placement
+picker projects the same value.
 Live navigation uploads from the extension and credential enrollment still use
 only the configured address.
 
@@ -704,8 +742,8 @@ progress goes to the gateway log. A retired-ID WebSocket that arrives while the
 gateway stops is accepted and closed with 4012 too. `GatewayClient` treats the
 first 4012 since its last connection as the start of a 120 s restart window
 (`Timeouts.restartWindow`) that ends at the next connection; later 4012s do not
-extend it, so a transition that never finishes turns red, and after the window a
-4012 reads as an ordinary refusal. A refusal before `daemon/ready` names the
+extend it, so a transition that never finishes stops reading as an update, and
+after the window a 4012 reads as an ordinary refusal. A refusal before `daemon/ready` names the
 host and the gateway's close reason ("<host> closed the connection: …"); only
 a 4012 inside the window reads as restarting. Failed attempts
 inside the window blame no route, so the LAN route is not suspended for the
@@ -714,7 +752,7 @@ automatic list refresh defers instead of recording as an error, as it does a
 Codex `providerUnavailable` while the new gateway's Codex starts. Open chats
 raise no alert for either. `GatewayClient` announces
 `.restarting` and `.disconnected` on its connection events, and the pump hands
-them to the chat model's `GatewayConnectivity`: `.restarting` turns the edge
+them to the chat model's `HostAvailabilityTracker`: `.restarting` turns the edge
 glow gray and the drawer's host line into "Updating <host>…" in place of the
 error. After the window the usual disconnected presentation returns, even for a
 later restart the client never reconnected in between. A reconnect retries a

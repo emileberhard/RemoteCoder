@@ -412,7 +412,7 @@ host adds `kind:"remote_intent"` stub rows with `jobId`, `ownerHostId`,
 `intentState`, `parent`, `lastActiveAt` in epoch seconds and string `title`. An owner's real row
 replaces its stub by `(ownerHostId,jobId)`.
 
-Cluster-wide CLI reads include `coverage [{hostId,state,since?,staleThrough?}]`,
+Cluster-wide CLI reads include `coverage [{hostId,state,since?}]`,
 where state is `ok`, `unreachable`, `unsupported` or `refused`. `agent list
 --host MEMBER` narrows the cluster list to that member.
 `agent/parent/set {agent:{hostId,threadId},parent:{hostId,threadId}|null}` goes to
