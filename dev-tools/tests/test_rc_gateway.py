@@ -1106,13 +1106,14 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_claude_account_refuses_older_gateway_before_dispatch(self) -> None:
         import tempfile
+
         from websockets.asyncio.server import serve
 
         for resume, account in ((False, "first"), (True, "first"), (False, "")):
             with self.subTest(resume=resume, account=account), tempfile.TemporaryDirectory() as directory:
                 requests = []
 
-                async def respond(connection) -> None:
+                async def respond(connection, requests=requests) -> None:
                     await connection.send(json.dumps({"method": "ready", "params": {"capabilities": {"cancelRequest": True}}}))
                     async for raw in connection:
                         request = json.loads(raw)
