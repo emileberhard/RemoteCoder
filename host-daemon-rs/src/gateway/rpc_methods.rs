@@ -120,6 +120,20 @@ impl Gateway {
                     "Unknown device tool method",
                 )),
             },
+            OwnedRoute::DictationHosts => match method {
+                "dictation/host/declare" => decode_params(params)
+                    .and_then(|declaration| self.dictation_hosts.declare(out, declaration)),
+                "dictation/host/result" => decode_params(params)
+                    .and_then(|result| self.dictation_hosts.result(client_id, result)),
+                "dictation/transcribe" => match decode_params(params) {
+                    Ok(request) => self.dictation_hosts.transcribe(out, request).await,
+                    Err(error) => Err(error),
+                },
+                _ => Err(RpcError::new(
+                    RpcCode::MethodNotFound,
+                    "Unknown dictation method",
+                )),
+            },
             OwnedRoute::Devices => self.devices_rpc(method, params).await,
             OwnedRoute::Metadata => self.metadata_rpc(method, params).await,
             OwnedRoute::Marks => self.marks_rpc(method, params).await,

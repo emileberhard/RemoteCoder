@@ -532,6 +532,7 @@ Open the focused source before changing that part of the system:
 - [`docs/owned-operations.md`](docs/owned-operations.md): operation ownership,
   build receipts, leases, installation credentials and persistence.
 - Feature contracts: [`docs/conversation-agents.md`](docs/conversation-agents.md),
+  [`docs/browser-dictation.md`](docs/browser-dictation.md),
   [`docs/automations.md`](docs/automations.md),
   [`docs/async-questions.md`](docs/async-questions.md),
   [`docs/remote-files.md`](docs/remote-files.md),

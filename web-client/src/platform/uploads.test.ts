@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { dictationWAVLimit } from "./dictation-limits";
 import { BrowserUploadService, browserUploadLimit } from "./uploads";
 
 function deferred<T>() {
@@ -205,6 +206,34 @@ describe("shared browser upload ownership", () => {
     const service = new BrowserUploadService("upload-host");
     await expect(service.upload(new OversizedFile([], "oversized.bin"))).rejects.toThrow("50 MiB");
     expect(read).toBe(false);
+    service.dispose();
+  });
+
+  test("dictation admits the full duration WAV without changing the attachment limit", async () => {
+    let read = false;
+    class RecordingFile extends File {
+      constructor(private readonly claimedSize: number) {
+        super([], "dictation.wav");
+      }
+      override get size() {
+        return this.claimedSize;
+      }
+      override async arrayBuffer(): Promise<ArrayBuffer> {
+        read = true;
+        throw new Error("read admitted");
+      }
+    }
+    const service = new BrowserUploadService("upload-host");
+    await expect(service.upload(new RecordingFile(dictationWAVLimit))).rejects.toThrow("50 MiB");
+    expect(read).toBe(false);
+    await expect(service.uploadDictation(new RecordingFile(dictationWAVLimit + 1))).rejects.toThrow(
+      "Dictation upload",
+    );
+    expect(read).toBe(false);
+    await expect(service.uploadDictation(new RecordingFile(dictationWAVLimit))).rejects.toThrow(
+      "read admitted",
+    );
+    expect(read).toBe(true);
     service.dispose();
   });
 });

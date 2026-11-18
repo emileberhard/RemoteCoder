@@ -18,6 +18,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     let settings: HostStore
     let cluster: ClusterModel
+    let browserDictationRole: BrowserDictationRole
     @ObservationIgnored let htmlVisuals: HTMLVisualServices
     @ObservationIgnored let siteIcons: SiteIconStore
     @ObservationIgnored let retainedTranscripts = TranscriptSurfaceRetention(capacity: 3)
@@ -117,6 +118,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         dictationLibrary: SharedDictationLibrary? = nil
     ) {
         self.settings = settings
+        let browserDictationRole = BrowserDictationRole(defaults: defaults, storage: storage)
+        self.browserDictationRole = browserDictationRole
         cluster = ClusterModel(defaults: defaults)
         self.storage = storage
         self.dictationLibrary = dictationLibrary
@@ -150,7 +153,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             ChatTargetModel(host: $0, chatDefaults: defaults, modelPickerPreferences: $1, syncedPreferences: $2, voiceCalls: voiceCalls,
                             backgroundExecution: makeBackgroundExecution(), uploadContinuation: uploadContinuation,
                             gatewayPolicy: gatewayPolicy, storage: storage,
-                            deviceTools: deviceTools, htmlVisuals: htmlVisuals, dictationLibrary: dictationLibrary, dictationVoices: $3)
+                            deviceTools: deviceTools, htmlVisuals: htmlVisuals, dictationLibrary: dictationLibrary, dictationVoices: $3,
+                            browserDictationRole: browserDictationRole)
         }
         self.loadConversationHeader = loadConversationHeader
         self.notificationApplicationIsActive = notificationApplicationIsActive
@@ -168,6 +172,12 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             self?.applyModelPickerPreferences(for: provider, previousModelVisibility: previous)
         }
         syncedPreferences.onReplicaChange = { [weak self] in self?.syncPreferences() }
+        browserDictationRole.onChange = { [weak self] enabled in
+            let models = self?.models ?? []
+            await withTaskGroup(of: Void.self) { group in
+                for model in models { group.addTask { await model.setBrowserDictationHost(enabled) } }
+            }
+        }
         startAccountMigration()
         reconcileHosts()
     }

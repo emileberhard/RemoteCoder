@@ -8,11 +8,17 @@ enum GatewayFileDownload: Sendable {
 
 enum GatewayFileDownloadSource: Sendable {
     case file(path: String, containingDirectory: String?)
+    case dictation(path: String)
     case visual(HTMLVisualReference)
+
+    static let maximumDictationDurationSeconds: Int64 = 30 * 60
+    static let dictationSampleRate: Int64 = 16_000
+    static let maximumDictationBytes = 44 + maximumDictationDurationSeconds * dictationSampleRate * 2
 
     var key: String {
         switch self {
         case .file(let path, _): path
+        case .dictation(let path): path
         case .visual(let reference): "rc-visual:" + reference.digest
         }
     }
@@ -20,19 +26,20 @@ enum GatewayFileDownloadSource: Sendable {
     var maximumBytes: Int64 {
         switch self {
         case .file: HostFileLimits.maximumFileBytes
+        case .dictation: Self.maximumDictationBytes
         case .visual: Int64(HTMLVisualReference.maximumBytes)
         }
     }
 
     func validate(_ metadata: HostFileMetadata) throws {
         switch self {
-        case .file(let path, _): try metadata.validate(path: path)
+        case .file(let path, _): try metadata.validate(path: path, maximumBytes: maximumBytes)
+        case .dictation(let path): try metadata.validate(path: path, maximumBytes: maximumBytes)
         case .visual(let reference):
-            try metadata.validate(path: metadata.path)
+            try metadata.validate(path: metadata.path, maximumBytes: maximumBytes)
             guard metadata.path.hasPrefix("/"), metadata.path.utf8.count <= 4096, !metadata.path.contains("\0"),
                   metadata.name == reference.digest + ".html" else { throw HostFileError.invalidResponse }
         }
-        guard metadata.bytes <= maximumBytes else { throw HostFileError.tooLarge }
     }
 }
 
@@ -92,6 +99,8 @@ actor GatewayFileDownloadClient: GatewayFileDownloading {
             case .file(let path, let containingDirectory):
                 try container.encode(path, forKey: .path)
                 try container.encodeIfPresent(containingDirectory, forKey: .containingDirectory)
+            case .dictation(let path):
+                try container.encode(path, forKey: .path)
             case .visual(let reference):
                 try container.encode(reference.digest, forKey: .visualDigest)
             }

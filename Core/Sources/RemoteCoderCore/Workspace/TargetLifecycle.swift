@@ -21,6 +21,7 @@ struct TargetLifecycle: Equatable, Sendable {
         case presentation(TargetPresentation)
         case activeWorkChanged(count: Int)
         case voiceCall(Bool)
+        case browserDictationHost(Bool)
         case graceExpired
         case quiesce, resume, retire
     }
@@ -42,6 +43,7 @@ struct TargetLifecycle: Equatable, Sendable {
     private(set) var presentation = TargetPresentation()
     private(set) var activeWorkCount = 0
     private(set) var voiceCallActive = false
+    private(set) var browserDictationHostActive = false
     private(set) var foreground = ForegroundRefresh.current
     private(set) var hold = BackgroundHold.none
     private(set) var isBackgrounded = false
@@ -50,7 +52,7 @@ struct TargetLifecycle: Equatable, Sendable {
     var acceptsWork: Bool { phase == .live }
     var isSceneLive: Bool { phase == .live && app == .active }
     var isOnScreen: Bool { isSceneLive && presentation.presented }
-    var allowsDisconnect: Bool { isBackgrounded && !voiceCallActive }
+    var allowsDisconnect: Bool { isBackgrounded && !voiceCallActive && !browserDictationHostActive }
     var allowsActivityReads: Bool { phase == .live && !allowsDisconnect }
     var needsGatewayLoops: Bool {
         presentation.presented || presentation.drawerOpen || activeWorkCount > 0 || voiceCallActive
@@ -73,6 +75,7 @@ struct TargetLifecycle: Equatable, Sendable {
         case .presentation(let next): return present(next)
         case .activeWorkChanged(let count): return changeActiveWork(to: count)
         case .voiceCall(let active): return changeVoiceCall(to: active)
+        case .browserDictationHost(let active): return changeBrowserDictationHost(to: active)
         case .graceExpired: return expireGrace()
         case .quiesce:
             phase = .quiescing
@@ -126,7 +129,7 @@ struct TargetLifecycle: Equatable, Sendable {
     private mutating func background() -> [Effect] {
         isBackgrounded = true
         var effects: [Effect] = [.flush, .stopLoops]
-        if voiceCallActive {
+        if voiceCallActive || browserDictationHostActive {
             effects += releaseHold()
         } else if activeWorkCount > 0 {
             effects += beginGraceIfNeeded()
@@ -158,7 +161,14 @@ struct TargetLifecycle: Equatable, Sendable {
         guard voiceCallActive != active else { return [] }
         voiceCallActive = active
         if active { return releaseHold() }
-        return isBackgrounded ? disconnectIfNeeded() : []
+        return allowsDisconnect ? disconnectIfNeeded() : []
+    }
+
+    private mutating func changeBrowserDictationHost(to active: Bool) -> [Effect] {
+        guard browserDictationHostActive != active else { return [] }
+        browserDictationHostActive = active
+        if active { return releaseHold() }
+        return allowsDisconnect ? disconnectIfNeeded() : []
     }
 
     private mutating func expireGrace() -> [Effect] {

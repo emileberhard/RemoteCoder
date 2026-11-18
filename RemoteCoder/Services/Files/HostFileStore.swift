@@ -123,7 +123,7 @@ actor HostFileStore {
         let candidateID: UUID?
         switch source {
         case .file(let path, _): candidateID = usableEntry(for: path)
-        case .visual: candidateID = nil
+        case .dictation, .visual: candidateID = nil
         }
         if let candidateID { entries[candidateID]?.holders.insert(operationID) }
         defer {

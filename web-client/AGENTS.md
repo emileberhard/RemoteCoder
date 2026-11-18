@@ -47,6 +47,10 @@ offline transcript caching would require revisiting selection and retention.
 
 ## Invariants
 
+- Browser dictation owns capture, local recovery and fallback. Host failure,
+  including an unknown deadline outcome, falls back with the original blob.
+  See `docs/browser-dictation.md`.
+
 - Address keys preserve physical host/account identity; binding checks also
   require the exact enrollment generation. Retired connections cannot publish
   late events into replacement state.

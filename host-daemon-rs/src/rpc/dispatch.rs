@@ -114,6 +114,7 @@ pub(crate) enum OwnedRoute {
     Navigation,
     Devices,
     DeviceTools,
+    DictationHosts,
     Questions,
     Metadata,
     Marks,
@@ -349,6 +350,24 @@ const METHOD_SPECS: &[MethodSpec] = &[
     spec!(
         "device/tool/result",
         DeviceTools,
+        Some(RequestLifetime::Command),
+        0
+    ),
+    spec!(
+        "dictation/host/declare",
+        DictationHosts,
+        Some(RequestLifetime::Command),
+        0
+    ),
+    spec!(
+        "dictation/host/result",
+        DictationHosts,
+        Some(RequestLifetime::Command),
+        0
+    ),
+    spec!(
+        "dictation/transcribe",
+        DictationHosts,
         Some(RequestLifetime::Command),
         0
     ),

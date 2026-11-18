@@ -5,6 +5,130 @@ import Testing
 
 @Suite(.timeLimit(.minutes(1)))
 struct DeviceToolHostTests {
+    @MainActor
+    @Test func browserHostDeclaresOnlyWhenEnabledAndWithdrawsOnDisable() async throws {
+        let fixture = try DeviceToolSocketFixture(declarationReply: .accepted)
+        let port = try await fixture.start()
+        let role = BrowserHostRoleFixture()
+        let binding = BrowserDictationConnection(host: BrowserDictationHost(), enabled: { role.enabled }, execute: { _ in
+            BrowserDictationOutput(text: "unused", model: "batch")
+        })
+        let gateway = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(port)")),
+            authToken: "fixture", hostLabel: "Fixture"), routes: nil, browserDictation: binding)
+        defer { await gateway.retire(); await fixture.stop() }
+        try await gateway.connectIfNeeded()
+        #expect(await fixture.recordedRequests.filter { $0.method == "dictation/host/declare" }.isEmpty)
+        role.enabled = true
+        await gateway.browserDictationRoleChanged()
+        role.enabled = false
+        await gateway.browserDictationRoleChanged()
+        let declarations = await fixture.recordedRequests.filter { $0.method == "dictation/host/declare" }
+        #expect(declarations.map(\.params) == [.object(["serving": .bool(true)]), .object(["serving": .bool(false)])])
+    }
+
+    @MainActor
+    @Test func disablingDuringHandshakeWithdrawsAfterTheInFlightDeclaration() async throws {
+        let fixture = try DeviceToolSocketFixture(declarationReply: .accepted)
+        await fixture.holdRequests("dictation/host/declare")
+        let port = try await fixture.start()
+        let role = BrowserHostRoleFixture()
+        role.enabled = true
+        let binding = BrowserDictationConnection(host: BrowserDictationHost(), enabled: { role.enabled }, execute: { _ in
+            BrowserDictationOutput(text: "unused", model: "batch")
+        })
+        let gateway = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(port)")),
+            authToken: "fixture", hostLabel: "Fixture"), routes: nil, browserDictation: binding)
+        defer { await gateway.retire(); await fixture.stop() }
+        let connecting = Task { try await gateway.connectIfNeeded() }
+        defer { connecting.cancel() }
+        #expect(await waitUntil { await fixture.recordedRequests.contains { $0.method == "dictation/host/declare" } })
+        role.enabled = false
+        let disabling = Task { await gateway.browserDictationRoleChanged() }
+        try await fixture.releaseRequests(result: .object([:]))
+        await disabling.value
+        try await connecting.value
+        let declarations = await fixture.recordedRequests.filter { $0.method == "dictation/host/declare" }
+        #expect(declarations.map(\.params) == [.object(["serving": .bool(true)]), .object(["serving": .bool(false)])])
+    }
+
+    @Test func browserHostKeepsRunningWorkBoundToItsConnection() async throws {
+        let host = BrowserDictationHost()
+        let gate = ToolGate()
+        let generation = UUID()
+        let request = BrowserDictationRequest(operationId: "one", path: "/file", deadlineUnixMs: Int64(Date.now.timeIntervalSince1970 * 1000) + 60_000)
+        let response = await host.invoke(request, generation: generation, execute: { _ in
+            await gate.startAndWait()
+            try Task.checkCancellation()
+            return BrowserDictationOutput(text: "text", model: "model")
+        }, deliver: { _ in })
+        #expect(response?.operationId == nil)
+        await gate.waitUntilStarted()
+        let other = BrowserDictationRequest(operationId: "two", path: "/file", deadlineUnixMs: request.deadlineUnixMs)
+        let busy = await host.invoke(other, generation: UUID(), execute: { _ in
+            BrowserDictationOutput(text: "unexpected", model: "model")
+        }, deliver: { _ in })
+        #expect(busy?.reason == "busy")
+        await host.cancel(BrowserDictationCancel(operationId: "one"), generation: UUID())
+        let draining = Task { await host.waitUntilIdle() }
+        await gate.finish()
+        await draining.value
+    }
+
+    @Test func olderGatewayRejectsBrowserDeclarationWithoutBreakingHandshake() async throws {
+        let fixture = try DeviceToolSocketFixture(declarationReply: .accepted)
+        await fixture.fail("dictation/host/declare", with: .init(code: -32601, data: nil, message: "Unknown method"))
+        let port = try await fixture.start()
+        let host = BrowserDictationHost()
+        let binding = BrowserDictationConnection(host: host, enabled: { true }, execute: { _ in
+            BrowserDictationOutput(text: "unused", model: "batch")
+        })
+        let gateway = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(port)")),
+            authToken: "fixture", hostLabel: "Fixture"), routes: nil, browserDictation: binding)
+        do {
+            try await gateway.connectIfNeeded()
+            #expect(await gateway.isConnected)
+            #expect(try await gateway.call(method: "test/ping", params: nil, timeout: .seconds(3)) == .object([:]))
+            let declared = await fixture.requests.first { $0.method == "dictation/host/declare" }
+            #expect(declared?.params == .object(["serving": .bool(true)]))
+            await gateway.retire()
+            await fixture.stop()
+        } catch {
+            await gateway.retire()
+            await fixture.stop()
+            throw error
+        }
+    }
+
+    @Test func browserHostFramesBypassTheNotificationStreamAndReturnAResult() async throws {
+        let fixture = try DeviceToolSocketFixture(declarationReply: .accepted)
+        let port = try await fixture.start()
+        let binding = BrowserDictationConnection(host: BrowserDictationHost(), enabled: { true }, execute: { request in
+            #expect(request.path == "/upload/recording.wav")
+            return BrowserDictationOutput(text: "Filtered text", model: "batch")
+        })
+        let gateway = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(port)")),
+            authToken: "fixture", hostLabel: "Fixture"), routes: nil, browserDictation: binding)
+        let notifications = await gateway.notifications()
+        let next = Task { await notifications.first { $0.method == "test/afterHost" || $0.method == "dictation/host/transcribe" } }
+        defer { next.cancel() }
+        do {
+            try await gateway.connectIfNeeded()
+            try await fixture.send(.notification(.init(method: "dictation/host/transcribe", params: .object([
+                "operationId": .string("one"), "path": .string("/upload/recording.wav"),
+                "deadlineUnixMs": .number(Double(Int64(Date.now.timeIntervalSince1970 * 1000) + 60_000))
+            ]))))
+            try await fixture.send(.notification(.init(method: "test/afterHost", params: .object([:]))))
+            #expect(await next.value?.method == "test/afterHost")
+            let result = await fixture.requests.first { $0.method == "dictation/host/result" }
+            #expect(result?.params?.objectValue?["text"] == .string("Filtered text"))
+            await gateway.retire()
+            await fixture.stop()
+        } catch {
+            await gateway.retire()
+            await fixture.stop()
+            throw error
+        }
+    }
     @Test(arguments: [false, true])
     func contentSubscriptionsPrecedeReadsTrackLatestIntentAndRestoreOnReconnect(selected: Bool) async throws {
         let fixture = try DeviceToolSocketFixture(declarationReply: .accepted)
@@ -424,6 +548,9 @@ struct DeviceToolHostTests {
               uploader: UnusedUploader(), deadlineUnixMs: invoke.deadlineUnixMs)
     }
 }
+
+@MainActor
+private final class BrowserHostRoleFixture { var enabled = false }
 
 private struct ControlledTool: DeviceTool {
     let gate: ToolGate

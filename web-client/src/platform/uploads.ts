@@ -1,4 +1,5 @@
 import { record, requiredString } from "./contracts";
+import { dictationWAVLimit } from "./dictation-limits";
 
 export type BrowserUploadedFile = { path: string; bytes: number; sha256: string };
 export type BrowserUploadOptions = {
@@ -65,10 +66,26 @@ export class BrowserUploadService {
   }
 
   async upload(file: File, options: { signal?: AbortSignal } = {}): Promise<BrowserUploadedFile> {
+    return this.uploadBounded(file, browserUploadLimit, options);
+  }
+
+  async uploadDictation(file: File, options: { signal?: AbortSignal } = {}): Promise<BrowserUploadedFile> {
+    return this.uploadBounded(file, dictationWAVLimit, options);
+  }
+
+  private async uploadBounded(
+    file: File,
+    limit: number,
+    options: { signal?: AbortSignal },
+  ): Promise<BrowserUploadedFile> {
     if (this.retired) throw new Error("The attachment upload service has been retired");
     options.signal?.throwIfAborted();
-    if (!Number.isSafeInteger(file.size) || file.size < 1 || file.size > browserUploadLimit) {
-      throw new Error("Each attachment must be between 1 byte and 50 MiB");
+    if (!Number.isSafeInteger(file.size) || file.size < 1 || file.size > limit) {
+      throw new Error(
+        limit === browserUploadLimit
+          ? "Each attachment must be between 1 byte and 50 MiB"
+          : `Dictation upload must be between 1 and ${limit} bytes`,
+      );
     }
     if (!file.name.trim() || file.name.length > 1024) throw new Error("The attachment filename is invalid");
     if (activeUploads >= 2)

@@ -25,6 +25,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     @ObservationIgnored private var activityReadRequested = false
 
     @ObservationIgnored private let logger = AppLogger(category: "CodexChat")
+    @ObservationIgnored private let browserDictationRole: BrowserDictationRole?
 
     @ObservationIgnored private let debugLogger = Logger(subsystem: AppLogger.subsystem, category: "CodexChat")
 
@@ -422,8 +423,9 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
          voiceCalls: VoiceCallCenter, backgroundExecution: any BackgroundExecution, uploadContinuation: any UploadContinuation,
          gatewayPolicy: SharedGatewayPolicy,
          storage: HostStorage = .live, deviceTools: DeviceToolHost? = nil, htmlVisuals: HTMLVisualServices, dictationLibrary: SharedDictationLibrary? = nil,
-         dictationVoices: DictationVoiceProfiles) {
+         dictationVoices: DictationVoiceProfiles, browserDictationRole: BrowserDictationRole? = nil) {
         self.backgroundExecution = backgroundExecution
+        self.browserDictationRole = browserDictationRole
         self.gatewayPolicy = gatewayPolicy
         self.haptics = haptics
         self.realtimeVoice = voiceCalls.call
@@ -450,8 +452,22 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             voices: dictationVoices, configuration: { .current(defaults: chatDefaults) })
         let call = voiceCalls.call
         let callOwner = ExecutionTarget(hostID: host.id)
-        let gateway = Self.makeGatewayClient(for: host, routes: routes, deviceTools: deviceTools,
-            holdsConnection: { call.isActive(for: callOwner) })
+        let browserBinding: BrowserDictationConnection?
+        #if os(macOS)
+        if let browserDictationRole {
+            let service = BrowserDictationService(host: host, routes: routes, access: speechAccess, storage: storage,
+                library: dictationLibrary, voices: dictationVoices, defaults: chatDefaults)
+            browserBinding = BrowserDictationConnection(host: browserDictationRole.host,
+                enabled: { browserDictationRole.enabled }, execute: { request in
+                    try await browserDictationRole.prepare()
+                    return try await service.execute(request)
+                })
+        } else { browserBinding = nil }
+        #else
+        browserBinding = nil
+        #endif
+        let gateway = Self.makeGatewayClient(for: host, routes: routes, deviceTools: deviceTools, browserDictation: browserBinding,
+            holdsConnection: { call.isActive(for: callOwner) || browserDictationRole?.holdsConnection == true })
         self.gateway = gateway
         self.turnStops = TurnStops(gateway: gateway)
         let codexModels = CodexModelCatalogService(
@@ -495,6 +511,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         self.voiceHistoryStore = RealtimeVoiceHistoryStore(hostID: host.id, storage: storage)
         self.directories = hostServices.directories
         self.availability = HostAvailabilityTracker(hostID: host.id, defaults: chatDefaults)
+        _ = lifecycle.handle(.browserDictationHost(browserDictationRole?.enabled == true))
         startCodexModelCacheLoad()
     }
 
@@ -543,6 +560,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             eventPump.startIfNeeded()
             directories.startIfNeeded()
         }
+        if lifecycle.browserDictationHostActive { eventPump.startIfNeeded() }
         startHistoryAutoRefreshIfNeeded()
         guard acceptsWork else { return }
 
@@ -809,7 +827,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         let effects = lifecycle.handle(.appPhase(.background))
         ownedTasks.cancel(.routeMove)
         for screen in screens { screen.changeSummary?.stop() }
-        await gateway.suspendLivenessChecks()
+        if !lifecycle.browserDictationHostActive { await gateway.suspendLivenessChecks() }
         reconcileObservation()
         for screen in screens {
             screen.historyEdges.cancelReads()
@@ -822,6 +840,24 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
 
     private func handleLifecycle(_ event: TargetLifecycle.Event) {
         run(lifecycle.handle(event))
+    }
+
+    func setBrowserDictationHost(_ enabled: Bool) async {
+        guard acceptsWork else { return }
+        if enabled {
+            let effects = lifecycle.handle(.browserDictationHost(true))
+            await gateway.resumeLivenessChecks()
+            eventPump.startIfNeeded()
+            await gateway.browserDictationRoleChanged()
+            await perform(effects)
+        } else {
+            await gateway.browserDictationRoleChanged()
+            await browserDictationRole?.host.waitUntilIdle()
+            guard !Task.isCancelled, browserDictationRole?.enabled == false else { return }
+            let effects = lifecycle.handle(.browserDictationHost(false))
+            if lifecycle.isBackgrounded { await gateway.suspendLivenessChecks() }
+            await perform(effects)
+        }
     }
 
     private func run(_ effects: [TargetLifecycle.Effect]) {
@@ -2016,9 +2052,10 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     }
 
     private static func makeGatewayClient(for host: GatewayHostConfiguration, routes: GatewayRoutes, deviceTools: DeviceToolHost?,
+                                          browserDictation: BrowserDictationConnection?,
                                           holdsConnection: @escaping @Sendable @MainActor () -> Bool = { false }) -> GatewayClient {
         do {
-            return try GatewayClient(host: host, routes: routes, deviceTools: deviceTools,
+            return try GatewayClient(host: host, routes: routes, deviceTools: deviceTools, browserDictation: browserDictation,
                                      holdsConnection: holdsConnection)
         } catch {
             preconditionFailure(error.localizedDescription)

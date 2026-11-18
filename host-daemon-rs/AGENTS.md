@@ -865,6 +865,10 @@ blocks startup or provider journal retirement.
 
 ## Native dictation credentials
 
+Browser dictation's gateway relay owns only bounded operations and connection
+lifetimes; it never interprets audio or transcripts. A timeout stays unknown.
+See `docs/browser-dictation.md`.
+
 `GET /dictation` requires an authorized gateway caller admitted by the shared
 `SpeechClients` policy and returns `{origin, key}`
 with `Cache-Control: no-store` on success and failure. Configure both

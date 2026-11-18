@@ -755,6 +755,7 @@ impl Gateway {
         uploads: UploadStore,
         library: PathBuf,
     ) -> anyhow::Result<()> {
+        self.dictation_hosts.configure_uploads(uploads.clone())?;
         self.device_tools
             .photos
             .set(PhotoStorage { uploads, library })

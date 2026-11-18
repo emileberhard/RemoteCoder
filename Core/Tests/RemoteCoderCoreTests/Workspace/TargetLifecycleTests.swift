@@ -3,6 +3,14 @@ import Testing
 @testable import RemoteCoderCore
 
 struct TargetLifecycleTests {
+    @Test func browserDictationKeepsAnIdleBackgroundTargetConnectedWithoutForegroundLoops() {
+        var life = TargetLifecycle()
+        _ = life.handle(.browserDictationHost(true))
+        #expect(!life.needsGatewayLoops)
+        #expect(life.handle(.appPhase(.background)) == [.flush, .stopLoops])
+        #expect(!life.allowsDisconnect)
+        #expect(life.handle(.browserDictationHost(false)) == [.disconnect])
+    }
     private func lifecycle(work: Int = 0, presented: Bool = true, voice: Bool = false) -> TargetLifecycle {
         var lifecycle = TargetLifecycle()
         _ = lifecycle.handle(.presentation(TargetPresentation(presented: presented)))

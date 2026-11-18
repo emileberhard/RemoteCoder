@@ -1,11 +1,22 @@
 import type { TranscriptionSettings } from "../transcription-settings";
-import { canceled, errorMessage, isCanceled } from "./contracts";
+import {
+  canceled,
+  errorMessage,
+  type FeatureTransport,
+  isCanceled,
+  record,
+  requiredString,
+} from "./contracts";
+import { dictationSampleRate } from "./dictation-limits";
 import { BrowserRecordingStore, type RecordingStore, type SavedRecording } from "./recordings";
 import {
+  decodeMono,
   maximumRecordingMilliseconds,
+  pcm16WAV,
   type TranscriptionOptions,
   transcribeRecording,
 } from "./transcription";
+import { BrowserUploadService } from "./uploads";
 
 export type DictationState = {
   status: "idle" | "starting" | "recording" | "transcribing" | "failed";
@@ -16,6 +27,8 @@ export type DictationOptions = TranscriptionOptions & {
   store?: RecordingStore;
   capture?: () => Promise<MediaStream>;
   recorder?: (stream: MediaStream, options: MediaRecorderOptions) => MediaRecorder;
+  request?: FeatureTransport["request"];
+  uploadDictation?: BrowserUploadService["uploadDictation"];
 };
 
 const maximumRecordingBytes = 32 * 1024 * 1024;
@@ -175,13 +188,44 @@ export class BrowserDictation {
     this.transcription = controller;
     this.publish({ status: "transcribing" });
     try {
-      const text = await transcribeRecording(
-        this.hostId,
-        recording.blob,
-        settings,
-        controller.signal,
-        this.options,
-      );
+      let text: string;
+      try {
+        if (!this.options.request) throw new Error("No host transport");
+        const samples = await (this.options.decode ?? decodeMono)(recording.blob, dictationSampleRate);
+        controller.signal.throwIfAborted();
+        const durationMs = Math.ceil((samples.length * 1000) / dictationSampleRate);
+        if (durationMs < 1 || durationMs > maximumRecordingMilliseconds)
+          throw new Error("The recording duration is outside the host limit");
+        const file = new File([pcm16WAV(samples, dictationSampleRate)], "dictation.wav", {
+          type: "audio/wav",
+        });
+        const uploader = new BrowserUploadService(this.hostId);
+        let path: string;
+        try {
+          const upload = this.options.uploadDictation ?? uploader.uploadDictation.bind(uploader);
+          ({ path } = await upload(file, { signal: controller.signal }));
+        } finally {
+          uploader.dispose();
+        }
+        const result = await this.options.request(
+          "dictation/transcribe",
+          { path, durationMs },
+          {
+            signal: controller.signal,
+            timeout: durationMs + 125_000,
+          },
+        );
+        text = requiredString(record(result).text, "dictation transcript");
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        text = await transcribeRecording(
+          this.hostId,
+          recording.blob,
+          settings,
+          controller.signal,
+          this.options,
+        );
+      }
       if (generation !== this.generation || this.retired) return;
       this.onTranscript(text);
       await this.store.remove(recording.id);

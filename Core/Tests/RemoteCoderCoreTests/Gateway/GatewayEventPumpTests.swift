@@ -6,6 +6,42 @@ import Testing
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct GatewayEventPumpTests {
+    @Test func browserHostStaysConnectedInBackgroundAndReconnectsAfterSocketLoss() async throws {
+        var lifecycle = TargetLifecycle()
+        _ = lifecycle.handle(.browserDictationHost(true))
+        #expect(!lifecycle.handle(.appPhase(.background)).contains(.disconnect))
+        let temporary = TemporaryHostStorage()
+        defer { temporary.cleanUp() }
+        let hostID = UUID()
+        let sessions = ConversationSessions(hostID: hostID,
+            sessionIndex: ConversationIndex(hostID: hostID, storage: temporary.storage),
+            contentSubscriptions: RecordingContentSubscriptions(), storage: temporary.storage)
+        let socket = try DeviceToolSocketFixture(declarationReply: .accepted)
+        let port = try await socket.start()
+        let binding = BrowserDictationConnection(host: BrowserDictationHost(), enabled: { true }, execute: { _ in
+            BrowserDictationOutput(text: "text", model: "batch")
+        })
+        let client = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(port)")),
+            authToken: "fixture", hostLabel: "Fixture"), routes: nil, browserDictation: binding,
+            holdsConnection: { true })
+        let sink = LinkRecordingSink()
+        let pump = GatewayEventPump(gateway: client, conversations: sessions, sink: sink)
+        defer {
+            let stopped = pump.stop()
+            await client.retire()
+            await socket.stop()
+            for task in stopped { await task.value }
+        }
+        pump.startIfNeeded()
+        #expect(await waitUntil { await client.isConnected })
+        #expect(await client.isConnected)
+        await socket.closeConnections(code: .protocolCode(.goingAway))
+        #expect(await waitUntil(timeout: .seconds(10)) {
+            let requests = await socket.recordedRequests
+            return requests.filter { $0.method == "dictation/host/declare" }.count >= 2
+        })
+        #expect(await client.isConnected)
+    }
     @Test func retiringAnExplicitReplayReleasesItsClaimForTheReplacementPump() async throws {
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }

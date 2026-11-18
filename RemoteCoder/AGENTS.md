@@ -1846,6 +1846,11 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
 
 ## Speech output and dictation (`Services/Speech/`, `Services/Transcription/`)
 
+- Browser dictation's opted-in Mac host owns the native batch pipeline and its
+  settings. Its role keeps liveness and reconnect running in the background,
+  separately from gateway work loops. Host frames bypass the notification hub.
+  See `docs/browser-dictation.md`.
+
 - `DictationVoiceProfiles` is workspace-owned and shared by every host's
   controller, independent of the optional library. Only the explicit Voices
   choice and forget timestamp sync; the device-local template never leaves its

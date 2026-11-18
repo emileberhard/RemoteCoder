@@ -2406,6 +2406,13 @@ recorded cwd, model and effort, using an idempotent plain-text notice.
 
 ## Voice paths
 
+Browser dictation captures and saves audio locally, then hands a completed WAV
+through the selected gateway to an opted-in Mac app. The Mac runs the native
+batch pipeline and shared library; browser relay remains the fallback. The
+gateway owns bounded operations, not audio or settings. The role keeps its
+socket alive and reconnecting in the background. See
+[Browser dictation](browser-dictation.md) for the wire contract and lifecycle.
+
 RemoteCoder Voice Mode sends authenticated signaling/control metadata through
 the gateway while WebRTC audio flows directly between the phone and OpenAI's
 realtime service. A Codex voice call lets app-server own handoffs. A Claude

@@ -4,6 +4,9 @@ import {
   type TranscriptionSettings,
 } from "../transcription-settings";
 import { canceled, record, requiredString } from "./contracts";
+
+export { maximumRecordingMilliseconds } from "./dictation-limits";
+
 import { relayJSON, type SpeechFetch, type SpeechProvider, speechURL } from "./relay";
 
 export type DecodeAudio = (audio: Blob, sampleRate: number) => Promise<Float32Array>;
@@ -18,7 +21,6 @@ const azureSampleRate = 16_000;
 const relayBodyLimit = 64 * 1024 * 1024;
 const responseLimit = 2 * 1024 * 1024;
 const azureSampleBudget = Math.floor((relayBodyLimit - 64 * 1024 - 44) / 2);
-export const maximumRecordingMilliseconds = 30 * 60 * 1000;
 
 const batchEngine = {
   elevenLabsScribeV2Realtime: "elevenLabs",
@@ -159,7 +161,7 @@ function wait(milliseconds: number, signal: AbortSignal) {
   });
 }
 
-async function decodeMono(audio: Blob, sampleRate: number): Promise<Float32Array> {
+export async function decodeMono(audio: Blob, sampleRate: number): Promise<Float32Array> {
   const decoded = await new OfflineAudioContext(1, 1, sampleRate).decodeAudioData(await audio.arrayBuffer());
   if (decoded.length > azureSampleBudget)
     throw new Error("The recording is too long for MAI-Transcribe-2 dictation");

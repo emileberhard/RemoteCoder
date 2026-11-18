@@ -16,6 +16,10 @@ struct TranscriptionSettingsSection: View {
     var body: some View {
         @Bindable var settings = workspace.transcriptionSettings
         Section {
+            #if os(macOS)
+            @Bindable var browserDictation = workspace.browserDictationRole
+            Toggle("Browser dictation", isOn: $browserDictation.enabled)
+            #endif
             Picker("Provider", selection: providerSelection.nativeSelectionFeedback()) {
                 ForEach(TranscriptionProvider.allCases) { provider in
                     Text(provider.name).tag(provider)

@@ -52,6 +52,7 @@ mod control;
 mod conversation_changes;
 mod conversation_review;
 pub(crate) mod device_tools;
+mod dictation_hosts;
 mod execution;
 mod list_previews;
 mod live_activity;
@@ -362,6 +363,7 @@ pub(crate) struct Gateway {
     renames: renames::Renames,
     side_question_forks: side_question::Forks,
     device_tools: Arc<device_tools::DeviceTools>,
+    dictation_hosts: Arc<dictation_hosts::DictationHosts>,
     tool_claims: crate::agents::tools::claims::ToolClaims,
     job_routes: agent_routes::ParentHolders,
     tool_tasks: crate::tasks::owned_tasks::OwnedTasks,
@@ -620,6 +622,7 @@ impl Gateway {
             session_runtime: tokio::sync::OnceCell::new(),
             request_budgets,
             device_tools,
+            dictation_hosts: Default::default(),
             tool_claims: crate::agents::tools::claims::ToolClaims::default(),
             job_routes: Default::default(),
             tool_tasks: crate::tasks::owned_tasks::OwnedTasks::default(),

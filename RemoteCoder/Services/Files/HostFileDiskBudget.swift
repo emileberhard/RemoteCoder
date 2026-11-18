@@ -242,7 +242,7 @@ final class HostFileDiskBudget: Sendable {
               try HostFileReference(hostID: record.hostID, path: record.metadata.path).path == record.metadata.path else {
             throw HostFileError.invalidResponse
         }
-        try record.metadata.validate(path: record.metadata.path)
+        try record.metadata.validate(path: record.metadata.path, maximumBytes: HostFileLimits.maximumFileBytes)
         let entry = HostFileCachedEntry(record: record, directory: directory)
         let original = try entry.url.deletingLastPathComponent().resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         let file = try entry.url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])

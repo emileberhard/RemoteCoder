@@ -424,6 +424,29 @@ impl UploadStore {
             .map_or(UploadStatus::Absent, UploadStatus::Stored))
     }
 
+    pub(crate) fn finished_path(&self, path: &Path) -> Result<Option<StoredUpload>, UploadError> {
+        let Ok(relative) = path.strip_prefix(&self.dir) else {
+            return Ok(None);
+        };
+        let mut parts = relative.components();
+        let Some(std::path::Component::Normal(id)) = parts.next() else {
+            return Ok(None);
+        };
+        let Some(std::path::Component::Normal(_)) = parts.next() else {
+            return Ok(None);
+        };
+        if parts.next().is_some() {
+            return Ok(None);
+        }
+        let Some(id) = id.to_str().and_then(UploadId::parse) else {
+            return Ok(None);
+        };
+        Ok(match self.status(&id)? {
+            UploadStatus::Stored(stored) if stored.path == path => Some(stored),
+            _ => None,
+        })
+    }
+
     /// Removes an unfinished upload and its bytes once a streaming append has
     /// stopped. A finished upload stays until retention, since a sent message
     /// may already name its path; an unknown id is already gone. The removal

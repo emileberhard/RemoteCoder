@@ -180,6 +180,7 @@ impl Gateway {
             Ok(())
         }) {
             self.device_tools.disconnected(client_id);
+            self.dictation_hosts.disconnected(client_id);
             self.forget_degraded_client(client_id);
             self.clients.remove(&client_id);
             return;
@@ -275,6 +276,7 @@ impl Gateway {
             _ = cancelled.cancelled() => false,
         };
         self.device_tools.disconnected(client_id);
+        self.dictation_hosts.disconnected(client_id);
         cancelled.cancel();
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}

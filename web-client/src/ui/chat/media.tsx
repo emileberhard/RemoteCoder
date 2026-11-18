@@ -69,6 +69,7 @@ export function SpeakButton({ id, text }: { id: string; text: string }) {
 export function DictationControl() {
   const workspace = useWorkspace();
   const hostId = workspace.selectedHost?.host.id;
+  const selectedTarget = workspace.selectedHost?.target;
   const service = useRef<BrowserDictation | undefined>(undefined);
   const owner = useRef<{ key?: string }>({});
   const [state, setState] = useState<DictationState>({ status: "idle" });
@@ -106,6 +107,7 @@ export function DictationControl() {
         model: workspace.preference("transcription.model") ?? defaultTranscriptionModel,
         language: workspace.preference("transcription.language") ?? "automatic",
       }),
+      { request: workspace.featureTransport(selectedTarget).request },
     );
     service.current = dictation;
     void refresh(dictation).catch((error) => workspace.report(error));
@@ -118,7 +120,7 @@ export function DictationControl() {
           .finally(() => dictation.dispose());
       else dictation.dispose();
     };
-  }, [hostId, workspace, refresh]);
+  }, [hostId, selectedTarget, workspace, refresh]);
   const execute = (operation: (dictation: BrowserDictation) => Promise<void>) => {
     const dictation = service.current;
     if (!dictation) return;

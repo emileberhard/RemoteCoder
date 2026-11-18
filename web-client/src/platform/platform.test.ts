@@ -246,6 +246,96 @@ describe("browser speech service ownership", () => {
     service.dispose();
   });
 
+  test("host dictation uploads PCM audio and requests the selected host with its duration", async () => {
+    const texts: string[] = [];
+    const requests: unknown[] = [];
+    let uploaded: File | undefined;
+    const service = new BrowserDictation(
+      "host-1",
+      () => undefined,
+      (text) => texts.push(text),
+      scribe,
+      {
+        store: new MemoryRecordings(),
+        capture: async () => mediaStream().stream,
+        recorder,
+        decode: async () => new Float32Array(32_000),
+        uploadDictation: async (file) => {
+          uploaded = file;
+          return { path: "/uploads/recording.wav", bytes: file.size, sha256: "digest" };
+        },
+        request: async (method, params, options) => {
+          requests.push({ method, params, timeout: options?.timeout });
+          return { text: "Filtered words", model: "model" };
+        },
+      },
+    );
+    await service.start();
+    await service.finish();
+    expect(uploaded?.type).toBe("audio/wav");
+    expect(uploaded?.size).toBe(64_044);
+    expect(requests).toEqual([
+      {
+        method: "dictation/transcribe",
+        params: { path: "/uploads/recording.wav", durationMs: 2000 },
+        timeout: 127_000,
+      },
+    ]);
+    expect(texts).toEqual(["Filtered words"]);
+    expect(await service.recoveries()).toEqual([]);
+    service.dispose();
+  });
+
+  test.each([
+    "decode",
+    "upload",
+    "noHost",
+    "busy",
+    "hostLost",
+    "failed",
+    "unknown",
+    "methodNotFound",
+    "malformed",
+  ])("host failure %s falls back with the original recording", async (failure) => {
+    const texts: string[] = [];
+    let relayBody: FormData | undefined;
+    const service = new BrowserDictation(
+      "host-1",
+      () => undefined,
+      (text) => texts.push(text),
+      scribe,
+      {
+        store: new MemoryRecordings(),
+        capture: async () => mediaStream().stream,
+        recorder,
+        decode: async () => {
+          if (failure === "decode") throw new Error("decode failed");
+          return new Float32Array(16_000);
+        },
+        uploadDictation: async (file) => {
+          if (failure === "upload") throw new Error("upload failed");
+          return { path: "/upload.wav", bytes: file.size, sha256: "digest" };
+        },
+        request: async () => {
+          if (failure === "malformed") return {};
+          throw new Error(failure);
+        },
+        fetch: async (_input, init) => {
+          if (!(init?.body instanceof FormData)) throw new Error("Expected relay multipart body");
+          relayBody = init.body;
+          return new Response(JSON.stringify({ text: "Relay words" }));
+        },
+      },
+    );
+    await service.start();
+    await service.finish();
+    const original = relayBody?.get("file");
+    if (!(original instanceof Blob)) throw new Error("Missing relay recording");
+    expect(await original.text()).toBe("recorded microphone audio");
+    expect(texts).toEqual(["Relay words"]);
+    service.dispose();
+  });
+
   test("canceling a pending transcription fences late text and retains the saved recording", async () => {
     const store = new MemoryRecordings();
     const response = deferred<Response>();
