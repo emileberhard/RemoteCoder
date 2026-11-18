@@ -133,6 +133,7 @@ pub(super) fn redact_rpc_payload(payload: &mut Payload, method: Option<&str>, re
         }
     } else if !request
         && let Some(Value::Object(result)) = map.get_mut("result")
+        && result.contains_key("model")
         && let Some(text) = result.get_mut("text")
     {
         *text = Value::String("[redacted]".into());

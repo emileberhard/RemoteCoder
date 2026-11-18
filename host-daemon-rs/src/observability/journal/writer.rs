@@ -503,7 +503,9 @@ mod tests {
         assert!(!ambiguous.to_string().contains(secret));
         let unmatched = writer.render(Admitted::now(Record::RpcResponse {
             client_id: Some(9),
-            payload: Arc::from(json!({"id":3,"result":{"text":secret}}).to_string()),
+            payload: Arc::from(
+                json!({"id":3,"result":{"text":secret,"model":"batch"}}).to_string(),
+            ),
         }));
         assert!(!unmatched.to_string().contains(secret));
     }
