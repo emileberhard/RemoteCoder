@@ -111,8 +111,7 @@ impl DictationHosts {
             ));
         }
         if matches!(result.outcome, Outcome::Succeeded)
-            && (result.text.as_ref().is_none_or(|s| s.trim().is_empty())
-                || result.model.as_ref().is_none_or(|s| s.is_empty()))
+            && (result.text.is_none() || result.model.as_ref().is_none_or(|s| s.is_empty()))
         {
             return Err(RpcError::new(
                 RpcCode::InvalidParams,
@@ -198,24 +197,21 @@ impl DictationHosts {
             id: id.clone(),
             complete: false,
         };
-        let result = tokio::select! {
+        let (result, complete) = tokio::select! {
             biased;
-            result = receiver => match result {
+            result = receiver => (match result {
                 Ok(result) => match result.outcome {
                     Outcome::Succeeded => Ok(json!({"text": result.text, "model": result.model})),
                     Outcome::Failed if result.reason.as_deref() == Some("busy") => Err(reason("busy")),
                     Outcome::Failed | Outcome::Cancelled => Err(reason("failed")),
                 },
                 Err(_) => Err(reason("hostLost")),
-            },
-            _ = host.closed.cancelled() => Err(reason("hostLost")),
-            _ = requester.closed.cancelled() => Err(reason("unknown")),
-            _ = tokio::time::sleep_until(deadline_instant) => Err(reason("unknown")),
+            }, true),
+            _ = host.closed.cancelled() => (Err(reason("hostLost")), true),
+            _ = requester.closed.cancelled() => (Err(reason("unknown")), false),
+            _ = tokio::time::sleep_until(deadline_instant) => (Err(reason("unknown")), false),
         };
-        if !matches!(&result, Err(error) if matches!(&error.data, RpcData::Raw(data) if data["reason"] == "unknown"))
-        {
-            operation.complete = true;
-        }
+        operation.complete = complete;
         result
     }
 }
@@ -528,5 +524,30 @@ mod tests {
             )
             .unwrap();
         assert_eq!(error_reason(operation.await.unwrap().unwrap_err()), "busy");
+    }
+
+    #[tokio::test]
+    async fn an_empty_filtered_transcript_is_a_success() {
+        let (relay, _dir, path) = fixture().await;
+        let (requester, _) = client(1);
+        let (host, mut rx) = client(2);
+        relay.declare(&host, Declaration { serving: true }).unwrap();
+        let operation = start(&relay, &requester, &path);
+        let request = receive(&mut rx).await;
+        let receipt = relay
+            .result(
+                host.id,
+                serde_json::from_value(json!({
+                    "operationId": request["params"]["operationId"],
+                    "outcome": "succeeded", "text": "", "model": "batch"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(receipt["accepted"], true);
+        assert_eq!(
+            operation.await.unwrap().unwrap(),
+            json!({"text":"", "model":"batch"})
+        );
     }
 }

@@ -1,12 +1,5 @@
 import type { TranscriptionSettings } from "../transcription-settings";
-import {
-  canceled,
-  errorMessage,
-  type FeatureTransport,
-  isCanceled,
-  record,
-  requiredString,
-} from "./contracts";
+import { canceled, errorMessage, type FeatureTransport, isCanceled, record } from "./contracts";
 import { dictationSampleRate } from "./dictation-limits";
 import { BrowserRecordingStore, type RecordingStore, type SavedRecording } from "./recordings";
 import {
@@ -215,7 +208,9 @@ export class BrowserDictation {
             timeout: durationMs + 125_000,
           },
         );
-        text = requiredString(record(result).text, "dictation transcript");
+        const transcript = record(result).text;
+        if (typeof transcript !== "string") throw new Error("Missing dictation transcript");
+        text = transcript;
       } catch (error) {
         if (controller.signal.aborted) throw error;
         text = await transcribeRecording(
@@ -227,7 +222,7 @@ export class BrowserDictation {
         );
       }
       if (generation !== this.generation || this.retired) return;
-      this.onTranscript(text);
+      if (text) this.onTranscript(text);
       await this.store.remove(recording.id);
       if (this.unsaved?.id === recording.id) this.unsaved = undefined;
       if (generation === this.generation && !this.retired) this.publish({ status: "idle" });

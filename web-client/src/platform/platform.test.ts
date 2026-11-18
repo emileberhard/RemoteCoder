@@ -286,6 +286,36 @@ describe("browser speech service ownership", () => {
     service.dispose();
   });
 
+  test("an empty filtered host result completes without relay or draft insertion", async () => {
+    const texts: string[] = [];
+    let relayCalls = 0;
+    const service = new BrowserDictation(
+      "host-1",
+      () => undefined,
+      (text) => texts.push(text),
+      scribe,
+      {
+        store: new MemoryRecordings(),
+        capture: async () => mediaStream().stream,
+        recorder,
+        decode: async () => new Float32Array(16_000),
+        uploadDictation: async (file) => ({ path: "/upload.wav", bytes: file.size, sha256: "digest" }),
+        request: async () => ({ text: "", model: "batch" }),
+        fetch: async () => {
+          relayCalls += 1;
+          return new Response(JSON.stringify({ text: "Everyone's speech" }));
+        },
+      },
+    );
+    await service.start();
+    await service.finish();
+    expect(relayCalls).toBe(0);
+    expect(texts).toEqual([]);
+    expect(await service.recoveries()).toEqual([]);
+    expect(service.state.status).toBe("idle");
+    service.dispose();
+  });
+
   test.each([
     "decode",
     "upload",
