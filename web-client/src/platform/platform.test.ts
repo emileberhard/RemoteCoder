@@ -307,6 +307,34 @@ describe("browser speech service ownership", () => {
     service.dispose();
   });
 
+  test("a recording that outgrows the byte ceiling stops and is transcribed", async () => {
+    const texts: string[] = [];
+    let active: MediaRecorder | undefined;
+    const service = new BrowserDictation(
+      "host-1",
+      () => undefined,
+      (text) => texts.push(text),
+      scribe,
+      {
+        store: new MemoryRecordings(),
+        capture: async () => mediaStream().stream,
+        recorder: () => {
+          const created = recorder();
+          active = created;
+          return created;
+        },
+        fetch: async () => new Response(JSON.stringify({ text: "Long dictation" })),
+      },
+    );
+    await service.start();
+    const oversized = { data: new Blob([new Uint8Array(32 * 1024 * 1024 + 1)]) } as BlobEvent;
+    if (active) active.ondataavailable?.call(active, oversized);
+    expect(active?.state).toBe("inactive");
+    await service.finish();
+    expect(texts).toEqual(["Long dictation"]);
+    service.dispose();
+  });
+
   test("a recording keeps the settings it started with", async () => {
     const sent: string[] = [];
     let settings: TranscriptionSettings = { model: "elevenLabsScribeV2", language: "english" };

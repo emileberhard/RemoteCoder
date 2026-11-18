@@ -18,6 +18,8 @@ export type DictationOptions = TranscriptionOptions & {
   recorder?: (stream: MediaStream, options: MediaRecorderOptions) => MediaRecorder;
 };
 
+const maximumRecordingBytes = 32 * 1024 * 1024;
+
 type Capture = {
   recorder: MediaRecorder;
   stream: MediaStream;
@@ -89,9 +91,14 @@ export class BrowserDictation {
         { ...(mime ? { mimeType: mime } : {}), audioBitsPerSecond: 64000 },
       );
       const chunks: Blob[] = [];
+      let bytes = 0;
+      const stopAtLimit = () => void this.finish().catch(() => undefined);
       const result = new Promise<Blob>((resolve, reject) => {
         recorder.ondataavailable = (event) => {
-          if (event.data.size) chunks.push(event.data);
+          if (!event.data.size) return;
+          chunks.push(event.data);
+          bytes += event.data.size;
+          if (bytes > maximumRecordingBytes) stopAtLimit();
         };
         recorder.onerror = () => reject(new Error("The browser could not record microphone audio"));
         recorder.onstop = () => {
@@ -100,7 +107,7 @@ export class BrowserDictation {
         };
       });
       void result.catch(() => undefined);
-      const limit = setTimeout(() => void this.finish().catch(() => undefined), maximumRecordingMilliseconds);
+      const limit = setTimeout(stopAtLimit, maximumRecordingMilliseconds);
       this.capture = { recorder, stream, result, settings, limit };
       recorder.start(1000);
       this.publish({ status: "recording" });

@@ -87,7 +87,10 @@ export function DictationControl() {
     const dictation = new BrowserDictation(
       hostId,
       (next) => {
-        if (service.current === dictation) setState(next);
+        if (service.current !== dictation) return;
+        setState(next);
+        if (next.status === "failed" || next.status === "idle")
+          void refresh(dictation).catch((error) => workspace.report(error));
       },
       (text) => {
         const key = capturedOwner.key;
