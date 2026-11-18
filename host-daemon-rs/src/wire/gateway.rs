@@ -198,6 +198,8 @@ pub(crate) struct HostInfoResponse {
     pub conversation_search: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub conversation_search_by_meaning: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal_battery: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

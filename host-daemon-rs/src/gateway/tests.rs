@@ -275,6 +275,12 @@ async fn host_info_reports_the_gateway_home_directory() {
     assert_eq!(reply["result"]["claudeItemFork"], true);
     assert_eq!(reply["result"]["codexItemFork"], true);
     assert_eq!(
+        reply["result"]
+            .get("internalBattery")
+            .and_then(Value::as_bool),
+        crate::platform::battery::internal_battery()
+    );
+    assert_eq!(
         reply["result"]["automationsAuthority"],
         json!(crate::config::host_profile::AutomationAuthority::authority().unwrap())
     );

@@ -1745,6 +1745,7 @@ fn host_info(
         claude_queue,
         claude_item_fork: true,
         codex_item_fork: true,
+        internal_battery: crate::platform::battery::internal_battery(),
     }))
 }
 

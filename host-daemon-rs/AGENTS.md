@@ -573,7 +573,9 @@ blocks startup or provider journal retirement.
   rank. The sessions README owns the provider and result shapes.
 - `host/info` returns the gateway process's `homeDirectory`, physical `hostname`,
   `automationsAuthority`, `speechAvailable`, `fleetLiveActivity`, `claudeQueue`,
-  `claudeItemFork`, `codexItemFork`, `conversationSearch` and `conversationSearchByMeaning` capabilities. These are the
+  `claudeItemFork`, `codexItemFork`, `conversationSearch` and `conversationSearchByMeaning` capabilities, and
+  `internalBattery` from the macOS power source list or Linux `power_supply` batteries
+  outside scope `Device`; a failed read omits it. These are the
   authoritative inputs for client feature availability and physical-host routing.
   Missing capabilities stay unknown/unavailable, never guessed from a display
   name. It is the only way a client learns the home directory; `command/exec` serves
