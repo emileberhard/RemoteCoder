@@ -841,24 +841,29 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         run(lifecycle.handle(event))
     }
 
-    func setBrowserDictationHost(_ enabled: Bool) async {
-        guard acceptsWork else { return }
+    func setBrowserDictationHost(_ enabled: Bool, revision: Int) async {
+        guard acceptsWork, !Task.isCancelled, browserDictationRole?.isCurrent(revision, enabled: enabled) == true else { return }
         if enabled {
             let effects = lifecycle.handle(.browserDictationHost(true))
             await gateway.resumeLivenessChecks()
+            guard acceptsWork, !Task.isCancelled, browserDictationRole?.isCurrent(revision, enabled: true) == true else { return }
             eventPump.startForBrowserDictation()
             await gateway.browserDictationRoleChanged()
+            guard acceptsWork, !Task.isCancelled, browserDictationRole?.isCurrent(revision, enabled: true) == true else { return }
             await perform(effects)
         } else {
             await gateway.browserDictationRoleChanged()
         }
     }
 
-    func browserDictationDidDrain() async {
-        guard acceptsWork, !Task.isCancelled, browserDictationRole?.enabled == false else { return }
+    func browserDictationDidDrain(revision: Int) async {
+        guard acceptsWork, !Task.isCancelled, browserDictationRole?.isCurrent(revision, enabled: false) == true else { return }
         let effects = lifecycle.handle(.browserDictationHost(false))
         eventPump.releaseBrowserDictation()
-        if lifecycle.isBackgrounded { await gateway.suspendLivenessChecks() }
+        if lifecycle.isBackgrounded {
+            await gateway.suspendLivenessChecks()
+            guard acceptsWork, !Task.isCancelled, browserDictationRole?.isCurrent(revision, enabled: false) == true else { return }
+        }
         await perform(effects)
     }
 

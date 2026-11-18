@@ -172,16 +172,16 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             self?.applyModelPickerPreferences(for: provider, previousModelVisibility: previous)
         }
         syncedPreferences.onReplicaChange = { [weak self] in self?.syncPreferences() }
-        browserDictationRole.onChange = { [weak self] enabled in
+        browserDictationRole.onChange = { [weak self] enabled, revision in
             let models = self?.models ?? []
             await withTaskGroup(of: Void.self) { group in
-                for model in models { group.addTask { await model.setBrowserDictationHost(enabled) } }
+                for model in models { group.addTask { await model.setBrowserDictationHost(enabled, revision: revision) } }
             }
         }
-        browserDictationRole.onDrained = { [weak self] in
+        browserDictationRole.onDrained = { [weak self] revision in
             let models = self?.models ?? []
             await withTaskGroup(of: Void.self) { group in
-                for model in models { group.addTask { await model.browserDictationDidDrain() } }
+                for model in models { group.addTask { await model.browserDictationDidDrain(revision: revision) } }
             }
         }
         startAccountMigration()

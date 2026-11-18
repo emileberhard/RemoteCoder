@@ -8,10 +8,11 @@ final class BrowserDictationRole {
     private static let key = "dictation.browserHost"
     private var activity: (any NSObjectProtocol)?
     @ObservationIgnored private var drain: Task<Void, Never>?
+    @ObservationIgnored private var revision = 0
     @ObservationIgnored let host = BrowserDictationHost()
     @ObservationIgnored let files: BrowserDictationFiles
-    @ObservationIgnored var onChange: (@MainActor (Bool) async -> Void)?
-    @ObservationIgnored var onDrained: (@MainActor () async -> Void)?
+    @ObservationIgnored var onChange: (@MainActor (Bool, Int) async -> Void)?
+    @ObservationIgnored var onDrained: (@MainActor (Int) async -> Void)?
     var holdsConnection: Bool { enabled || drain != nil }
 
     var enabled: Bool {
@@ -21,16 +22,19 @@ final class BrowserDictationRole {
             drain?.cancel()
             drain = nil
             let selected = enabled
+            revision += 1
+            let revision = revision
             if selected { updateActivity() }
             drain = Task { [weak self, host] in
-                guard let self, !Task.isCancelled, enabled == selected else { return }
-                await onChange?(selected)
+                guard let self, !Task.isCancelled, isCurrent(revision, enabled: selected) else { return }
+                await onChange?(selected, revision)
+                guard !Task.isCancelled, isCurrent(revision, enabled: selected) else { return }
                 if !selected {
                     await host.waitUntilIdle()
-                    guard !Task.isCancelled, !enabled else { return }
-                    await onDrained?()
+                    guard !Task.isCancelled, isCurrent(revision, enabled: false) else { return }
+                    await onDrained?(revision)
                 }
-                guard !Task.isCancelled, enabled == selected else { return }
+                guard !Task.isCancelled, isCurrent(revision, enabled: selected) else { return }
                 drain = nil
                 updateActivity()
             }
@@ -46,6 +50,10 @@ final class BrowserDictationRole {
         enabled = false
         #endif
         updateActivity()
+    }
+
+    func isCurrent(_ revision: Int, enabled: Bool) -> Bool {
+        self.revision == revision && self.enabled == enabled
     }
 
     func teardown() {
