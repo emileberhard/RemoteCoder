@@ -121,6 +121,7 @@ pub(crate) struct ParentSelection {
 impl ParentSelection {
     pub(crate) fn selection(self) -> crate::providers::claude::ClaudeSelection {
         crate::providers::claude::ClaudeSelection {
+            claude_account: self.claude_account.clone(),
             model: self.model,
             effort: self.effort,
             fast: self.fast,

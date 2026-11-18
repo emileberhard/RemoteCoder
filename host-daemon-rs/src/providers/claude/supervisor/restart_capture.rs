@@ -125,6 +125,7 @@ impl ClaudeSupervisor {
                         runtime.session_uuid.clone(),
                         runtime.cwd.clone(),
                         selection,
+                        runtime.claude_account.clone(),
                         turn.map(|turn| {
                             (turn.translator.turn_id().to_owned(), turn.agent_initiated)
                         }),
@@ -141,28 +142,31 @@ impl ClaudeSupervisor {
             session_uuid,
             cwd,
             selection,
+            claude_account,
             turn,
             background_tasks,
             scheduled_wakes,
             queued,
         ) in captured
         {
-            let selection = match selection {
+            let mut selection = match selection {
                 Some(selection) => selection,
                 None => {
                     self.parent_selection(&thread_id)
                         .await
                         .unwrap_or_else(|| ClaudeSelection {
+                            claude_account: None,
                             model: self.settings.default_model.clone(),
                             effort: None,
                             fast: false,
                         })
                 }
             };
+            selection.claude_account = claude_account;
             let (notices, queued_inputs): (Vec<_>, Vec<_>) =
                 queued.into_iter().partition(|input| input.notice.is_some());
             let mut item = Item {
-                claude_account: None,
+                claude_account: selection.claude_account,
                 recovery_id: new_session_uuid(),
                 stop_generation: stop_generations.get(&thread_id).copied().flatten(),
                 thread_id,
@@ -561,6 +565,7 @@ mod tests {
                 first_turn: false,
                 input: ClaudeUserInput::text(text),
                 selection: ClaudeSelection {
+                    claude_account: Some("emileberhard388".into()),
                     model: "opus".to_owned(),
                     effort: Some("max".to_owned()),
                     fast: true,
@@ -654,6 +659,7 @@ mod tests {
         assert_eq!(
             item.selection(),
             ClaudeSelection {
+                claude_account: Some("emileberhard388".into()),
                 model: "opus".to_owned(),
                 effort: Some("max".to_owned()),
                 fast: true,
@@ -836,6 +842,7 @@ mod tests {
                 first_turn: false,
                 input: ClaudeUserInput::text("late"),
                 selection: ClaudeSelection {
+                    claude_account: None,
                     model: "opus".to_owned(),
                     effort: None,
                     fast: false,

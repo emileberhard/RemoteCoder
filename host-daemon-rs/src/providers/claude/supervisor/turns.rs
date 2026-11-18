@@ -55,7 +55,8 @@ impl ClaudeSupervisor {
     ) -> Result<String, TurnStartError> {
         let _start_guard = self.lifecycles.lock(&request.thread_id).await;
         self.refuse_while_user_turn_runs(&request).await?;
-        if let Some((selection, _)) = self.recorded_selection(&request.thread_id).await? {
+        if let Some((mut selection, _)) = self.recorded_selection(&request.thread_id).await? {
+            selection.claude_account = request.selection.claude_account;
             request.selection = selection;
         }
         self.start_turn_locked(request, TurnOrigin::Dispatched)

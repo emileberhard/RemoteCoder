@@ -548,7 +548,7 @@ async def cmd_claude_turn(args: argparse.Namespace) -> int:
                 ws, next_id=ids.__next__, prompt=args.prompt, resume=args.resume,
                 model=args.model, cwd=args.cwd, approval_policy="never", sandbox="dangerFullAccess",
                 network_access=True, timeout_s=args.timeout, provider="claude",
-                input_items=input_items, effort=args.effort, resume_rpc=False, purpose=args.purpose,
+                input_items=input_items, effort=args.effort, claude_account=args.claude_account, resume_rpc=False, purpose=args.purpose,
                 on_thread=set_thread, on_turn=turn_started, on_event=show,
             )
 
@@ -936,6 +936,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="attach an image (repeatable); auto-converts PNG to JPEG",
     )
     s.add_argument("--resume", default=None, help="existing claude_<uuid> thread id")
+    s.add_argument("--claude-account", default=None, metavar="ID", help="prefer this llm-router Claude subscription account")
     s.add_argument("--cwd", default=str(Path.cwd()), help="working directory for the turn")
     s.add_argument("--model", default="claude-fable-5", help="model (default: claude-fable-5)")
     s.add_argument(

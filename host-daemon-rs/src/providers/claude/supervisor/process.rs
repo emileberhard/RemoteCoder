@@ -292,7 +292,12 @@ impl ClaudeSupervisor {
             }
         }
         launch.apply_args(&mut args);
-        let mut command = claude_exec::command_on_route(&self.settings, &args, route)?;
+        let mut command = claude_exec::command_on_route(
+            &self.settings,
+            &args,
+            route,
+            request.selection.claude_account.as_deref(),
+        )?;
         launch.apply_env(&mut command);
         command.env(SEND_USER_MESSAGE_ENV, "1");
         if !self.settings.mcp_endpoint.is_empty() {
@@ -331,6 +336,7 @@ impl ClaudeSupervisor {
         Ok(SpawnedRuntime {
             admission,
             runtime: ClaudeRuntime {
+                claude_account: request.selection.claude_account.clone(),
                 input: InputWriter::spawn(stdin),
                 pending_controls: HashMap::new(),
                 process_group_id,

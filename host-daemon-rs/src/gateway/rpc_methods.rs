@@ -507,6 +507,7 @@ impl Gateway {
                 RpcError::new(RpcCode::Internal, "Claude provider is unavailable")
             })?;
             let selection = crate::providers::claude::ClaudeSelection {
+                claude_account: None,
                 model: settings.model.clone(),
                 effort: settings.effort.as_deref().map(claude_effort_wire_value),
                 fast: claude_fast_mode(
@@ -833,10 +834,33 @@ impl Gateway {
         Ok(model)
     }
 
+    fn claude_rpc_account(params: &Value) -> Result<Option<String>, RpcError> {
+        let Some(value) = params.get("claudeAccount") else {
+            return Ok(None);
+        };
+        let account = value
+            .as_str()
+            .filter(|account| {
+                (1..=64).contains(&account.len())
+                    && account.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                    })
+            })
+            .ok_or_else(|| {
+                RpcError::new(
+                    RpcCode::InvalidParams,
+                    "claudeAccount must be 1–64 lowercase ASCII letters, digits or hyphens",
+                )
+            })?;
+        Ok(Some(account.to_owned()))
+    }
+
     /// Pre-assigns a session id so thread creation is local and instant.
     async fn claude_thread_start(&self, params: &Value) -> RpcResult {
+        let account = Self::claude_rpc_account(params)?;
         let model = self.claude_rpc_model(params)?;
         let selection = crate::providers::claude::ClaudeSelection {
+            claude_account: account,
             model: model.to_owned(),
             effort: params
                 .pointer("/config/model_reasoning_effort")
@@ -844,6 +868,13 @@ impl Gateway {
                 .map(claude_effort_wire_value),
             fast: params.get("serviceTier").and_then(Value::as_str) == Some("fast"),
         };
+        if !crate::providers::claude::exec::account_route_allowed(&self.claude_settings, &selection)
+        {
+            return Err(RpcError::new(
+                RpcCode::InvalidParams,
+                "claudeAccount requires the llm-router Claude route",
+            ));
+        }
         let route =
             crate::providers::claude::exec::resolve(&self.claude_settings, &selection, true)
                 .await
@@ -980,6 +1011,7 @@ impl Gateway {
         if let Some(agent) = self.claude_agent() {
             if let Some(model) = params.get("model").and_then(Value::as_str) {
                 let selection = crate::providers::claude::ClaudeSelection {
+                    claude_account: None,
                     model: model.to_owned(),
                     effort: params
                         .pointer("/config/model_reasoning_effort")
@@ -1306,6 +1338,7 @@ impl Gateway {
     }
 
     async fn claude_turn_start(&self, params: &Value) -> RpcResult {
+        let account = Self::claude_rpc_account(params)?;
         let keeps_recorded_selection = params.get("model").and_then(Value::as_str).is_none();
         if keeps_recorded_selection
             && ["effort", "serviceTier"]
@@ -1380,6 +1413,7 @@ impl Gateway {
             first_turn,
             input,
             selection: crate::providers::claude::ClaudeSelection {
+                claude_account: account,
                 model: model.to_owned(),
                 effort: params
                     .get("effort")
@@ -1547,6 +1581,7 @@ impl Gateway {
                 first_turn: false,
                 input: crate::providers::claude::ClaudeUserInput::text("/compact"),
                 selection: crate::providers::claude::ClaudeSelection {
+                    claude_account: None,
                     model: model.to_owned(),
                     effort: header["reasoningEffort"].as_str().map(str::to_owned),
                     fast: false,
@@ -1764,6 +1799,60 @@ mod tests {
     use std::time::Duration;
 
     #[tokio::test]
+    async fn claude_account_validation_rejects_invalid_ids_and_native_login_on_both_rpcs() {
+        let owner =
+            Arc::new(crate::providers::claude::settings::ClaudeSettings::isolated_for_test());
+        let mut settings = owner.settings.clone();
+        settings.router = None;
+        let gateway = crate::test_support::TestGateway::with_settings(
+            Arc::new(crate::providers::codex::daemon::CodexAppServer::new(
+                std::path::PathBuf::from("/bin/true"),
+                std::collections::HashMap::new(),
+            )),
+            settings,
+            owner,
+        );
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let agent = crate::providers::claude::ClaudeSupervisor::new(
+            gateway.claude_settings.clone(),
+            tx,
+            gateway.journal.clone(),
+            gateway.mcp_tokens.clone(),
+        );
+        gateway.set_claude_agent(Arc::clone(&agent));
+        let uuid = agent.mint_session().await.unwrap();
+        for account in [
+            json!(""),
+            json!("UPPER"),
+            json!("a_b"),
+            json!("å"),
+            json!("a".repeat(65)),
+            json!(null),
+            json!(42),
+            json!("valid-1"),
+        ] {
+            let start = gateway
+                .claude_thread_start(
+                    &json!({"model":"opus", "cwd":"/tmp", "claudeAccount": account}),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(start.code, RpcCode::InvalidParams);
+            let turn = gateway.claude_turn_start(&json!({"threadId":format!("claude_{uuid}"), "model":"opus", "cwd":"/tmp", "input":[{"type":"text","text":"hi"}], "claudeAccount":account})).await.unwrap_err();
+            assert_eq!(turn.code, RpcCode::InvalidParams);
+        }
+        for account in ["a", &"a".repeat(64), "emileberhard388"] {
+            assert_eq!(
+                Gateway::claude_rpc_account(&json!({"claudeAccount":account}))
+                    .unwrap()
+                    .as_deref(),
+                Some(account)
+            );
+        }
+        agent.stop_all().await;
+    }
+
+    #[tokio::test]
     async fn discovery_round_two_resume_recovers_settings_after_failed_apply() {
         use crate::providers::claude::{ClaudeSelection, ClaudeTurnRequest, ClaudeUserInput};
         use std::os::unix::fs::PermissionsExt;
@@ -1814,6 +1903,7 @@ for line in sys.stdin:
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join(format!("{uuid}.jsonl")), format!("{}\n", json!({"type":"user","timestamp":"2026-10-17T10:00:00Z","cwd":"/tmp","message":{"role":"user","content":"Resume fixture"}}))).unwrap();
         let selection = ClaudeSelection {
+            claude_account: None,
             model: "claude-fable-5".into(),
             effort: Some("high".into()),
             fast: false,

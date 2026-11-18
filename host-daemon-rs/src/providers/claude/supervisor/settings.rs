@@ -13,6 +13,11 @@ impl ClaudeSupervisor {
         selection: &ClaudeSelection,
     ) -> Result<Value, TurnStartError> {
         let _guard = self.lifecycles.lock(thread_id).await;
+        let mut selection = selection.clone();
+        if let Some(runtime) = self.runtimes.lock().await.get(thread_id) {
+            selection.claude_account = runtime.claude_account.clone();
+        }
+        let selection = &selection;
         self.validate_route(thread_id, selection, false).await?;
         let result = if self.runtimes.lock().await.contains_key(thread_id) {
             self.apply_runtime_settings(thread_id, selection).await?
@@ -50,6 +55,13 @@ impl ClaudeSupervisor {
                     .as_ref()
                     .map(|settings| settings.effective().clone())
             });
+        if !crate::providers::claude::exec::account_route_allowed(&self.settings, selection) {
+            return Err(TurnStartError {
+                data: None,
+                code: crate::rpc::error::RpcCode::InvalidParams,
+                message: "claudeAccount requires the llm-router Claude route".into(),
+            });
+        }
         let route = self
             .resolve_selection(selection, first_turn && previous.is_none())
             .await?;
@@ -104,7 +116,7 @@ impl ClaudeSupervisor {
         selection: &ClaudeSelection,
     ) -> anyhow::Result<()> {
         let selection = crate::providers::claude::conversation_index::ParentSelection {
-            claude_account: None,
+            claude_account: selection.claude_account.clone(),
             cwd: cwd.to_owned(),
             model: selection.model.clone(),
             effort: selection.effort.clone(),
@@ -134,13 +146,16 @@ impl ClaudeSupervisor {
         thread_id: &str,
         selection: &ClaudeSelection,
     ) -> Result<Value, TurnStartError> {
-        let pid = self
-            .runtimes
-            .lock()
-            .await
-            .get(thread_id)
-            .ok_or("Claude runtime ended before settings could be updated")?
-            .process_group_id;
+        let pid = {
+            let runtimes = self.runtimes.lock().await;
+            let runtime = runtimes
+                .get(thread_id)
+                .ok_or("Claude runtime ended before settings could be updated")?;
+            if runtime.claude_account != selection.claude_account {
+                return Err("Claude account requires a new process".into());
+            }
+            runtime.process_group_id
+        };
         let prepared = Self::prepare_runtime_control(&json!({
             "subtype":"apply_flag_settings",
             "settings":{
@@ -160,7 +175,8 @@ impl ClaudeSupervisor {
         let response = self
             .runtime_control(thread_id, pid, json!({ "subtype": "get_settings" }))
             .await?;
-        let actual = ClaudeRuntimeSettings::read_back(&response)?;
+        let mut actual = ClaudeRuntimeSettings::read_back(&response)?;
+        actual.claude_account = selection.claude_account.clone();
         let matches = claude_model_matches(&selection.model, &actual.model)
             && selection
                 .effort

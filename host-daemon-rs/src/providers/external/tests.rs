@@ -120,8 +120,13 @@ async fn external_command_uses_only_the_selected_provider_credentials() {
         model: MODEL.into(),
         context: 200000,
     };
-    let command =
-        crate::providers::claude::exec::command_on_route(&home.settings, &[], &route).unwrap();
+    let command = crate::providers::claude::exec::command_on_route(
+        &home.settings,
+        &[],
+        &route,
+        Some("example"),
+    )
+    .unwrap();
     let env = command
         .as_std()
         .get_envs()
@@ -134,6 +139,7 @@ async fn external_command_uses_only_the_selected_provider_credentials() {
             })
         })
         .collect::<std::collections::HashMap<_, _>>();
+    assert!(!env.contains_key("ANTHROPIC_CUSTOM_HEADERS"));
     assert_eq!(env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:9");
     assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "external-secret");
     assert_eq!(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "200000");
@@ -142,7 +148,8 @@ async fn external_command_uses_only_the_selected_provider_credentials() {
     assert!(!format!("{command:?}").contains("external-secret"));
     std::fs::write(key, "rotated-external-secret").unwrap();
     let command =
-        crate::providers::claude::exec::command_on_route(&home.settings, &[], &route).unwrap();
+        crate::providers::claude::exec::command_on_route(&home.settings, &[], &route, None)
+            .unwrap();
     assert!(
         command
             .as_std()

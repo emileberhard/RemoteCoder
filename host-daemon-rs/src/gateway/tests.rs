@@ -5838,6 +5838,7 @@ async fn claude_turn_without_a_model_keeps_the_recorded_selection() {
             &thread,
             &cwd,
             &crate::providers::claude::ClaudeSelection {
+                claude_account: None,
                 model: "opus".to_owned(),
                 effort: Some("low".to_owned()),
                 fast: true,

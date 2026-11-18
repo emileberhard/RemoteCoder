@@ -550,6 +550,7 @@ impl Gateway {
             first_turn,
             input: delegation.clone(),
             selection: crate::providers::claude::ClaudeSelection {
+                claude_account: None,
                 model: session.model.clone(),
                 effort: session.effort.clone(),
                 fast: agent

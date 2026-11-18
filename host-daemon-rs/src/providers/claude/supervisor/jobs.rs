@@ -250,6 +250,7 @@ impl ClaudeSupervisor {
                 ..ClaudeUserInput::text(spec.prompt.clone())
             },
             selection: ClaudeSelection {
+                claude_account: None,
                 model: model.clone(),
                 effort: effort.clone(),
                 fast: *fast,

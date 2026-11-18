@@ -221,6 +221,7 @@ pub(crate) mod suspend_test_support {
                 first_turn: false,
                 input: ClaudeUserInput::text(text),
                 selection: ClaudeSelection {
+                    claude_account: None,
                     model: "sonnet".to_owned(),
                     effort: None,
                     fast: false,

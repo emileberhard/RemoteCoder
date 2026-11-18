@@ -34,7 +34,7 @@ impl Gateway {
             .get("acceptProviderFallback")
             .and_then(Value::as_bool)
             == Some(true);
-        if claude && !accepts_fallback {
+        if claude && (!accepts_fallback || fields.contains_key("claudeAccount")) {
             return Ok(false);
         }
         if claude && self.claude_first_party_available().await? {

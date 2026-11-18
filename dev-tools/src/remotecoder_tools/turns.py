@@ -160,6 +160,7 @@ async def _run_gateway_turn(
     input_items: list[dict[str, Any]] | None = None,
     effort: str | None = None,
     service_tier: str | None = None,
+    claude_account: str | None = None,
     exclude_turns: bool = True,
     resume_rpc: bool = True,
     purpose: str | None = None,
@@ -179,6 +180,8 @@ async def _run_gateway_turn(
     thread_params = {"cwd": cwd, **policy}
     if model is not None:
         thread_params["model"] = model
+    if claude_account is not None:
+        thread_params["claudeAccount"] = claude_account
     if provider == "codex":
         # Explicit null clears a saved/configured Fast tier for this dispatch.
         thread_params["serviceTier"] = service_tier
@@ -203,7 +206,7 @@ async def _run_gateway_turn(
     elif resume:
         thread_id = resume
     else:
-        start_params = {**thread_params, "acceptProviderFallback": True}
+        start_params = {**thread_params, "acceptProviderFallback": claude_account is None}
         if effort:
             start_params["config"] = {"model_reasoning_effort": effort}
         if provider != "codex":
@@ -225,6 +228,10 @@ async def _run_gateway_turn(
         ):
             raise RuntimeError("Admitted Claude thread cannot preserve the requested execution restrictions; no turn was submitted")
         thread_params = {"cwd": cwd}
+        if claude_account is not None:
+            if actual_provider != "claude":
+                raise RuntimeError("Admitted provider cannot honor claudeAccount; no turn was submitted")
+            thread_params["claudeAccount"] = claude_account
         actual_model = result.get("model", thread.get("model"))
         if isinstance(actual_model, str):
             thread_params["model"] = actual_model

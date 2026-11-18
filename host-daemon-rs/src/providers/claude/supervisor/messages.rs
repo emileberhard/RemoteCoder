@@ -92,7 +92,7 @@ impl ClaudeSupervisor {
         stop_generation: u64,
     ) {
         let selection = ParentSelection {
-            claude_account: None,
+            claude_account: request.selection.claude_account.clone(),
             cwd: request.cwd.clone(),
             model: request.selection.model.clone(),
             effort: request.selection.effort.clone(),
@@ -124,6 +124,7 @@ impl ClaudeSupervisor {
             model,
             effort,
             fast,
+            claude_account: _,
         } = selection.clone();
         self.update_parent(thread_id, move |parent| {
             if let Some(selection) = parent.selection.as_mut() {
@@ -872,6 +873,7 @@ mod tests {
                 first_turn: false,
                 input: ClaudeUserInput::text(text),
                 selection: ClaudeSelection {
+                    claude_account: None,
                     model: model.to_owned(),
                     effort: Some(effort.to_owned()),
                     fast: false,
@@ -1280,6 +1282,7 @@ mod tests {
             .update_settings(
                 THREAD,
                 &ClaudeSelection {
+                    claude_account: None,
                     model: "opus".to_owned(),
                     effort: Some("low".to_owned()),
                     fast: true,
@@ -1304,6 +1307,7 @@ mod tests {
             .update_settings(
                 THREAD,
                 &ClaudeSelection {
+                    claude_account: None,
                     model: "opus".to_owned(),
                     effort: Some("low".to_owned()),
                     fast: true,

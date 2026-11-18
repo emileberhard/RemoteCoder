@@ -47,6 +47,7 @@ fn live_subscription_settings(workspace: &Path) -> ClaudeSettings {
 
 fn selection(model: &str, effort: Option<&str>) -> ClaudeSelection {
     ClaudeSelection {
+        claude_account: None,
         model: model.to_owned(),
         effort: effort.map(str::to_owned),
         fast: false,
@@ -92,6 +93,17 @@ async fn cold_threads_keep_their_recorded_provider_and_imports_stay_native() {
     let agent = ClaudeSupervisor::new(settings, tx, Journal::disabled(), McpTokens::default());
     let external = selection("vendor/model", Some("high"));
     let native = selection("sonnet", Some("high"));
+    let mut preferred_external = external.clone();
+    preferred_external.claude_account = Some("example".into());
+    assert_eq!(
+        agent
+            .validate_route("claude_external", &preferred_external, true)
+            .await
+            .err()
+            .unwrap()
+            .code,
+        RpcCode::InvalidParams
+    );
     assert!(
         agent
             .validate_route("claude_import", &external, false)
@@ -681,6 +693,7 @@ async fn placeholder_runtime(
     let process_group_id = child.id().expect("placeholder pid") as i32;
     let stdin = child.stdin.take().expect("stdin");
     let runtime = ClaudeRuntime {
+        claude_account: request.selection.claude_account.clone(),
         input: InputWriter::spawn(stdin),
         pending_controls: HashMap::new(),
         process_group_id,
@@ -702,6 +715,62 @@ async fn placeholder_runtime(
         stderr_ring: Arc::new(Mutex::new(Vec::new())),
     };
     (runtime, child)
+}
+
+#[tokio::test]
+async fn account_changes_require_a_new_claude_process() {
+    let home = ClaudeSettings::isolated_for_test();
+    let cwd = home.root_path().join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    let cwd = cwd.to_string_lossy().into_owned();
+    let session = "11111111-2222-4333-8444-555555555555";
+    let thread = format!("claude_{session}");
+    let history = crate::providers::claude::timeline::session_path_for_cwd(
+        &home.settings.claude_home,
+        &cwd,
+        session,
+    );
+    fs::create_dir_all(history.parent().unwrap()).unwrap();
+    fs::write(&history, "{\"type\":\"user\",\"message\":\"existing\"}\n").unwrap();
+    let executable = home.root_path().join("claude-stub");
+    crate::test_support::write_claude_cli_stub(
+        &executable,
+        crate::test_support::ClaudeCliMode::MessagesAcknowledgeInterrupt(history),
+    );
+    let mut settings = home.settings.clone();
+    settings.claude_path = executable;
+    settings.mcp_endpoint = "http://127.0.0.1:8787/mcp".into();
+    let (tx, mut events) = mpsc::channel(128);
+    let agent = ClaudeSupervisor::new(settings, tx, Journal::disabled(), McpTokens::default());
+    let mut pids = Vec::new();
+    for account in [Some("first"), Some("second"), None] {
+        let mut selected = selection("opus", Some("high"));
+        selected.claude_account = account.map(str::to_owned);
+        let turn = ClaudeTurnRequest {
+            thread_id: thread.clone(),
+            session_uuid: session.to_owned(),
+            first_turn: false,
+            input: ClaudeUserInput::text("reply: ready"),
+            selection: selected,
+            cwd: cwd.clone(),
+        };
+        let turn_id = agent
+            .start_turn_with_recorded_selection(turn)
+            .await
+            .unwrap();
+        let pid = agent.runtimes.lock().await[&thread].process_group_id;
+        pids.push(pid);
+        loop {
+            let frame = crate::test_support::claude_event(events.recv().await.unwrap());
+            if frame["method"] == "turn/completed" && frame["params"]["turn"]["id"] == turn_id {
+                assert_eq!(frame["params"]["turn"]["status"], "completed", "{frame}");
+                break;
+            }
+        }
+    }
+    assert_ne!(pids[0], pids[1]);
+    assert_ne!(pids[1], pids[2]);
+    agent.stop_all().await;
 }
 
 #[tokio::test]
@@ -4003,7 +4072,8 @@ async fn a_written_entry_waits_while_a_retired_process_could_still_consume_it() 
         agent
             .start_queued_now(QUEUE_THREAD, "first")
             .await
-            .unwrap_err()
+            .err()
+            .unwrap()
             .code,
         RpcCode::InvalidRequest,
         "Send Now waits for the retired process too"

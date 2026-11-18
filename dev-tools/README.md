@@ -22,10 +22,15 @@ each works from any directory. Run the tests with `just tools-test`;
 ```bash
 ./dev-tools/rc-gateway config                        # resolved config, token redacted
 ./dev-tools/rc-gateway turn --prompt "hello" --show-deltas
+./dev-tools/rc-gateway claude-turn "hello" --claude-account ACCOUNT_ID
 ./dev-tools/rc-gateway rpc --method thread/read --params '{"threadId":"...","includeTurns":true}'
 ./dev-tools/rc-gateway proxy                         # app-server JSON-RPC on stdio, through gateway admission
 ./dev-tools/realtime-voice-probe --media
 ```
+
+`claude-turn --claude-account ID` prefers an llm-router Claude subscription for
+the dispatched turn, including with `--resume`; it requires the router route.
+The CLI sends the preference on a fresh thread and on its turn.
 
 `rc-gateway` defaults to this machine and reads its gateway environment and TLS
 identity directly, without SSH or a hostname selection from the local JSON.

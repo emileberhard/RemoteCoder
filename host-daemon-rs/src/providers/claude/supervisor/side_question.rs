@@ -85,6 +85,7 @@ impl ClaudeSupervisor {
         ]
         .map(str::to_owned);
         let selection = crate::providers::claude::ClaudeSelection {
+            claude_account: None,
             model: model.clone(),
             effort: None,
             fast: false,
@@ -93,7 +94,7 @@ impl ClaudeSupervisor {
             .validate_route(thread_id, &selection, false)
             .await
             .map_err(|error| error.message)?;
-        let mut command = claude_exec::command_on_route(&self.settings, &args, &route)
+        let mut command = claude_exec::command_on_route(&self.settings, &args, &route, None)
             .map_err(|error| format!("failed to prepare claude: {error}"))?;
         command
             .current_dir(cwd)

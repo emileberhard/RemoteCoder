@@ -259,6 +259,7 @@ impl JobOwner {
                 self.gateway()?
                     .job_validate_claude_selection(
                         &crate::providers::claude::ClaudeSelection {
+                            claude_account: None,
                             model: model.clone(),
                             effort: effort.clone(),
                             fast: *fast,

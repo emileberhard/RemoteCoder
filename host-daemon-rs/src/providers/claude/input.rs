@@ -211,6 +211,8 @@ fn parse_data_url(url: &str) -> Result<ClaudeImage, String> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct ClaudeSelection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claude_account: Option<String>,
     pub model: String,
     pub effort: Option<String>,
     pub fast: bool,

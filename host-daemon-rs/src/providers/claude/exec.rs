@@ -113,6 +113,18 @@ impl Route {
     }
 }
 
+pub(crate) fn account_route_allowed(
+    settings: &ClaudeSettings,
+    selection: &super::ClaudeSelection,
+) -> bool {
+    selection.claude_account.is_none()
+        || (settings.router.is_some()
+            && !settings
+                .external_providers
+                .as_ref()
+                .is_some_and(|providers| providers.owner(&selection.model).is_some()))
+}
+
 pub(crate) async fn resolve(
     settings: &ClaudeSettings,
     selection: &super::ClaudeSelection,
@@ -157,13 +169,14 @@ pub(crate) fn is_native_model(model: &str) -> bool {
 /// `args` is the complete argument vector; callers own argv construction so there
 /// is exactly one place per call site to audit.
 pub(crate) fn command(settings: &ClaudeSettings, args: &[String]) -> Result<ClaudeCommand> {
-    command_on_route(settings, args, &Route::Default)
+    command_on_route(settings, args, &Route::Default, None)
 }
 
 pub(crate) fn command_on_route(
     settings: &ClaudeSettings,
     args: &[String],
     route: &Route,
+    claude_account: Option<&str>,
 ) -> Result<ClaudeCommand> {
     debug_assert!(
         !args.iter().any(|arg| arg == "--bare"),
@@ -187,6 +200,12 @@ pub(crate) fn command_on_route(
                 let key = router
                     .key()
                     .map_err(|error| Error::other(error.to_string()))?;
+                if let Some(account) = claude_account {
+                    cmd.env(
+                        "ANTHROPIC_CUSTOM_HEADERS",
+                        format!("X-Llm-Router-Claude-Preference: {account}"),
+                    );
+                }
                 cmd.env("ANTHROPIC_BASE_URL", router.inference_base());
                 cmd.env("ANTHROPIC_AUTH_TOKEN", key);
                 cmd.env("CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK", "1");
@@ -246,6 +265,37 @@ pub(crate) fn resolve_claude_path(configured: Option<&str>, home: &Path) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn router_account_header_is_exact_and_absent_without_a_preference() {
+        let fixture = ClaudeSettings::isolated_for_test();
+        for (account, expected) in [
+            (
+                Some("emileberhard388"),
+                Some("X-Llm-Router-Claude-Preference: emileberhard388"),
+            ),
+            (None, None),
+        ] {
+            let command =
+                command_on_route(&fixture.settings, &[], &Route::Default, account).unwrap();
+            let header = command
+                .as_std()
+                .get_envs()
+                .find(|(key, _)| *key == "ANTHROPIC_CUSTOM_HEADERS")
+                .and_then(|(_, value)| value)
+                .and_then(|value| value.to_str());
+            assert_eq!(header, expected);
+        }
+        let mut settings = fixture.settings.clone();
+        settings.router = None;
+        let command = command_on_route(&settings, &[], &Route::Default, None).unwrap();
+        assert!(
+            !command
+                .as_std()
+                .get_envs()
+                .any(|(key, _)| key == "ANTHROPIC_CUSTOM_HEADERS")
+        );
+    }
 
     #[test]
     fn native_aliases_accept_future_families_without_external_routes() {

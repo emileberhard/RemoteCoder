@@ -364,8 +364,14 @@ Without a router, Claude uses its own login and settings in the configured
 host-default home; readiness uses the unmodified CLI's native auth check.
 
 In router mode, every Claude command reads the host's router key anew and injects
-`RC_CODEX_GATEWAY_ROUTER_URL` as `ANTHROPIC_BASE_URL` plus only
-`ANTHROPIC_AUTH_TOKEN` into its otherwise cleared provider environment. Rotation
+`RC_CODEX_GATEWAY_ROUTER_URL` as `ANTHROPIC_BASE_URL` and
+`ANTHROPIC_AUTH_TOKEN` into its otherwise cleared provider environment. A Claude
+turn may also request an llm-router subscription preference with `claudeAccount`;
+the gateway passes it in `ANTHROPIC_CUSTOM_HEADERS` as
+`X-Llm-Router-Claude-Preference: <id>`. The router uses that account when it can
+serve the model and otherwise applies its normal selection. The preference is per
+dispatch and persists for interrupted-turn recovery; omitting it from a later
+turn clears it. Rotation
 requires no restart. The key never appears in diagnostics or receipts.
 
 `GET /accounts` retains `default-claude` with `isDefault: true` on each host.

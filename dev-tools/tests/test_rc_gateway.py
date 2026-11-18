@@ -1067,6 +1067,43 @@ class TurnSetupReceiptTests(unittest.IsolatedAsyncioTestCase):
                     rows = [json.loads(line) for line in event_log.read_text().splitlines()]
                     self.assertEqual([row for row in rows if row.get("type") == "dispatch.not_started"], expected)
 
+    async def test_claude_account_is_sent_on_fresh_and_resumed_turns(self) -> None:
+        from websockets.asyncio.server import serve
+
+        for resume in (False, True):
+            with self.subTest(resume=resume):
+                requests = []
+
+                async def respond(connection, requests=requests) -> None:
+                    await connection.send(json.dumps({"method": "ready", "params": {}}))
+                    async for raw in connection:
+                        request = json.loads(raw)
+                        if "id" not in request:
+                            continue
+                        requests.append(request)
+                        result = {"thread": {"id": "claude_fixture"}, "model": "opus"}
+                        if request["method"] == "turn/start":
+                            result = {"turn": {"id": "turn_fixture"}}
+                        await connection.send(json.dumps({"id": request["id"], "result": result}))
+                        if request["method"] == "turn/start":
+                            await connection.send(json.dumps({"method": "turn/completed", "params": {
+                                "threadId": "claude_fixture", "turn": {"id": "turn_fixture", "status": "completed"}}}))
+
+                flags = ["claude-turn", "run", "--model", "opus", "--claude-account", "emileberhard388", "--timeout", "1"]
+                if resume:
+                    flags.extend(["--resume", "claude_fixture"])
+                args = gateway_cli.build_parser().parse_args(flags)
+                async with serve(respond, "127.0.0.1", 0) as server:
+                    config = gateway_config.GatewayConfig("127.0.0.1", server.sockets[0].getsockname()[1], "synthetic", "ws")
+                    with patch.object(gateway_cli, "_resolve_config", return_value=config), redirect_stdout(io.StringIO()):
+                        self.assertEqual(await args.func(args), 0)
+                calls = [request for request in requests if request["method"] in {"thread/start", "turn/start"}]
+                self.assertEqual([call["method"] for call in calls], ["turn/start"] if resume else ["thread/start", "turn/start"])
+                for call in calls:
+                    self.assertEqual(call["params"]["claudeAccount"], "emileberhard388")
+                if not resume:
+                    self.assertFalse(calls[0]["params"]["acceptProviderFallback"])
+
     async def test_fresh_commands_follow_the_admitted_provider_model_and_effort(self) -> None:
         import tempfile
         from websockets.asyncio.server import serve
