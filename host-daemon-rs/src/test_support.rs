@@ -109,9 +109,9 @@ slug = ''.join(c if c.isascii() and c.isalnum() else '-' for c in cwd)
 settings = json.loads(Path(args[args.index('--settings') + 1]).read_text()) if '--settings' in args else {}
 transcript = Path(HISTORY) if MODE == 'messages' else root / 'projects' / slug / (session + '.jsonl')
 if MODE == 'restart':
-    append(state / 'launches.jsonl', {'argv': args, 'cwd': os.getcwd(), 'configDir': str(root), 'context': json.loads(os.environ['REMOTE_CODER_PARENT_CONTEXT'])})
+    append(state / 'launches.jsonl', {'argv': args, 'cwd': os.getcwd(), 'configDir': str(root), 'accountHeader': os.environ.get('ANTHROPIC_CUSTOM_HEADERS'), 'providerManaged': os.environ.get('CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'), 'context': json.loads(os.environ['REMOTE_CODER_PARENT_CONTEXT'])})
 if MODE == 'messages':
-    append(root / 'launches.jsonl', {'argv': args, 'cwd': os.getcwd(), 'fastMode': settings['fastMode'], 'context': json.loads(os.environ['REMOTE_CODER_PARENT_CONTEXT'])})
+    append(root / 'launches.jsonl', {'argv': args, 'cwd': os.getcwd(), 'fastMode': settings['fastMode'], 'accountHeader': os.environ.get('ANTHROPIC_CUSTOM_HEADERS'), 'providerManaged': os.environ.get('CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'), 'context': json.loads(os.environ['REMOTE_CODER_PARENT_CONTEXT'])})
     orphaned = root / 'orphaned-task'
 def record(value):
     append(transcript, value)

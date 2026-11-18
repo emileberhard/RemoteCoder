@@ -364,15 +364,26 @@ Without a router, Claude uses its own login and settings in the configured
 host-default home; readiness uses the unmodified CLI's native auth check.
 
 In router mode, every Claude command reads the host's router key anew and injects
-`RC_CODEX_GATEWAY_ROUTER_URL` as `ANTHROPIC_BASE_URL` and
-`ANTHROPIC_AUTH_TOKEN` into its otherwise cleared provider environment. A Claude
-turn may also request an llm-router subscription preference with `claudeAccount`;
-the gateway passes it in `ANTHROPIC_CUSTOM_HEADERS` as
-`X-Llm-Router-Claude-Preference: <id>`. The router uses that account when it can
-serve the model and otherwise applies its normal selection. The preference is per
-dispatch and persists for interrupted-turn recovery; omitting it from a later
-turn clears it. Rotation
-requires no restart. The key never appears in diagnostics or receipts.
+`RC_CODEX_GATEWAY_ROUTER_URL` as `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`
+into its cleared environment. Host-managed provider routing prevents Claude Code
+settings from replacing the endpoint or provider headers. Rotation requires no
+restart. The key never appears in diagnostics or receipts.
+
+Claude `thread/start` and `turn/start` accept an optional `claudeAccount`: a
+lowercase ASCII letter followed by up to 63 lowercase letters, digits or hyphens.
+Only the configured llm-router Claude route can honor it; other routes reject it
+with `InvalidParams`. The router rejects unknown accounts with HTTP 400 and keys
+without `accounts:prefer` with HTTP 403. The gateway passes the preference as
+`X-Llm-Router-Claude-Preference` through `ANTHROPIC_CUSTOM_HEADERS`. The router
+chooses it when it can serve the model; otherwise it uses its normal ranking.
+When omitted, normal session stickiness still applies and can select the same account.
+
+Client-dispatched turns (`turn/start` and voice handoffs) set the account or clear
+it when absent. Gateway-started continuations (queued messages, wakes, `/compact`
+and restart recovery) inherit the recorded account. Recovery steering into an
+already running turn joins that turn's routing, as ordinary steering does. The
+account is fixed for a Claude process: an idle process is replaced for a change;
+a busy one refuses with retryable `ServerBusy` before dispatch.
 
 `GET /accounts` retains `default-claude` with `isDefault: true` on each host.
 In router mode, readiness checks configuration and key readability; failures carry the

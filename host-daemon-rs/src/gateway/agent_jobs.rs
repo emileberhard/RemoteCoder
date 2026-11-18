@@ -54,7 +54,8 @@ impl Gateway {
         selection: &crate::providers::claude::ClaudeSelection,
         new: bool,
     ) -> Result<()> {
-        crate::providers::claude::exec::resolve(&self.claude_settings, selection, new).await?;
+        crate::providers::claude::exec::resolve(&self.claude_settings, selection, None, new)
+            .await?;
         Ok(())
     }
 

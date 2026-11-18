@@ -478,12 +478,12 @@ async fn prepared_recovery_retries_only_its_frozen_input_and_never_the_original_
         coordination_socket: fixture.socket.clone(),
     };
     let request = ClaudeTurnRequest {
+        claude_account: None,
         thread_id: THREAD.into(),
         session_uuid: SESSION.into(),
         first_turn: false,
         input: ClaudeUserInput::recovery_notice(&item),
         selection: ClaudeSelection {
-            claude_account: None,
             model: "opus".into(),
             effort: Some("max".into()),
             fast: false,

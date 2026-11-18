@@ -617,6 +617,24 @@ impl Gateway {
                 }
             }
         }
+        if matches!(request.method.as_str(), "thread/start" | "turn/start")
+            && request
+                .object
+                .get("params")
+                .is_some_and(|params| params.get("claudeAccount").is_some())
+            && !crate::rpc::dispatch::claude_route(&request.method, &request.object)
+        {
+            self.send_error_to(
+                out_tx,
+                id.as_ref(),
+                &RpcError::new(
+                    RpcCode::InvalidParams,
+                    "claudeAccount requires a Claude conversation",
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
         if request.method == "$/cancelRequest" {
             if id.is_some() {
                 return self

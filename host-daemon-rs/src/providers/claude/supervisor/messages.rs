@@ -92,7 +92,7 @@ impl ClaudeSupervisor {
         stop_generation: u64,
     ) {
         let selection = ParentSelection {
-            claude_account: request.selection.claude_account.clone(),
+            claude_account: request.claude_account.clone(),
             cwd: request.cwd.clone(),
             model: request.selection.model.clone(),
             effort: request.selection.effort.clone(),
@@ -124,7 +124,6 @@ impl ClaudeSupervisor {
             model,
             effort,
             fast,
-            claude_account: _,
         } = selection.clone();
         self.update_parent(thread_id, move |parent| {
             if let Some(selection) = parent.selection.as_mut() {
@@ -376,6 +375,7 @@ impl ClaudeSupervisor {
             rejected("Claude parent has not run a turn through this gateway, so this message cannot wake it")
         })?;
         let request = ClaudeTurnRequest {
+            claude_account: selection.claude_account.clone(),
             thread_id: message.thread_id.clone(),
             session_uuid,
             first_turn: false,
@@ -868,12 +868,12 @@ mod tests {
 
         fn request(&self, text: &str, model: &str, effort: &str) -> ClaudeTurnRequest {
             ClaudeTurnRequest {
+                claude_account: None,
                 thread_id: THREAD.to_owned(),
                 session_uuid: SESSION.to_owned(),
                 first_turn: false,
                 input: ClaudeUserInput::text(text),
                 selection: ClaudeSelection {
-                    claude_account: None,
                     model: model.to_owned(),
                     effort: Some(effort.to_owned()),
                     fast: false,
@@ -1282,7 +1282,6 @@ mod tests {
             .update_settings(
                 THREAD,
                 &ClaudeSelection {
-                    claude_account: None,
                     model: "opus".to_owned(),
                     effort: Some("low".to_owned()),
                     fast: true,
@@ -1307,7 +1306,6 @@ mod tests {
             .update_settings(
                 THREAD,
                 &ClaudeSelection {
-                    claude_account: None,
                     model: "opus".to_owned(),
                     effort: Some("low".to_owned()),
                     fast: true,

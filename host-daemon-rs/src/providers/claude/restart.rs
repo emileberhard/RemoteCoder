@@ -115,7 +115,6 @@ pub(crate) struct SuspendedTurn {
 impl Item {
     pub(crate) fn selection(&self) -> crate::providers::claude::ClaudeSelection {
         crate::providers::claude::ClaudeSelection {
-            claude_account: self.claude_account.clone(),
             model: self.model.clone(),
             effort: self.effort.clone(),
             fast: self.fast,

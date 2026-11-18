@@ -1480,6 +1480,61 @@ async fn a_degraded_connection_that_closes_first_leaves_no_reconnect_probe() {
 }
 
 #[tokio::test]
+async fn account_preference_on_codex_is_refused_before_dispatch() {
+    let gateway = TestGateway::new();
+    let (tx, mut responses) = mpsc::channel(4);
+    let out = super::super::tests::test_client(1, tx);
+    let (lane_tx, mut lane_rx) = mpsc::channel(4);
+    let (voice_tx, _voice_rx) = mpsc::channel(1);
+    let tasks = Arc::default();
+    let requests = ClientRequests {
+        out_tx: out.clone(),
+        lane_tx,
+        voice_tx,
+        queries: Arc::clone(&tasks),
+    };
+    let mut queries = ConnectionQueries::new(Arc::clone(&gateway), out, tasks);
+    for (method, params) in [
+        (
+            "thread/start",
+            json!({"provider":"codex", "cwd":"/tmp", "claudeAccount":"example"}),
+        ),
+        (
+            "turn/start",
+            json!({"threadId":"codex-thread", "claudeAccount":"example"}),
+        ),
+    ] {
+        let raw = json!({"id":1,"method":method,"params":params}).to_string();
+        let DispatchPlan::Request(request) = DispatchPlan::parse(&raw) else {
+            panic!("request")
+        };
+        gateway
+            .route_request(
+                1,
+                request,
+                raw,
+                &requests,
+                &mut queries,
+                tokio::time::Instant::now(),
+            )
+            .await
+            .unwrap();
+        let ClientCommand::Text(raw) = responses.recv().await.unwrap() else {
+            panic!("response")
+        };
+        let response: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("requires a Claude conversation")
+        );
+    }
+    assert!(lane_rx.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn new_conversations_share_the_host_command_budget() {
     let gateway = TestGateway::new();
     let (tx, mut responses) = mpsc::channel(4);

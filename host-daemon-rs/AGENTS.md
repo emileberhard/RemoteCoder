@@ -1242,6 +1242,13 @@ web and already installed native builds.
 
 ## Install, restart and recovery
 
+Claude account preference is immutable process metadata, never a live setting.
+Client-dispatched turns set or clear it; queued turns, wakes, compaction and
+restart recovery inherit the recorded preference. An account change retires an
+idle runtime and returns retryable ServerBusy while it is busy. Recovery that
+steers into an already running turn joins that turn's routing.
+
+
 - The cluster upgrade makes the delegated-job store one-way once parent tags,
   cluster fields or new execution states are written. Gateways at `aa96ebb` and
   earlier reject those records and ignore remote intents, fences and membership.

@@ -296,7 +296,7 @@ impl ClaudeSupervisor {
             &self.settings,
             &args,
             route,
-            request.selection.claude_account.as_deref(),
+            request.claude_account.as_deref(),
         )?;
         launch.apply_env(&mut command);
         command.env(SEND_USER_MESSAGE_ENV, "1");
@@ -336,7 +336,7 @@ impl ClaudeSupervisor {
         Ok(SpawnedRuntime {
             admission,
             runtime: ClaudeRuntime {
-                claude_account: request.selection.claude_account.clone(),
+                claude_account: request.claude_account.clone(),
                 input: InputWriter::spawn(stdin),
                 pending_controls: HashMap::new(),
                 process_group_id,

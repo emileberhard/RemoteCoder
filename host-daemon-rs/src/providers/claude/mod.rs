@@ -17,6 +17,16 @@ mod runtime_callback;
 pub(crate) mod session_context;
 pub(crate) mod settings;
 mod supervisor;
+
+pub(crate) fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.as_bytes()[0].is_ascii_lowercase()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 #[cfg(test)]
 pub(crate) use supervisor::tests::runtime_stderr_frame;
 pub(crate) mod timeline;

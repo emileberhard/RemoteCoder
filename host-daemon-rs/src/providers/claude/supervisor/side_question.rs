@@ -85,13 +85,12 @@ impl ClaudeSupervisor {
         ]
         .map(str::to_owned);
         let selection = crate::providers::claude::ClaudeSelection {
-            claude_account: None,
             model: model.clone(),
             effort: None,
             fast: false,
         };
         let route = self
-            .validate_route(thread_id, &selection, false)
+            .validate_route(thread_id, &selection, None, false)
             .await
             .map_err(|error| error.message)?;
         let mut command = claude_exec::command_on_route(&self.settings, &args, &route, None)

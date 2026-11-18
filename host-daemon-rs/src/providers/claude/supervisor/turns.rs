@@ -41,8 +41,9 @@ impl ClaudeSupervisor {
         let _guard = self.lifecycles.lock(&request.thread_id).await;
         self.wait_for_finishing_turn(&request.thread_id).await;
         let reservation = self.reserve_start(&request).await?;
-        if let Some((selection, _)) = self.recorded_selection(&request.thread_id).await? {
+        if let Some((selection, _, account)) = self.recorded_selection(&request.thread_id).await? {
             request.selection = selection;
+            request.claude_account = account;
         }
         drop(reservation);
         self.start_turn_locked(request, TurnOrigin::Dispatched)
@@ -55,8 +56,7 @@ impl ClaudeSupervisor {
     ) -> Result<String, TurnStartError> {
         let _start_guard = self.lifecycles.lock(&request.thread_id).await;
         self.refuse_while_user_turn_runs(&request).await?;
-        if let Some((mut selection, _)) = self.recorded_selection(&request.thread_id).await? {
-            selection.claude_account = request.selection.claude_account;
+        if let Some((selection, _, _)) = self.recorded_selection(&request.thread_id).await? {
             request.selection = selection;
         }
         self.start_turn_locked(request, TurnOrigin::Dispatched)
@@ -87,20 +87,20 @@ impl ClaudeSupervisor {
     pub(super) async fn recorded_selection(
         &self,
         thread_id: &str,
-    ) -> Result<Option<(ClaudeSelection, String)>, TurnStartError> {
-        let cwd = self
+    ) -> Result<Option<(ClaudeSelection, String, Option<String>)>, TurnStartError> {
+        let runtime = self
             .runtimes
             .lock()
             .await
             .get(thread_id)
-            .map(|runtime| runtime.cwd.clone());
-        if let Some(cwd) = cwd
+            .map(|runtime| (runtime.cwd.clone(), runtime.claude_account.clone()));
+        if let Some((cwd, account)) = runtime
             && let Some(selection) = self
                 .observed_runtime_settings(thread_id)
                 .await
                 .map_err(TurnStartError::unresponsive)?
         {
-            return Ok(Some((selection, cwd)));
+            return Ok(Some((selection, cwd, account)));
         }
         let parent = self
             .conversation_index
@@ -113,7 +113,8 @@ impl ClaudeSupervisor {
             })?;
         Ok(parent.selection.map(|selection| {
             let cwd = selection.cwd.clone();
-            (selection.selection(), cwd)
+            let account = selection.claude_account.clone();
+            (selection.selection(), cwd, account)
         }))
     }
 
@@ -134,7 +135,12 @@ impl ClaudeSupervisor {
     ) -> Result<String, TurnStartError> {
         self.refuse_while_closing()?;
         let route = self
-            .validate_route(&request.thread_id, &request.selection, request.first_turn)
+            .validate_route(
+                &request.thread_id,
+                &request.selection,
+                request.claude_account.as_deref(),
+                request.first_turn,
+            )
             .await?;
         self.recover_stored_cwd(&mut request, &policy).await?;
         request.input.client_id.get_or_insert_with(new_session_uuid);
@@ -152,6 +158,32 @@ impl ClaudeSupervisor {
         self.check_callback_generation(&request.thread_id, origin)
             .await?;
         self.refuse_while_user_turn_runs(&request).await?;
+        let retired_account = {
+            let mut runtimes = self.runtimes.lock().await;
+            match runtimes.get(&request.thread_id) {
+                Some(runtime) if runtime.claude_account != request.claude_account => {
+                    if !runtime.is_idle() {
+                        return Err(TurnStartError { data: None, code: RpcCode::ServerBusy, message: "This conversation has active Claude work under another account preference; retry when it finishes".into() });
+                    }
+                    let group = runtime.process_group_id;
+                    runtimes.remove(&request.thread_id);
+                    Some(group)
+                }
+                _ => None,
+            }
+        };
+        if let Some(group) = retired_account {
+            self.journal.runtime(
+                "retire",
+                serde_json::json!({
+                    "reason": "account preference changed", "threadId": request.thread_id,
+                    "pid": group, "claudeAccount": request.claude_account,
+                    "model": request.selection.model, "effort": request.selection.effort,
+                    "fast": request.selection.fast, "cwd": request.cwd,
+                }),
+            );
+            self.terminate_group(Pid::from_raw(group)).await;
+        }
         let update_warm_runtime = self
             .runtimes
             .lock()
@@ -239,6 +271,7 @@ impl ClaudeSupervisor {
                 serde_json::json!({
                     "reason": "configuration changed",
                     "threadId": request.thread_id,
+                    "claudeAccount": request.claude_account,
                     "pid": group,
                     "model": request.selection.model,
                     "effort": request.selection.effort,
@@ -305,6 +338,7 @@ impl ClaudeSupervisor {
                     "spawn",
                     serde_json::json!({
                         "threadId": request.thread_id,
+                        "claudeAccount": request.claude_account,
                         "pid": process_group_id,
                         "model": request.selection.model,
                         "effort": request.selection.effort,

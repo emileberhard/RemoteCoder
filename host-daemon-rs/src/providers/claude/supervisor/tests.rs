@@ -47,7 +47,6 @@ fn live_subscription_settings(workspace: &Path) -> ClaudeSettings {
 
 fn selection(model: &str, effort: Option<&str>) -> ClaudeSelection {
     ClaudeSelection {
-        claude_account: None,
         model: model.to_owned(),
         effort: effort.map(str::to_owned),
         fast: false,
@@ -56,6 +55,7 @@ fn selection(model: &str, effort: Option<&str>) -> ClaudeSelection {
 
 fn request(thread_id: &str, first_turn: bool) -> ClaudeTurnRequest {
     ClaudeTurnRequest {
+        claude_account: None,
         thread_id: thread_id.to_string(),
         session_uuid: "11111111-2222-4333-8444-555555555555".to_string(),
         first_turn,
@@ -93,11 +93,9 @@ async fn cold_threads_keep_their_recorded_provider_and_imports_stay_native() {
     let agent = ClaudeSupervisor::new(settings, tx, Journal::disabled(), McpTokens::default());
     let external = selection("vendor/model", Some("high"));
     let native = selection("sonnet", Some("high"));
-    let mut preferred_external = external.clone();
-    preferred_external.claude_account = Some("example".into());
     assert_eq!(
         agent
-            .validate_route("claude_external", &preferred_external, true)
+            .validate_route("claude_external", &external, Some("example"), true)
             .await
             .err()
             .unwrap()
@@ -106,23 +104,23 @@ async fn cold_threads_keep_their_recorded_provider_and_imports_stay_native() {
     );
     assert!(
         agent
-            .validate_route("claude_import", &external, false)
+            .validate_route("claude_import", &external, None, false)
             .await
             .is_err()
     );
     assert!(
         agent
-            .validate_route("claude_import", &native, false)
+            .validate_route("claude_import", &native, None, false)
             .await
             .is_ok()
     );
     agent
-        .record_initial_selection("claude_external", "/tmp", &external)
+        .record_initial_selection("claude_external", "/tmp", &external, None)
         .await
         .unwrap();
     assert!(
         agent
-            .validate_route("claude_external", &external, false)
+            .validate_route("claude_external", &external, None, false)
             .await
             .is_ok()
     );
@@ -137,6 +135,7 @@ async fn cold_threads_keep_their_recorded_provider_and_imports_stay_native() {
             "claude_effort",
             "/tmp",
             &selection("vendor/model", Some("xhigh")),
+            None,
         )
         .await
         .unwrap();
@@ -147,12 +146,12 @@ async fn cold_threads_keep_their_recorded_provider_and_imports_stay_native() {
             .is_ok()
     );
     agent
-        .record_initial_selection("claude_native", "/tmp", &native)
+        .record_initial_selection("claude_native", "/tmp", &native, None)
         .await
         .unwrap();
     assert!(
         agent
-            .validate_route("claude_native", &external, false)
+            .validate_route("claude_native", &external, None, false)
             .await
             .is_err()
     );
@@ -354,6 +353,7 @@ async fn live_settings_switch_preserves_the_process_and_completes_real_input_onc
     let thread_id = format!("claude_{session_uuid}");
     let result = tokio::time::timeout(Duration::from_secs(150), async {
         let turn_id = agent.start_turn(ClaudeTurnRequest {
+            claude_account: None,
             thread_id: thread_id.clone(), session_uuid: session_uuid.clone(), first_turn: true,
             input: ClaudeUserInput::text("Tiny integration probe: say BEFORE_SWITCH, run Bash command /bin/sleep 6, then answer exactly AFTER_SWITCH. Do not inspect files or use other tools."),
             selection: selection("sonnet", Some("high")), cwd: dir.path().display().to_string(),
@@ -391,6 +391,7 @@ async fn live_settings_switch_preserves_the_process_and_completes_real_input_onc
         let mut followup = ClaudeUserInput::text("Reply exactly SECOND_ACK without tools.");
         followup.client_id = Some(input_id.clone());
         let next_turn_id = agent.start_turn_with_recorded_selection(ClaudeTurnRequest {
+            claude_account: None,
             thread_id: thread_id.clone(), session_uuid: session_uuid.clone(), first_turn: false,
             input: followup, selection: selection("sonnet", Some("high")),
             cwd: dir.path().display().to_string(),
@@ -444,6 +445,7 @@ async fn live_synthetic_tail_queries_and_replays_without_a_user_bubble() -> anyh
     input.client_id = Some(input_id.clone());
     let result = tokio::time::timeout(Duration::from_secs(90), async {
         let turn_id = agent.start_turn_with_recorded_selection(ClaudeTurnRequest {
+            claude_account: None,
             thread_id: thread_id.clone(), session_uuid: session_uuid.clone(), first_turn: true,
             input, selection: selection("sonnet", Some("medium")),
             cwd: dir.path().display().to_string(),
@@ -693,7 +695,7 @@ async fn placeholder_runtime(
     let process_group_id = child.id().expect("placeholder pid") as i32;
     let stdin = child.stdin.take().expect("stdin");
     let runtime = ClaudeRuntime {
-        claude_account: request.selection.claude_account.clone(),
+        claude_account: request.claude_account.clone(),
         input: InputWriter::spawn(stdin),
         pending_controls: HashMap::new(),
         process_group_id,
@@ -743,10 +745,14 @@ async fn account_changes_require_a_new_claude_process() {
     let (tx, mut events) = mpsc::channel(128);
     let agent = ClaudeSupervisor::new(settings, tx, Journal::disabled(), McpTokens::default());
     let mut pids = Vec::new();
-    for account in [Some("first"), Some("second"), None] {
-        let mut selected = selection("opus", Some("high"));
-        selected.claude_account = account.map(str::to_owned);
+    for (index, account) in [Some("first"), Some("first"), Some("second"), None]
+        .into_iter()
+        .enumerate()
+    {
+        let selected = selection("opus", Some("high"));
+
         let turn = ClaudeTurnRequest {
+            claude_account: account.map(str::to_owned),
             thread_id: thread.clone(),
             session_uuid: session.to_owned(),
             first_turn: false,
@@ -767,9 +773,77 @@ async fn account_changes_require_a_new_claude_process() {
                 break;
             }
         }
+        if index == 0 || index == 3 {
+            let mut runtimes = agent.runtimes.lock().await;
+            let runtime = runtimes.get_mut(&thread).unwrap();
+            runtime.background_tasks = super::suspend::background_tasks(
+                &json!({"tasks":[{"task_id":"background", "task_type":"local_bash"}]}),
+            )
+            .unwrap();
+            drop(runtimes);
+            let mut blocked = request(&thread, false);
+            blocked.cwd = cwd.clone();
+            blocked.selection = selection("opus", Some("high"));
+            blocked.claude_account = if account.is_some() {
+                None
+            } else {
+                Some("first".into())
+            };
+            let error = agent.start_turn(blocked).await.unwrap_err();
+            assert_eq!(error.code, RpcCode::ServerBusy);
+            assert!(error.message.contains("retry"));
+            let mut runtimes = agent.runtimes.lock().await;
+            let runtime = runtimes.get_mut(&thread).unwrap();
+            assert_eq!(runtime.process_group_id, pid);
+            runtime.background_tasks.clear();
+        }
     }
-    assert_ne!(pids[0], pids[1]);
+    assert_eq!(pids[0], pids[1]);
     assert_ne!(pids[1], pids[2]);
+    assert_ne!(pids[2], pids[3]);
+    let log = fs::read_to_string(home.settings.claude_home.join("launches.jsonl")).unwrap();
+    let launches: Vec<Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(launches.len(), 3);
+    assert_eq!(
+        launches[0]["accountHeader"],
+        "X-Llm-Router-Claude-Preference: first"
+    );
+    assert_eq!(
+        launches[1]["accountHeader"],
+        "X-Llm-Router-Claude-Preference: second"
+    );
+    assert!(launches[2]["accountHeader"].is_null());
+    assert!(
+        launches
+            .iter()
+            .all(|launch| launch["providerManaged"] == "1")
+    );
+    let mut preferred = request(&thread, false);
+    preferred.cwd = cwd.clone();
+    preferred.selection = selection("opus", Some("high"));
+    preferred.input = ClaudeUserInput::text("reply: ready");
+    preferred.claude_account = Some("first".into());
+    let turn = agent.start_turn(preferred).await.unwrap();
+    loop {
+        let frame = crate::test_support::claude_event(events.recv().await.unwrap());
+        if frame["method"] == "turn/completed" && frame["params"]["turn"]["id"] == turn {
+            break;
+        }
+    }
+    assert!(agent.suspend(&thread).await);
+    let mut compact = request(&thread, false);
+    compact.cwd = cwd;
+    compact.input = ClaudeUserInput::text("/compact");
+    agent.start_compaction(compact).await.unwrap();
+    assert_eq!(
+        agent.runtimes.lock().await[&thread]
+            .claude_account
+            .as_deref(),
+        Some("first")
+    );
     agent.stop_all().await;
 }
 
@@ -1657,6 +1731,7 @@ async fn a_resume_without_history_in_this_account_never_spawns() {
         McpTokens::default(),
     );
     let turn = |first_turn| ClaudeTurnRequest {
+        claude_account: None,
         thread_id: format!("claude_{session}"),
         session_uuid: session.to_owned(),
         first_turn,
@@ -2308,6 +2383,7 @@ async fn a_start_held_in_its_settings_exchange_never_folds_after_restart_capture
         async move {
             agent
                 .start_turn(ClaudeTurnRequest {
+                    claude_account: None,
                     selection: selection("claude-different-model", Some("high")),
                     ..request("claude_a", false)
                 })
@@ -2816,6 +2892,7 @@ async fn live_rename_reaches_unstarted_running_and_idle_sessions() -> anyhow::Re
         );
         let turn_id = agent
             .start_turn(ClaudeTurnRequest {
+                claude_account: None,
                 thread_id: thread_id.clone(),
                 session_uuid: session_uuid.clone(),
                 first_turn: true,
@@ -2907,6 +2984,7 @@ async fn live_side_question_answers_from_the_warm_runtime_without_a_turn() -> an
         );
         let turn_id = agent
             .start_turn(ClaudeTurnRequest {
+            claude_account: None,
                 thread_id: thread_id.clone(),
                 session_uuid: session_uuid.clone(),
                 first_turn: true,
@@ -3648,7 +3726,7 @@ async fn queue_agent() -> (
     let (home, agent) = isolated_agent(tx);
     let started = request(QUEUE_THREAD, false);
     agent
-        .record_initial_selection(QUEUE_THREAD, &started.cwd, &started.selection)
+        .record_initial_selection(QUEUE_THREAD, &started.cwd, &started.selection, None)
         .await
         .unwrap();
     let (runtime, child) = placeholder_runtime(&started).await;
@@ -4072,8 +4150,7 @@ async fn a_written_entry_waits_while_a_retired_process_could_still_consume_it() 
         agent
             .start_queued_now(QUEUE_THREAD, "first")
             .await
-            .err()
-            .unwrap()
+            .unwrap_err()
             .code,
         RpcCode::InvalidRequest,
         "Send Now waits for the retired process too"

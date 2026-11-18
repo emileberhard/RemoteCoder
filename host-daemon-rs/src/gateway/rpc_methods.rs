@@ -507,7 +507,6 @@ impl Gateway {
                 RpcError::new(RpcCode::Internal, "Claude provider is unavailable")
             })?;
             let selection = crate::providers::claude::ClaudeSelection {
-                claude_account: None,
                 model: settings.model.clone(),
                 effort: settings.effort.as_deref().map(claude_effort_wire_value),
                 fast: claude_fast_mode(
@@ -840,16 +839,11 @@ impl Gateway {
         };
         let account = value
             .as_str()
-            .filter(|account| {
-                (1..=64).contains(&account.len())
-                    && account.bytes().all(|byte| {
-                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-                    })
-            })
+            .filter(|account| crate::providers::claude::valid_id(account))
             .ok_or_else(|| {
                 RpcError::new(
                     RpcCode::InvalidParams,
-                    "claudeAccount must be 1–64 lowercase ASCII letters, digits or hyphens",
+                    "claudeAccount must start with a lowercase ASCII letter and contain at most 64 lowercase letters, digits or hyphens",
                 )
             })?;
         Ok(Some(account.to_owned()))
@@ -860,7 +854,6 @@ impl Gateway {
         let account = Self::claude_rpc_account(params)?;
         let model = self.claude_rpc_model(params)?;
         let selection = crate::providers::claude::ClaudeSelection {
-            claude_account: account,
             model: model.to_owned(),
             effort: params
                 .pointer("/config/model_reasoning_effort")
@@ -868,29 +861,29 @@ impl Gateway {
                 .map(claude_effort_wire_value),
             fast: params.get("serviceTier").and_then(Value::as_str) == Some("fast"),
         };
-        if !crate::providers::claude::exec::account_route_allowed(&self.claude_settings, &selection)
-        {
-            return Err(RpcError::new(
-                RpcCode::InvalidParams,
-                "claudeAccount requires the llm-router Claude route",
-            ));
-        }
-        let route =
-            crate::providers::claude::exec::resolve(&self.claude_settings, &selection, true)
-                .await
-                .map_err(|error| {
-                    RpcError::new(
-                        RpcCode::Unavailable,
-                        format!("Claude provider is unavailable: {error:#}"),
-                    )
-                    .with_data(crate::rpc::error::RpcData::Kind(
-                        crate::rpc::error::ErrorKind::ProviderUnavailable {
-                            provider: "claude",
-                            reason: error.to_string(),
-                            retryable: false,
-                        },
-                    ))
-                })?;
+        let route = crate::providers::claude::exec::resolve(
+            &self.claude_settings,
+            &selection,
+            account.as_deref(),
+            true,
+        )
+        .await
+        .map_err(|error| {
+            if error.is::<crate::providers::claude::exec::AccountRouteError>() {
+                return RpcError::new(RpcCode::InvalidParams, error.to_string());
+            }
+            RpcError::new(
+                RpcCode::Unavailable,
+                format!("Claude provider is unavailable: {error:#}"),
+            )
+            .with_data(crate::rpc::error::RpcData::Kind(
+                crate::rpc::error::ErrorKind::ProviderUnavailable {
+                    provider: "claude",
+                    reason: error.to_string(),
+                    retryable: false,
+                },
+            ))
+        })?;
         if let Some(provider) = params.get("modelProvider").and_then(Value::as_str)
             && provider != route.provider_id()
         {
@@ -925,7 +918,7 @@ impl Gateway {
         };
         let thread_id = crate::providers::claude::claude_thread_id(&session_uuid);
         agent
-            .record_initial_selection(&thread_id, &cwd, &selection)
+            .record_initial_selection(&thread_id, &cwd, &selection, account.as_deref())
             .await
             .map_err(|error| {
                 RpcError::new(
@@ -1011,7 +1004,6 @@ impl Gateway {
         if let Some(agent) = self.claude_agent() {
             if let Some(model) = params.get("model").and_then(Value::as_str) {
                 let selection = crate::providers::claude::ClaudeSelection {
-                    claude_account: None,
                     model: model.to_owned(),
                     effort: params
                         .pointer("/config/model_reasoning_effort")
@@ -1020,7 +1012,7 @@ impl Gateway {
                     fast: params.get("serviceTier").and_then(Value::as_str) == Some("fast"),
                 };
                 agent
-                    .validate_route(thread_id, &selection, false)
+                    .validate_route(thread_id, &selection, None, false)
                     .await
                     .map_err(RpcError::from)?;
             }
@@ -1408,12 +1400,12 @@ impl Gateway {
         };
 
         let request = crate::providers::claude::ClaudeTurnRequest {
+            claude_account: account,
             thread_id: thread_id.clone(),
             session_uuid: session_uuid.to_string(),
             first_turn,
             input,
             selection: crate::providers::claude::ClaudeSelection {
-                claude_account: account,
                 model: model.to_owned(),
                 effort: params
                     .get("effort")
@@ -1576,12 +1568,12 @@ impl Gateway {
             .ok_or_else(|| RpcError::new(RpcCode::Unavailable, "Claude provider is unavailable"))?;
         agent
             .start_compaction(crate::providers::claude::ClaudeTurnRequest {
+                claude_account: None,
                 thread_id: thread_id.clone(),
                 session_uuid: session_uuid.to_owned(),
                 first_turn: false,
                 input: crate::providers::claude::ClaudeUserInput::text("/compact"),
                 selection: crate::providers::claude::ClaudeSelection {
-                    claude_account: None,
                     model: model.to_owned(),
                     effort: header["reasoningEffort"].as_str().map(str::to_owned),
                     fast: false,
@@ -1824,6 +1816,8 @@ mod tests {
         for account in [
             json!(""),
             json!("UPPER"),
+            json!("1abc"),
+            json!("-"),
             json!("a_b"),
             json!("å"),
             json!("a".repeat(65)),
@@ -1838,8 +1832,18 @@ mod tests {
                 .await
                 .unwrap_err();
             assert_eq!(start.code, RpcCode::InvalidParams);
+            assert!(start.message.contains(if account == json!("valid-1") {
+                "requires the llm-router"
+            } else {
+                "must start with"
+            }));
             let turn = gateway.claude_turn_start(&json!({"threadId":format!("claude_{uuid}"), "model":"opus", "cwd":"/tmp", "input":[{"type":"text","text":"hi"}], "claudeAccount":account})).await.unwrap_err();
             assert_eq!(turn.code, RpcCode::InvalidParams);
+            assert!(turn.message.contains(if account == json!("valid-1") {
+                "requires the llm-router"
+            } else {
+                "must start with"
+            }));
         }
         for account in ["a", &"a".repeat(64), "emileberhard388"] {
             assert_eq!(
@@ -1903,13 +1907,13 @@ for line in sys.stdin:
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join(format!("{uuid}.jsonl")), format!("{}\n", json!({"type":"user","timestamp":"2026-10-17T10:00:00Z","cwd":"/tmp","message":{"role":"user","content":"Resume fixture"}}))).unwrap();
         let selection = ClaudeSelection {
-            claude_account: None,
             model: "claude-fable-5".into(),
             effort: Some("high".into()),
             fast: false,
         };
         agent
             .start_turn(ClaudeTurnRequest {
+                claude_account: None,
                 thread_id: thread.clone(),
                 session_uuid: uuid,
                 first_turn: true,

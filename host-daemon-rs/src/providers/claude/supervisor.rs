@@ -349,7 +349,6 @@ impl ClaudeRuntimeSettings {
 
     fn read_back(response: &Value) -> Result<ClaudeSelection, String> {
         Ok(ClaudeSelection {
-            claude_account: None,
             model: response["applied"]["model"]
                 .as_str()
                 .ok_or("Claude returned no applied model")?
@@ -461,7 +460,7 @@ struct ProcessRegistry {
 
 impl ClaudeRuntime {
     fn matches(&self, request: &ClaudeTurnRequest) -> bool {
-        self.claude_account == request.selection.claude_account
+        self.claude_account == request.claude_account
             && self.session_uuid == request.session_uuid
             && self
                 .settings
@@ -716,7 +715,7 @@ impl ClaudeSupervisor {
             .runtime_control(thread_id, pid, json!({"subtype":"get_settings"}))
             .await
             .map_err(|error| error.message)?;
-        let mut observed = ClaudeRuntimeSettings {
+        let observed = ClaudeRuntimeSettings {
             observed: ClaudeRuntimeSettings::read_back(&response)?,
             selection: None,
         };
@@ -725,7 +724,6 @@ impl ClaudeSupervisor {
             .get_mut(thread_id)
             .filter(|runtime| runtime.process_group_id == pid)
             .ok_or("Claude runtime ended while settings were being observed")?;
-        observed.observed.claude_account = runtime.claude_account.clone();
         self.journal.runtime(
             "settings_observed",
             json!({"threadId":thread_id,"pid":pid,"settings":observed}),

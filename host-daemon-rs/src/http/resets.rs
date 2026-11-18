@@ -266,7 +266,8 @@ pub(super) async fn claude(
     _: Authorized,
     Json(request): Json<ClaudeRedeem>,
 ) -> Response {
-    if !super::claude_accounts::valid_id(&request.account_id) || !valid_reset_id(&request.reset_id)
+    if !crate::providers::claude::valid_id(&request.account_id)
+        || !valid_reset_id(&request.reset_id)
     {
         return error(
             StatusCode::BAD_REQUEST,

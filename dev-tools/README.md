@@ -28,9 +28,7 @@ each works from any directory. Run the tests with `just tools-test`;
 ./dev-tools/realtime-voice-probe --media
 ```
 
-`claude-turn --claude-account ID` prefers an llm-router Claude subscription for
-the dispatched turn, including with `--resume`; it requires the router route.
-The CLI sends the preference on a fresh thread and on its turn.
+`claude-turn --claude-account ID` sets the [Claude router preference](../docs/provider-accounts.md#claude-router-and-profile-migration), including with `--resume`.
 
 `rc-gateway` defaults to this machine and reads its gateway environment and TLS
 identity directly, without SSH or a hostname selection from the local JSON.

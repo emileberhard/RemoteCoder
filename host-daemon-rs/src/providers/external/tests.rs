@@ -120,13 +120,9 @@ async fn external_command_uses_only_the_selected_provider_credentials() {
         model: MODEL.into(),
         context: 200000,
     };
-    let command = crate::providers::claude::exec::command_on_route(
-        &home.settings,
-        &[],
-        &route,
-        Some("example"),
-    )
-    .unwrap();
+    let command =
+        crate::providers::claude::exec::command_on_route(&home.settings, &[], &route, None)
+            .unwrap();
     let env = command
         .as_std()
         .get_envs()
@@ -147,6 +143,15 @@ async fn external_command_uses_only_the_selected_provider_credentials() {
     assert_eq!(env["CLAUDE_CODE_SUBAGENT_MODEL"], MODEL);
     assert!(!format!("{command:?}").contains("external-secret"));
     std::fs::write(key, "rotated-external-secret").unwrap();
+    assert!(
+        crate::providers::claude::exec::command_on_route(
+            &home.settings,
+            &[],
+            &route,
+            Some("example")
+        )
+        .is_err()
+    );
     let command =
         crate::providers::claude::exec::command_on_route(&home.settings, &[], &route, None)
             .unwrap();

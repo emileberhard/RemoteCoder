@@ -13,12 +13,8 @@ impl ClaudeSupervisor {
         selection: &ClaudeSelection,
     ) -> Result<Value, TurnStartError> {
         let _guard = self.lifecycles.lock(thread_id).await;
-        let mut selection = selection.clone();
-        if let Some(runtime) = self.runtimes.lock().await.get(thread_id) {
-            selection.claude_account = runtime.claude_account.clone();
-        }
-        let selection = &selection;
-        self.validate_route(thread_id, selection, false).await?;
+        self.validate_route(thread_id, selection, None, false)
+            .await?;
         let result = if self.runtimes.lock().await.contains_key(thread_id) {
             self.apply_runtime_settings(thread_id, selection).await?
         } else {
@@ -32,6 +28,7 @@ impl ClaudeSupervisor {
         &self,
         thread_id: &str,
         selection: &ClaudeSelection,
+        claude_account: Option<&str>,
         first_turn: bool,
     ) -> Result<crate::providers::claude::exec::Route, TurnStartError> {
         let parent = self
@@ -55,15 +52,8 @@ impl ClaudeSupervisor {
                     .as_ref()
                     .map(|settings| settings.effective().clone())
             });
-        if !crate::providers::claude::exec::account_route_allowed(&self.settings, selection) {
-            return Err(TurnStartError {
-                data: None,
-                code: crate::rpc::error::RpcCode::InvalidParams,
-                message: "claudeAccount requires the llm-router Claude route".into(),
-            });
-        }
         let route = self
-            .resolve_selection(selection, first_turn && previous.is_none())
+            .resolve_selection(selection, claude_account, first_turn && previous.is_none())
             .await?;
         for old in previous.iter().chain(current.iter()) {
             let old_provider = self
@@ -98,14 +88,25 @@ impl ClaudeSupervisor {
     async fn resolve_selection(
         &self,
         selection: &ClaudeSelection,
+        claude_account: Option<&str>,
         new: bool,
     ) -> Result<crate::providers::claude::exec::Route, TurnStartError> {
-        crate::providers::claude::exec::resolve(&self.settings, selection, new)
+        crate::providers::claude::exec::resolve(&self.settings, selection, claude_account, new)
             .await
-            .map_err(|error| TurnStartError {
-                data: Some(super::TurnErrorData::ProviderUnavailable),
-                code: crate::rpc::error::RpcCode::Unavailable,
-                message: format!("Claude provider is unavailable: {error:#}"),
+            .map_err(|error| {
+                if error.is::<crate::providers::claude::exec::AccountRouteError>() {
+                    TurnStartError {
+                        data: None,
+                        code: crate::rpc::error::RpcCode::InvalidParams,
+                        message: error.to_string(),
+                    }
+                } else {
+                    TurnStartError {
+                        data: Some(super::TurnErrorData::ProviderUnavailable),
+                        code: crate::rpc::error::RpcCode::Unavailable,
+                        message: format!("Claude provider is unavailable: {error:#}"),
+                    }
+                }
             })
     }
 
@@ -114,9 +115,10 @@ impl ClaudeSupervisor {
         thread_id: &str,
         cwd: &str,
         selection: &ClaudeSelection,
+        claude_account: Option<&str>,
     ) -> anyhow::Result<()> {
         let selection = crate::providers::claude::conversation_index::ParentSelection {
-            claude_account: selection.claude_account.clone(),
+            claude_account: claude_account.map(str::to_owned),
             cwd: cwd.to_owned(),
             model: selection.model.clone(),
             effort: selection.effort.clone(),
@@ -146,16 +148,13 @@ impl ClaudeSupervisor {
         thread_id: &str,
         selection: &ClaudeSelection,
     ) -> Result<Value, TurnStartError> {
-        let pid = {
-            let runtimes = self.runtimes.lock().await;
-            let runtime = runtimes
-                .get(thread_id)
-                .ok_or("Claude runtime ended before settings could be updated")?;
-            if runtime.claude_account != selection.claude_account {
-                return Err("Claude account requires a new process".into());
-            }
-            runtime.process_group_id
-        };
+        let pid = self
+            .runtimes
+            .lock()
+            .await
+            .get(thread_id)
+            .ok_or("Claude runtime ended before settings could be updated")?
+            .process_group_id;
         let prepared = Self::prepare_runtime_control(&json!({
             "subtype":"apply_flag_settings",
             "settings":{
@@ -175,8 +174,7 @@ impl ClaudeSupervisor {
         let response = self
             .runtime_control(thread_id, pid, json!({ "subtype": "get_settings" }))
             .await?;
-        let mut actual = ClaudeRuntimeSettings::read_back(&response)?;
-        actual.claude_account = selection.claude_account.clone();
+        let actual = ClaudeRuntimeSettings::read_back(&response)?;
         let matches = claude_model_matches(&selection.model, &actual.model)
             && selection
                 .effort

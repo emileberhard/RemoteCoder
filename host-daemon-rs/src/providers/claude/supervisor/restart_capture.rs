@@ -149,24 +149,22 @@ impl ClaudeSupervisor {
             queued,
         ) in captured
         {
-            let mut selection = match selection {
+            let selection = match selection {
                 Some(selection) => selection,
                 None => {
                     self.parent_selection(&thread_id)
                         .await
                         .unwrap_or_else(|| ClaudeSelection {
-                            claude_account: None,
                             model: self.settings.default_model.clone(),
                             effort: None,
                             fast: false,
                         })
                 }
             };
-            selection.claude_account = claude_account;
             let (notices, queued_inputs): (Vec<_>, Vec<_>) =
                 queued.into_iter().partition(|input| input.notice.is_some());
             let mut item = Item {
-                claude_account: selection.claude_account,
+                claude_account,
                 recovery_id: new_session_uuid(),
                 stop_generation: stop_generations.get(&thread_id).copied().flatten(),
                 thread_id,
@@ -300,6 +298,7 @@ impl ClaudeSupervisor {
             }
             None => {
                 let request = ClaudeTurnRequest {
+                    claude_account: item.claude_account.clone(),
                     thread_id: item.thread_id.clone(),
                     session_uuid: item.session_uuid.clone(),
                     first_turn: false,
@@ -560,12 +559,12 @@ mod tests {
 
         fn turn(&self, text: &str) -> ClaudeTurnRequest {
             ClaudeTurnRequest {
+                claude_account: Some("emileberhard388".into()),
                 thread_id: THREAD.to_owned(),
                 session_uuid: SESSION.to_owned(),
                 first_turn: false,
                 input: ClaudeUserInput::text(text),
                 selection: ClaudeSelection {
-                    claude_account: Some("emileberhard388".into()),
                     model: "opus".to_owned(),
                     effort: Some("max".to_owned()),
                     fast: true,
@@ -656,10 +655,10 @@ mod tests {
         assert_eq!(item.thread_id, THREAD);
         assert_eq!(item.session_uuid, SESSION);
         assert_eq!(item.cwd, fixture.stub.cwd);
+        assert_eq!(item.claude_account.as_deref(), Some("emileberhard388"));
         assert_eq!(
             item.selection(),
             ClaudeSelection {
-                claude_account: Some("emileberhard388".into()),
                 model: "opus".to_owned(),
                 effort: Some("max".to_owned()),
                 fast: true,
@@ -693,6 +692,13 @@ mod tests {
         replacement.stop_all().await;
 
         assert!(matches!(resumed, ResumeDelivery::Started(_)));
+        for launch in &launches {
+            assert_eq!(
+                launch["accountHeader"],
+                "X-Llm-Router-Claude-Preference: emileberhard388"
+            );
+            assert_eq!(launch["providerManaged"], "1");
+        }
         let args = launches[1]["argv"].as_array().unwrap();
         assert!(
             args.windows(2)
@@ -837,12 +843,12 @@ mod tests {
         let refused = fixture
             .agent
             .start_turn(ClaudeTurnRequest {
+                claude_account: None,
                 thread_id: THREAD.to_owned(),
                 session_uuid: SESSION.to_owned(),
                 first_turn: false,
                 input: ClaudeUserInput::text("late"),
                 selection: ClaudeSelection {
-                    claude_account: None,
                     model: "opus".to_owned(),
                     effort: None,
                     fast: false,

@@ -545,12 +545,12 @@ impl Gateway {
         };
         let steered = active_turn_id.is_some();
         let turn_request = crate::providers::claude::ClaudeTurnRequest {
+            claude_account: None,
             thread_id: session.conversation_thread_id.clone(),
             session_uuid: session_uuid.to_string(),
             first_turn,
             input: delegation.clone(),
             selection: crate::providers::claude::ClaudeSelection {
-                claude_account: None,
                 model: session.model.clone(),
                 effort: session.effort.clone(),
                 fast: agent

@@ -242,6 +242,7 @@ impl ClaudeSupervisor {
             })
             .await?;
         let request = ClaudeTurnRequest {
+            claude_account: None,
             thread_id: conversation.thread_id.clone(),
             session_uuid,
             first_turn,
@@ -250,7 +251,6 @@ impl ClaudeSupervisor {
                 ..ClaudeUserInput::text(spec.prompt.clone())
             },
             selection: ClaudeSelection {
-                claude_account: None,
                 model: model.clone(),
                 effort: effort.clone(),
                 fast: *fast,

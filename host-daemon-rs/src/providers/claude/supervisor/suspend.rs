@@ -216,12 +216,12 @@ pub(crate) mod suspend_test_support {
 
         pub(crate) fn turn(&self, text: &str) -> ClaudeTurnRequest {
             ClaudeTurnRequest {
+                claude_account: None,
                 thread_id: THREAD.to_owned(),
                 session_uuid: SESSION.to_owned(),
                 first_turn: false,
                 input: ClaudeUserInput::text(text),
                 selection: ClaudeSelection {
-                    claude_account: None,
                     model: "sonnet".to_owned(),
                     effort: None,
                     fast: false,

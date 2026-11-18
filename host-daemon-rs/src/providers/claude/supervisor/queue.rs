@@ -567,7 +567,7 @@ impl ClaudeSupervisor {
                 code: RpcCode::InvalidParams,
                 message: "threadId is required".into(),
             })?;
-        let (selection, cwd) = self.recorded_selection(thread_id).await?.ok_or_else(|| {
+        let (selection, cwd, claude_account) = self.recorded_selection(thread_id).await?.ok_or_else(|| {
             TurnStartError {
                 data: None,
                 code: RpcCode::InvalidParams,
@@ -585,6 +585,7 @@ impl ClaudeSupervisor {
         input.client_id = Some(entry.id.clone());
         let first_turn = self.session_history(&cwd, session_uuid).is_none();
         Ok(ClaudeTurnRequest {
+            claude_account,
             thread_id: thread_id.to_owned(),
             session_uuid: session_uuid.to_owned(),
             first_turn,
@@ -601,7 +602,7 @@ impl ClaudeSupervisor {
         Ok(self
             .recorded_selection(thread_id)
             .await?
-            .map(|(_, cwd)| cwd))
+            .map(|(_, cwd, _)| cwd))
     }
 
     pub(super) async fn mark_queued_written(

@@ -752,15 +752,6 @@ router. The existing speech relay remains enabled for web and older apps.
 
 ## Claude account preference on JSON-RPC
 
-Claude `thread/start` and `turn/start` accept an optional `claudeAccount`
-string: 1–64 lowercase ASCII letters, digits or hyphens. The selected model
-must use the configured llm-router Claude route; external routes and native
-login reject the parameter with `InvalidParams`. The router rejects unknown
-accounts with HTTP 400 and keys without `accounts:prefer` with HTTP 403.
-When supplied, the gateway keeps the selected Claude
-harness even if `acceptProviderFallback` is true.
-
-Pass the preference on every `turn/start`, including the first turn after
-`thread/start` and resumed threads. Omission means no preference, even if a
-previous turn used one. An interrupted turn retains its preference through
-gateway restart recovery.
+Claude `thread/start` and `turn/start` accept optional `claudeAccount`. See
+[Claude router and profile migration](../docs/provider-accounts.md#claude-router-and-profile-migration)
+for the account format, routing and continuation contract.

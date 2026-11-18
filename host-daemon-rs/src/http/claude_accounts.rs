@@ -1,5 +1,6 @@
 use super::server::{HttpState, auth::Authorized};
 use crate::accounts::types::UsageWindow;
+use crate::providers::claude::valid_id;
 use crate::providers::router::RouterError;
 use crate::time::parse_rfc3339_unix_seconds as timestamp;
 use anyhow::{Result, ensure};
@@ -378,14 +379,6 @@ fn map_copilot(account: CopilotAccount) -> Result<Copilot> {
         error: account.error,
         budget,
     })
-}
-pub(super) fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id.as_bytes()[0].is_ascii_lowercase()
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 fn error(status: StatusCode, code: &str, message: &str) -> Response {
     (

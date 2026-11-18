@@ -113,23 +113,31 @@ impl Route {
     }
 }
 
-pub(crate) fn account_route_allowed(
-    settings: &ClaudeSettings,
-    selection: &super::ClaudeSelection,
-) -> bool {
-    selection.claude_account.is_none()
-        || (settings.router.is_some()
-            && !settings
-                .external_providers
-                .as_ref()
-                .is_some_and(|providers| providers.owner(&selection.model).is_some()))
+#[derive(Debug)]
+pub(crate) struct AccountRouteError;
+
+impl std::fmt::Display for AccountRouteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("claudeAccount requires the llm-router Claude route")
+    }
 }
+impl std::error::Error for AccountRouteError {}
 
 pub(crate) async fn resolve(
     settings: &ClaudeSettings,
     selection: &super::ClaudeSelection,
+    claude_account: Option<&str>,
     new: bool,
 ) -> anyhow::Result<Route> {
+    if claude_account.is_some()
+        && (settings.router.is_none()
+            || settings
+                .external_providers
+                .as_ref()
+                .is_some_and(|providers| providers.owner(&selection.model).is_some()))
+    {
+        return Err(AccountRouteError.into());
+    }
     if let Some(providers) = &settings.external_providers
         && let Some((provider, context)) = providers
             .claude_model(
@@ -183,6 +191,9 @@ pub(crate) fn command_on_route(
         "claude must never be invoked with --bare"
     );
 
+    if claude_account.is_some() && (!matches!(route, Route::Default) || settings.router.is_none()) {
+        return Err(Error::other(AccountRouteError));
+    }
     let mut cmd = Command::new(&settings.claude_path);
     #[cfg(target_os = "macos")]
     crate::platform::macos::scheduling::prepare_agent_command(&mut cmd);
@@ -206,6 +217,7 @@ pub(crate) fn command_on_route(
                         format!("X-Llm-Router-Claude-Preference: {account}"),
                     );
                 }
+                cmd.env("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
                 cmd.env("ANTHROPIC_BASE_URL", router.inference_base());
                 cmd.env("ANTHROPIC_AUTH_TOKEN", key);
                 cmd.env("CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK", "1");
@@ -285,16 +297,17 @@ mod tests {
                 .and_then(|(_, value)| value)
                 .and_then(|value| value.to_str());
             assert_eq!(header, expected);
+            assert!(
+                command
+                    .as_std()
+                    .get_envs()
+                    .any(|(key, value)| key == "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"
+                        && value.is_some_and(|value| value == "1"))
+            );
         }
         let mut settings = fixture.settings.clone();
         settings.router = None;
-        let command = command_on_route(&settings, &[], &Route::Default, None).unwrap();
-        assert!(
-            !command
-                .as_std()
-                .get_envs()
-                .any(|(key, _)| key == "ANTHROPIC_CUSTOM_HEADERS")
-        );
+        assert!(command_on_route(&settings, &[], &Route::Default, Some("example")).is_err());
     }
 
     #[test]
