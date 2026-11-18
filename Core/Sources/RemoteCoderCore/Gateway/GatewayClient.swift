@@ -1390,7 +1390,6 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             guard generation == connectionGeneration, webSocket != nil else { return }
             if revision != browserDeclarationRevision { attempts = 0; continue }
             if !serving && !browserMayHaveDeclared && browserDeclaredServing != true { return }
-            if serving && browserLastSentServing == true && browserDeclaredServing == true { return }
             do {
                 _ = try await callConnected(method: "dictation/host/declare", params: .object(["serving": .bool(serving)]), timeout: .seconds(2))
                 guard generation == connectionGeneration, webSocket != nil else { return }
