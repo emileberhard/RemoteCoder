@@ -857,6 +857,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     func browserDictationDidDrain() async {
         guard acceptsWork, !Task.isCancelled, browserDictationRole?.enabled == false else { return }
         let effects = lifecycle.handle(.browserDictationHost(false))
+        eventPump.releaseBrowserDictation(lifecycle: lifecycle)
         if lifecycle.isBackgrounded { await gateway.suspendLivenessChecks() }
         await perform(effects)
     }

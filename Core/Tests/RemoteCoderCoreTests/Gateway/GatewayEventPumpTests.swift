@@ -42,6 +42,42 @@ struct GatewayEventPumpTests {
         })
         #expect(await client.isConnected)
     }
+    @Test(arguments: [false, true])
+    func releasingBrowserDictationStopsOnlyItsOwnReconnectPump(chatNeeded: Bool) async throws {
+        var lifecycle = TargetLifecycle()
+        _ = lifecycle.handle(.presentation(TargetPresentation(presented: chatNeeded)))
+        _ = lifecycle.handle(.browserDictationHost(true))
+        let temporary = TemporaryHostStorage()
+        defer { temporary.cleanUp() }
+        let hostID = UUID()
+        let sessions = ConversationSessions(hostID: hostID,
+            sessionIndex: ConversationIndex(hostID: hostID, storage: temporary.storage),
+            contentSubscriptions: RecordingContentSubscriptions(), storage: temporary.storage)
+        let socket = try DeviceToolSocketFixture(declarationReply: .accepted)
+        let port = try await socket.start()
+        let client = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(port)")),
+            authToken: "fixture", hostLabel: "Fixture"), routes: nil)
+        let sink = LinkRecordingSink()
+        let pump = GatewayEventPump(gateway: client, conversations: sessions, sink: sink)
+        defer {
+            let stopped = pump.stop()
+            await client.retire()
+            await socket.stop()
+            for task in stopped { await task.value }
+        }
+        pump.startIfNeeded()
+        #expect(await waitUntil { await client.isConnected })
+        _ = lifecycle.handle(.browserDictationHost(false))
+        pump.releaseBrowserDictation(lifecycle: lifecycle)
+        await socket.closeConnections(code: .protocolCode(.goingAway))
+        if chatNeeded {
+            #expect(await waitUntil(timeout: .seconds(10)) { await socket.acceptedConnections >= 2 })
+        } else {
+            try await Task.sleep(for: .seconds(2))
+            #expect(await socket.acceptedConnections == 1)
+        }
+    }
+
     @Test func retiringAnExplicitReplayReleasesItsClaimForTheReplacementPump() async throws {
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }

@@ -105,6 +105,11 @@ final class GatewayEventPump {
         resumeGapRecovery()
     }
 
+    func releaseBrowserDictation(lifecycle: TargetLifecycle) {
+        guard !lifecycle.browserDictationHostActive, !lifecycle.needsGatewayLoops else { return }
+        stop()
+    }
+
     @discardableResult
     func stop() -> [Task<Void, Never>] {
         generation = UUID()
