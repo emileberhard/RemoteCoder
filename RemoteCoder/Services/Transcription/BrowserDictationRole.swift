@@ -9,6 +9,7 @@ final class BrowserDictationRole {
     private var activity: (any NSObjectProtocol)?
     @ObservationIgnored private var drain: Task<Void, Never>?
     @ObservationIgnored let host = BrowserDictationHost()
+    @ObservationIgnored let files: BrowserDictationFiles
     @ObservationIgnored var onChange: (@MainActor (Bool) async -> Void)?
     @ObservationIgnored var onDrained: (@MainActor () async -> Void)?
     var holdsConnection: Bool { enabled || drain != nil }
@@ -36,8 +37,9 @@ final class BrowserDictationRole {
         }
     }
 
-    init(defaults: UserDefaults) {
+    init(defaults: UserDefaults, storage: HostStorage) {
         self.defaults = defaults
+        files = BrowserDictationFiles(directory: storage.directory(for: .device).appending(path: "browser-dictation", directoryHint: .isDirectory))
         #if os(macOS)
         enabled = defaults.bool(forKey: Self.key)
         #else

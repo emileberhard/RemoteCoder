@@ -455,7 +455,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         let browserBinding: BrowserDictationConnection?
         #if os(macOS)
         if let browserDictationRole {
-            let service = BrowserDictationService(host: host, routes: routes, access: speechAccess, storage: storage,
+            let service = BrowserDictationService(host: host, routes: routes, access: speechAccess, files: browserDictationRole.files,
                 library: dictationLibrary, voices: dictationVoices, defaults: chatDefaults)
             browserBinding = BrowserDictationConnection(host: browserDictationRole.host,
                 enabled: { browserDictationRole.enabled }, execute: { request in

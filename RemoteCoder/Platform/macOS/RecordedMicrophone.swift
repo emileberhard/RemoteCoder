@@ -20,8 +20,14 @@ final class RecordedMicrophone: VoiceInputRecording {
     @concurrent
     private static func feed(url: URL, sink: PCM16CaptureSink, output: PCM16CaptureOutput) async throws {
         let handle = try FileHandle(forReadingFrom: url)
-        let header = try handle.read(upToCount: 12)
-        try handle.close()
+        let header: Data?
+        do {
+            header = try handle.read(upToCount: 12)
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
         guard let header, header.count == 12,
               header.prefix(4) == Data("RIFF".utf8),
               header.suffix(4) == Data("WAVE".utf8) else {

@@ -118,7 +118,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         dictationLibrary: SharedDictationLibrary? = nil
     ) {
         self.settings = settings
-        let browserDictationRole = BrowserDictationRole(defaults: defaults)
+        let browserDictationRole = BrowserDictationRole(defaults: defaults, storage: storage)
         self.browserDictationRole = browserDictationRole
         cluster = ClusterModel(defaults: defaults)
         self.storage = storage
