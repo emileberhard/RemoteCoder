@@ -74,9 +74,9 @@ impl TokenCounters {
             .get("iterations")
             .and_then(Value::as_array)
             .and_then(|iterations| {
-                iterations
-                    .iter()
-                    .rfind(|iteration| iteration.get("type").and_then(Value::as_str) == Some("message"))
+                iterations.iter().rfind(|iteration| {
+                    iteration.get("type").and_then(Value::as_str) == Some("message")
+                })
             })
             .unwrap_or(usage);
         let counter = |value: Option<&Value>| match value {

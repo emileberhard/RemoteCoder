@@ -899,7 +899,8 @@ mod tests {
         let call = json!({"type":"server_tool_use","id":"srvtoolu_1","name":"advisor","input":{}});
         let result = json!({"type":"advisor_tool_result","tool_use_id":"srvtoolu_1",
             "content":{"type":"advisor_redacted_result","encrypted_content":"EqQB"}});
-        let assistant = |block: Value| json!({"type":"assistant","message":{"id":"msg_1","content":[block]}});
+        let assistant =
+            |block: Value| json!({"type":"assistant","message":{"id":"msg_1","content":[block]}});
 
         t.handle(&json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":call}}));
         let started = t.handle(&assistant(call.clone()));
