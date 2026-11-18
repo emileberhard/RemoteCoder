@@ -1388,6 +1388,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             let revision = browserDeclarationRevision
             let serving = await browserDictation.enabled()
             guard generation == connectionGeneration, webSocket != nil else { return }
+            if revision != browserDeclarationRevision { attempts = 0; continue }
             if !serving && !browserMayHaveDeclared && browserDeclaredServing != true { return }
             if serving && browserLastSentServing == true && browserDeclaredServing == true { return }
             do {
