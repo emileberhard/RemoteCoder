@@ -74,4 +74,17 @@ struct HostPresentationTests {
         let presentation = HostPresentation(availability, historyFailure: nil, context: Self.context(now: Self.seen + 2 * 86_400))
         #expect(presentation.strip.first?.text == "Can't reach mac-mini since 18 Nov 12:54")
     }
+
+    @Test func timesReadLikeTheDrawerRows() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        let locale = Locale(identifier: "en_US@rg=sezzzz")
+        let morning = Self.seen - 38_640
+        let now = morning + 600
+        let availability = HostAvailability(reach: .offline, lastSeen: morning, tasksRunningAtLoss: 0)
+        let presentation = HostPresentation(availability, historyFailure: nil,
+                                            context: .init(hostName: "macbook", device: "phone", now: now, calendar: calendar, locale: locale))
+        let rowTime = ConversationSidebarDate.label(for: morning, now: now, calendar: calendar, locale: locale)
+        #expect(presentation.chat.first?.text == "offline · last seen \(rowTime)")
+    }
 }

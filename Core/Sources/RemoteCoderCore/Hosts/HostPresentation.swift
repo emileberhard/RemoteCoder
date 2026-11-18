@@ -119,11 +119,9 @@ struct HostPresentation: Sendable, Equatable {
     }
 
     private static func time(_ date: Date, context: Context) -> String {
-        var style = Date.FormatStyle(date: .omitted, time: .shortened, locale: context.locale, calendar: context.calendar)
-        style.timeZone = context.calendar.timeZone
-        guard !context.calendar.isDate(date, inSameDayAs: context.now) else { return date.formatted(style) }
-        var day = Date.FormatStyle(locale: context.locale, calendar: context.calendar).day().month(.abbreviated)
-        day.timeZone = context.calendar.timeZone
-        return "\(date.formatted(day)) \(date.formatted(style))"
+        let style = Date.FormatStyle(locale: context.locale, calendar: context.calendar, timeZone: context.calendar.timeZone)
+        let time = date.formatted(style.hour().minute())
+        guard !context.calendar.isDate(date, inSameDayAs: context.now) else { return time }
+        return "\(date.formatted(style.day().month(.abbreviated))) \(time)"
     }
 }
