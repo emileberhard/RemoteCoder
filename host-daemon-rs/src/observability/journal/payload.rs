@@ -113,6 +113,26 @@ pub(super) fn redact_call_details(value: &mut Value) {
     }
 }
 
+pub(super) fn redact_rpc_payload(payload: &mut Payload, method: Option<&str>, request: bool) {
+    let Value::Object(map) = &mut payload.0 else {
+        return;
+    };
+    if (request && method == Some("dictation/host/result"))
+        || (!request && method == Some("dictation/transcribe"))
+    {
+        let field = if request { "params" } else { "result" };
+        if let Some(value) = map.get_mut(field) {
+            *value = json!({"_redacted": true});
+        }
+    } else if !request
+        && method.is_none()
+        && let Some(Value::Object(result)) = map.get_mut("result")
+        && let Some(text) = result.get_mut("text")
+    {
+        *text = Value::String("[redacted]".into());
+    }
+}
+
 fn redact_device_tokens(value: &mut Value) {
     match value {
         Value::String(_) => *value = Value::String("[redacted]".into()),

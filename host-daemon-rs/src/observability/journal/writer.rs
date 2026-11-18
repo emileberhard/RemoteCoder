@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::payload::{
     Payload, elide_oversized_event, insert_kind, notification_identity, parse_and_elide,
-    redact_call_details, rpc_thread_id, string_field,
+    redact_call_details, redact_rpc_payload, rpc_thread_id, string_field,
 };
 use super::{
     Admitted, JOURNAL_CAP_BYTES, MAX_PENDING_REQUESTS, MAX_REVIEW_RECORD_BYTES, Record,
@@ -281,6 +281,7 @@ impl Writer {
                     self.pending
                         .remember(client_id, id, method.clone(), monotonic);
                 }
+                redact_rpc_payload(&mut parsed, method.as_deref(), true);
                 if method.as_deref() == Some("command/exec") {
                     let argument_count = parsed
                         .value()
@@ -323,6 +324,7 @@ impl Writer {
                         * 1000.0)
                         .round()
                 });
+                redact_rpc_payload(&mut parsed, method.as_deref(), false);
                 if method.as_deref() == Some("command/exec") {
                     parsed = Payload(json!({ "id": id, "bytes": payload.len() }));
                 }
@@ -453,6 +455,40 @@ mod tests {
     use crate::observability::journal::harness::{read_lines, temp_dir};
     use crate::observability::journal::{Journal, MAX_RECORD_BYTES, Source, with_event};
     use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn dictation_transcripts_never_enter_journal_records() {
+        let mut writer = Writer::new(PathBuf::new(), 1);
+        let secret = "private-dictation-sentinel";
+        for (client_id, request, response) in [
+            (
+                1,
+                json!({"id":1,"method":"dictation/host/result","params":{"text":secret}}),
+                json!({"id":1,"result":{"accepted":true}}),
+            ),
+            (
+                2,
+                json!({"id":2,"method":"dictation/transcribe","params":{"path":"/upload"}}),
+                json!({"id":2,"result":{"text":secret,"model":"batch"}}),
+            ),
+        ] {
+            let input = writer.render(Admitted::now(Record::RpcRequest {
+                client_id,
+                payload: Arc::from(request.to_string()),
+            }));
+            let output = writer.render(Admitted::now(Record::RpcResponse {
+                client_id: Some(client_id),
+                payload: Arc::from(response.to_string()),
+            }));
+            assert!(!input.to_string().contains(secret));
+            assert!(!output.to_string().contains(secret));
+        }
+        let unmatched = writer.render(Admitted::now(Record::RpcResponse {
+            client_id: Some(9),
+            payload: Arc::from(json!({"id":3,"result":{"text":secret}}).to_string()),
+        }));
+        assert!(!unmatched.to_string().contains(secret));
+    }
 
     #[test]
     fn command_exec_journal_records_shape_without_command_or_push_tokens() {
