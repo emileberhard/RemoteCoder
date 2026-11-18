@@ -589,6 +589,20 @@ export class Workspace {
       key,
     );
   }
+  applyDictation(key: string, text: string) {
+    if (this.disposed) throw new Error("The workspace closed; the recording was retained for recovery.");
+    const draft = this.drafts.get(key);
+    if (!draft) throw new Error("The original dictation draft is unavailable; the recording was retained.");
+    const previous = this.drafts.snapshot;
+    try {
+      this.updateDraft({ text: [draft.text.trimEnd(), text].filter(Boolean).join("\n") }, key);
+      this.drafts.flushRequired();
+    } catch (error) {
+      this.drafts.restoreSnapshot(previous);
+      this.publish();
+      throw error;
+    }
+  }
   flushDrafts() {
     this.drafts.flush();
   }

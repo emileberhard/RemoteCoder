@@ -95,14 +95,8 @@ export function DictationControl() {
       },
       (text) => {
         const key = capturedOwner.key;
-        if (workspace.isRetired)
-          throw new Error("The workspace closed; the recording was retained for recovery.");
         if (!key) throw new Error("The original dictation draft is unavailable; the recording was retained.");
-        const draft = workspace.getSnapshot().drafts.get(key);
-        if (!draft)
-          throw new Error("The original dictation draft is unavailable; the recording was retained.");
-        workspace.updateDraft({ text: [draft.text.trimEnd(), text].filter(Boolean).join("\n") }, key);
-        workspace.flushDraftsRequired();
+        workspace.applyDictation(key, text);
       },
       () => ({
         model: workspace.preference("transcription.model") ?? defaultTranscriptionModel,
