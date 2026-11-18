@@ -1849,7 +1849,8 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
 - Browser dictation's opted-in Mac host owns the native batch pipeline and its
   settings. Its role keeps liveness and reconnect running in the background,
   separately from gateway work loops. Host frames bypass the notification hub;
-  admission requires the enabled role and an acknowledged serving declaration.
+  admission requires the enabled role and the connection's last sent serving
+  declaration. Declaration retries are bounded and never delay chat or role drain.
   The role drains admitted work through result acknowledgement before releasing
   its connection and process activity.
   See `docs/browser-dictation.md`.

@@ -18,8 +18,10 @@ excluded from the gateway journal. A deadline is `unknown`: the library may
 already contain the capture. Host loss is `hostLost`; absent and busy hosts report
 `noHost` and `busy`. Turning the role off removes its declaration without moving
 an admitted operation. The app admits work only while its role is enabled and
-the connection's serving declaration is acknowledged; failed withdrawals are
-retried. The connection stays held through result acknowledgement or failure.
+the connection's last sent declaration is serving. Declaration reconciliation
+runs outside chat initialization with bounded retries, and a failed withdrawal
+does not delay the role's drain. The connection stays held through bounded
+result-delivery retries until acknowledgement or failure.
 Finished uploads follow UploadStore retention, which has no supported removal
 operation for finished entries.
 
