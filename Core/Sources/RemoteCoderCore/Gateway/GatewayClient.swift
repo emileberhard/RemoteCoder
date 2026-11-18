@@ -144,7 +144,6 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private var connectionInFlight: Task<Void, Error>?
     private var reconnect = GatewayReconnectPolicy()
     private var lastConnectionFailure: (any Error)?
-    private var unreachableSince: Date?
     private var reconnectWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private var expeditedBy: ReconnectTrigger?
     private var initializeInFlight: Task<Void, Error>?
@@ -172,29 +171,12 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     var connectivity: GatewayConnectivity {
         if isConnected, let route { return .connected(route.kind) }
         if isRestarting { return .restarting }
-        guard let lastConnectionFailure, let unreachableSince else { return .disconnected }
-        return .unreachable(GatewayConnectionFailure(cause: Self.cause(of: lastConnectionFailure), since: unreachableSince))
+        guard let lastConnectionFailure else { return .disconnected }
+        if case ClientError.credentialsRejected = lastConnectionFailure { return .unreachable(.credentialsRejected) }
+        return .unreachable(.noAnswer)
     }
 
     var connectionFailureDetail: String? { lastConnectionFailure?.localizedDescription }
-
-    private static func cause(of failure: any Error) -> GatewayConnectionFailure.Cause {
-        switch failure {
-        case ClientError.credentialsRejected: .credentialsRejected
-        case ClientError.gatewayNotReady: .refused
-        default: .noAnswer
-        }
-    }
-
-    private func recordConnectionFailure(_ failure: any Error) {
-        if lastConnectionFailure == nil { unreachableSince = .now }
-        lastConnectionFailure = failure
-    }
-
-    private func clearConnectionFailure() {
-        lastConnectionFailure = nil
-        unreachableSince = nil
-    }
 
     private var isRestarting: Bool {
         restartObservedAt.map { .now - $0 < timeouts.restartWindow } ?? false
@@ -280,9 +262,22 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         try await connect(waitingAtMost: timeouts.request)
     }
 
-    func connectNow() async throws {
+    func connectNow(within limit: Duration) async throws {
         expediteReconnect(.demand)
-        try await connect(waitingAtMost: timeouts.request)
+        let attempt = Task { try await connect(waitingAtMost: .zero) }
+        let outcome = Mutex<CheckedContinuation<Void, any Error>?>(nil)
+        let finish: @Sendable (Result<Void, any Error>) -> Void = { result in outcome.withLock { $0.take() }?.resume(with: result) }
+        try await withCheckedThrowingContinuation { continuation in
+            outcome.withLock { $0 = continuation }
+            let deadline = Task {
+                try await Task.sleep(for: limit)
+                finish(.failure(ClientError.notConnected))
+            }
+            Task {
+                do { try await attempt.value; finish(.success(())) } catch { finish(.failure(error)) }
+                deadline.cancel()
+            }
+        }
     }
 
     func connectWhenPermitted() async throws {
@@ -346,7 +341,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             } else {
                 error
             }
-            if !Task.isCancelled, !isRetired, !(error is CancellationError) { recordConnectionFailure(failure) }
+            if !Task.isCancelled, !isRetired, !(error is CancellationError) { lastConnectionFailure = failure }
             if !Task.isCancelled { await disconnectTransport(.failed(error)) }
             guard !Task.isCancelled, !isRetired, !(error is CancellationError) else { throw failure }
             let delay = reconnect.failed(at: .now, restartingSince: restartObservedAt)
@@ -543,7 +538,7 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         }
         logger.notice("Gateway connected and initialized")
         restartObservedAt = nil
-        clearConnectionFailure()
+        lastConnectionFailure = nil
         reconnect.connected(at: .now)
         if !livenessSuspended { resumeLivenessChecks() }
         announced = .connected(route.kind)
@@ -738,7 +733,6 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     func disconnect() async {
         connectionInFlight?.cancel()
         connectionInFlight = nil
-        clearConnectionFailure()
         await disconnectTransport(.requested)
     }
 
@@ -1606,7 +1600,7 @@ extension GatewayClient {
         switch error {
         case ClientError.notConnected, ClientError.connectionClosed, ClientError.connectionFailed,
              ClientError.credentialsRejected, ClientError.gatewayRestarting, ClientError.gatewayNotReady,
-             ClientError.requestTimedOut, ClientError.retired: return true
+             ClientError.retired: return true
         default: return false
         }
     }

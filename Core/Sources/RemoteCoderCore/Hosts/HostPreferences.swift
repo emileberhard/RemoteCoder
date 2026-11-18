@@ -5,6 +5,7 @@ enum HostPreferences {
     private static let remoteHomePathKeyPrefix = "gateway.remoteHomePath"
     private static let internalBatteryKeyPrefix = "gateway.internalBattery"
     private static let lastSeenKeyPrefix = "gateway.lastSeen"
+    private static let unreachableSinceKeyPrefix = "gateway.unreachableSince"
 
     /// Per-host so one gateway's selected repository can never become another's
     /// working directory. `hostID: nil` addresses the pre-multi-host key and
@@ -49,11 +50,20 @@ enum HostPreferences {
     }
 
     static func lastSeen(hostID: UUID, defaults: UserDefaults) -> Date? {
-        (defaults.object(forKey: "\(lastSeenKeyPrefix).\(hostID.uuidString)") as? Double).map(Date.init(timeIntervalSince1970:))
+        defaults.object(forKey: "\(lastSeenKeyPrefix).\(hostID.uuidString)") as? Date
     }
 
     static func setLastSeen(_ date: Date, hostID: UUID, defaults: UserDefaults) {
-        defaults.set(date.timeIntervalSince1970, forKey: "\(lastSeenKeyPrefix).\(hostID.uuidString)")
+        defaults.set(date, forKey: "\(lastSeenKeyPrefix).\(hostID.uuidString)")
+    }
+
+    static func unreachableSince(hostID: UUID, defaults: UserDefaults) -> Date? {
+        defaults.object(forKey: "\(unreachableSinceKeyPrefix).\(hostID.uuidString)") as? Date
+    }
+
+    static func setUnreachableSince(_ date: Date?, hostID: UUID, defaults: UserDefaults) {
+        let key = "\(unreachableSinceKeyPrefix).\(hostID.uuidString)"
+        if let date { defaults.set(date, forKey: key) } else { defaults.removeObject(forKey: key) }
     }
 
     static func remoteHomePathKey(hostID: UUID?) -> String {

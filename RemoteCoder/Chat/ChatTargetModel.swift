@@ -272,6 +272,11 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     var gatewayRoute: GatewayRoute.Kind? { availability.current.route }
     var isGatewayConnected: Bool { gatewayRoute != nil }
 
+    var presentation: HostPresentation {
+        HostPresentation(availability.current, historyFailure: conversationList.readFailure,
+                         context: .current(hostName: hostDisplayName, device: ThisDevice.noun))
+    }
+
     @ObservationIgnored private lazy var transcriptRecovery = TranscriptRecovery(source: self)
 
     var remoteHomePath: String? { directories.lastKnownHomePath }
@@ -1446,8 +1451,8 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         await refreshActiveConversationAfterDisconnectIfNeeded()
     }
 
-    func connectNow() async throws {
-        try await gateway.connectNow()
+    func connectNow(within limit: Duration) async throws {
+        try await gateway.connectNow(within: limit)
     }
 
     func connectionFailureDetail() async -> String? {

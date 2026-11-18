@@ -57,7 +57,7 @@ final class QuickEntrySession {
             return row.title
         }
         let folder = screen.workingDirectory.map { WorkingDirectoryPathFormatter.displayPath($0, remoteHomePath: screen.target.remoteHomePath) }
-        return [folder, workspace.targetName(of: screen.target)].compactMap(\.self).joined(separator: " · ")
+        return [folder, screen.target.hostDisplayName].compactMap(\.self).joined(separator: " · ")
     }
 
     @discardableResult

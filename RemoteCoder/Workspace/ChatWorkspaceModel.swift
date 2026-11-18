@@ -433,7 +433,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             case .connecting, .restarting: .init(hostId: host.id, name: host.displayName, state: .unknown)
             case .offline, .unreachable, .unreachableFromHere:
                 .init(hostId: host.id, name: host.displayName, state: .unreachable, since: availability.lastSeen)
-            case .needsAttention: .init(hostId: host.id, name: host.displayName, state: .refused)
+            case .credentialsRejected: .init(hostId: host.id, name: host.displayName, state: .refused)
             }
         }
         var seen = Set(coverage.map(\.id))
@@ -1030,7 +1030,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         let activity = model.historyActivityStates
         return ConversationSidebarHostInput(
             hostID: model.hostID,
-            hostName: targetName(of: model),
+            hostName: model.hostDisplayName,
             threads: model.conversationList.threads,
             marks: model.conversationList.marks,
             remoteHomePath: model.remoteHomePath,
@@ -1038,7 +1038,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             activeThreadID: window.screen(for: model.target)?.openThreadID,
             loadingThreadID: window.screen(for: model.target)?.loadingTranscriptID,
             isLoading: model.conversationList.isLoading || model.conversationList.isLoadingOlder,
-            presentation: presentation(of: model),
+            presentation: model.presentation,
             questionAskTimesByThreadID: model.questionAskTimesByThreadID,
             waitingSinceByThreadID: model.waitingSinceByThreadID(in: activity),
             projects: model.conversationList.projects,
@@ -1053,7 +1053,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         models.map { model in
             let activity = model.historyActivityStates
             return ConversationSidebarHostInput(
-                hostID: model.hostID, hostName: targetName(of: model),
+                hostID: model.hostID, hostName: model.hostDisplayName,
                 threads: model.conversationList.threads, marks: model.conversationList.marks,
                 remoteHomePath: nil, activityByThreadID: activity,
                 activeThreadID: nil, loadingThreadID: nil, isLoading: false,
@@ -1063,17 +1063,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         }
     }
 
-    func targetName(of model: ChatTargetModel) -> String { model.hostDisplayName }
-
-    func presentation(of model: ChatTargetModel) -> HostPresentation {
-        HostPresentation(model.availability.current, historyFailure: model.conversationList.readFailure,
-                         context: .current(hostName: targetName(of: model), device: ThisDevice.noun))
-    }
-
-    var availabilityStrip: [HostPresentation.Line] { models.compactMap { presentation(of: $0).strip } }
-
     func conversationTargetName(of screen: ChatScreenModel) -> String {
-        targetName(of: screen.target)
+        screen.target.hostDisplayName
     }
 
     func sidebarSnapshot(arrangedBy layout: ConversationDrawerLayout, in window: ChatWindowModel) -> ConversationSidebarSnapshot {
@@ -1108,7 +1099,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             screen.shownNewChatDraft.map { UnsentDraftAddress(target: screen.executionTarget, draftID: $0) }
         }
         let inputs = models.map { model in
-            UnsentDraftRow.TargetInput(target: model.target, hostName: targetName(of: model),
+            UnsentDraftRow.TargetInput(target: model.target, hostName: model.hostDisplayName,
                                        remoteHomePath: model.remoteHomePath, drafts: model.drafts.listedUnsentDrafts,
                                        modelProviders: Dictionary(uniqueKeysWithValues: (model.codexModels.catalog?.entries ?? [])
                                         .map { ($0.id, $0.option.provider) }))

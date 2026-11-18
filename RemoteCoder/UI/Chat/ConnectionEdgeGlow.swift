@@ -2,10 +2,9 @@ import SwiftUI
 
 struct HostEdgeGlow: View {
     let target: ChatTargetModel
-    let workspace: ChatWorkspaceModel
 
     var body: some View {
-        let edge = workspace.presentation(of: target).edge
+        let edge = target.presentation.edge
         #if os(macOS)
         if edge.route == nil { ConnectionEdgeGlow(edge: edge) }
         #else

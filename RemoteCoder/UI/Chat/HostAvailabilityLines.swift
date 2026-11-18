@@ -2,12 +2,12 @@ import SwiftUI
 
 struct HostAvailabilityLines: View {
     let target: ChatTargetModel
-    let workspace: ChatWorkspaceModel
+    let lines: KeyPath<HostPresentation, [HostPresentation.Line]>
 
     var body: some View {
-        HostAvailabilityLineList(lines: workspace.presentation(of: target).chat,
+        HostAvailabilityLineList(lines: target.presentation[keyPath: lines],
                                  detail: target.connectionFailureDetail,
-                                 retry: { Task { try? await target.connectNow() } })
+                                 retry: { Task { try? await target.connectNow(within: .seconds(15)) } })
     }
 }
 

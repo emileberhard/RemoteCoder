@@ -43,7 +43,7 @@ private struct AvailabilityDrawerFixture: View {
         ZStack {
             ThemedSheetBackground()
             VStack(alignment: .leading, spacing: 0) {
-                HostAvailabilityStrip(lines: [presentation.strip].compactMap { $0 }).padding(.horizontal)
+                HostAvailabilityLineList(lines: presentation.strip, detail: { nil }, retry: {}).padding(.horizontal)
                 ScrollView {
                     VStack(spacing: 0) {
                         ForEach(rows) { row in
@@ -57,7 +57,7 @@ private struct AvailabilityDrawerFixture: View {
         .environment(theme)
         #else
         VStack(alignment: .leading, spacing: 0) {
-            HostAvailabilityStrip(lines: [presentation.strip].compactMap { $0 }).padding(.horizontal)
+            HostAvailabilityLineList(lines: presentation.strip, detail: { nil }, retry: {}).padding(.horizontal)
             List {
                 Section("Chats") {
                     ForEach(rows) { row in ConversationSourceRow(row: row, hostName: host, settle: {}) }
@@ -88,9 +88,11 @@ private struct AvailabilityChatFixture: View {
                         .frame(maxWidth: .infinity, alignment: index == 0 ? .trailing : .leading)
                 }
                 Spacer()
-                Label(presentation.sendHeldReason, systemImage: "exclamationmark.circle")
-                    .scaledFont(.footnote)
-                    .foregroundStyle(.secondary)
+                if let reason = presentation.sendHeldReason {
+                    Label(reason, systemImage: "exclamationmark.circle")
+                        .scaledFont(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 24)

@@ -1018,3 +1018,11 @@ private actor HeldInitialMarksRead: ConversationMarksPersistence {
 
     func release() { reading?.resume(); reading = nil }
 }
+
+struct HistoryReadDeferralTests {
+    @Test func onlyALostConnectionDefersTheList() {
+        #expect(GatewayHistoryService.defersRead(GatewayClient.ClientError.connectionFailed(host: "mini", reason: "down")))
+        #expect(GatewayHistoryService.defersRead(GatewayClient.ClientError.gatewayRestarting))
+        #expect(!GatewayHistoryService.defersRead(GatewayClient.ClientError.requestTimedOut(method: "thread/list")))
+    }
+}

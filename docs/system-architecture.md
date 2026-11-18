@@ -585,37 +585,47 @@ once the model is installed.
 Each chat target model owns one `HostAvailabilityTracker`, the only place that
 decides whether a host is available. It derives one `HostAvailability` value
 from three facts: this device's `GatewayConnectivity` (whose `.unreachable`
-carries a typed `GatewayConnectionFailure` cause and the time this device first
-failed), the newest cluster listing in which another connected peer reports the
-host reachable, and the host's role. The role comes from `host/info.internalBattery`:
-a battery means portable, none means stationary, and an unread value stays
-unknown and takes the calm path. The tracker remembers the role and the last time
-this device was connected (`HostPreferences`), and the number of tasks that were
-running when the connection dropped.
+carries only the typed `GatewayConnectionFailure` cause), the newest cluster
+listing in which another connected peer reports the host reachable, and the
+host's role. The role comes from `host/info.internalBattery`: a battery means
+portable, none means stationary, and an unread value stays unknown and takes the
+calm path. The tracker persists the role, the last time this device was
+connected and the start of the current unreachable episode (`HostPreferences`),
+and counts the tasks that were running when the connection dropped.
 
+- The episode starts at the first failed attempt after a connection and ends
+  only when a connection succeeds. The app's own disconnect (backgrounding,
+  relaunch) leaves it untouched, so the grace is wall-clock time across sessions.
 - A portable or unknown host that stops answering is offline, never a warning.
-- A stationary host warns only after `HostAvailability.warningGrace` (5 minutes)
-  without an answer. The tracker's single re-evaluation task owns that grace; a
-  reconnect re-derives and cancels it, and retirement cancels it for good.
-- A peer view counts only if this device read the cluster listing after it lost
-  the host and within `HostAvailability.peerFreshness` (2 minutes). Entering
-  unreachable asks the workspace for a cluster refresh, repeated every two minutes
-  while the host stays unreachable, and only when another host is connected.
-  Then the host is unreachable from this device rather than offline.
-- Rejected credentials (HTTP 401/403 on the upgrade) and a gateway that closes
-  the connection with a reason need fixing and say so at once.
+- A stationary host warns once `HostAvailability.warningGrace` (5 minutes) has
+  passed since the episode started. The tracker's single re-evaluation task owns
+  that deadline; every change re-derives it, and retirement cancels it for good.
+- A peer view counts only if the peer read the host as reachable at least
+  `HostAvailability.peerLossDetection` (30 s, above the peer link's keepalive
+  detection) after the episode started, and within `HostAvailability.peerFreshness`
+  (2 minutes). The tracker first asks the workspace for a cluster refresh once
+  that detection margin has passed, then every minute, half the freshness, while
+  the host stays unreachable, and only when another host is connected. Then the
+  host is unreachable from this device rather than offline.
+- Rejected credentials (HTTP 401/403 on the upgrade) are the one cause the user
+  can fix; they say so at once with the warning edge. A gateway that closes
+  before ready while starting, restarting or at capacity takes the ordinary
+  unreachable path and its grace.
 - Backgrounding disconnects deliberately, which reads as connecting, not as
   unreachable.
 
-`HostPresentation` is the one pure rule from that value, plus the drawer's history
-read failure, to every surface: the gray "offline" label on drawer rows, the
-drawer's warning strip, the drawer's host status line, the chat header lines
-(with the connection detail and Retry behind a tap), the top-edge glow and the
-reason a held send gives. Sending to a host that is not connected tries one
-connection first; if it fails, the text stays in the composer with that reason.
-There is no app-side send queue, and a message that provably never left the
-device reads "Not sent", never "Unconfirmed". Agent coverage in the placement
-picker projects the same value.
+`ChatTargetModel.presentation` applies `HostPresentation`, the one pure rule from
+that value, plus the drawer's history read failure, to every surface: the gray
+"offline" label on drawer rows, the drawer's warning strip and host status line,
+the chat header lines (strip and chat lines share one view, with the connection
+detail and Retry behind a tap), the top-edge glow and the reason a held send
+gives. Sending to a host that is not connected shows that it is connecting and
+tries one connection without waiting out the reconnect backoff; if it fails, the
+text stays in the composer with that reason. There is no app-side send queue,
+and a message that provably never left the device reads "Not sent", never
+"Unconfirmed". The history list defers only when the connection itself failed;
+a timeout on a live connection stays a visible history failure. Agent coverage in
+the placement picker projects the same value.
 Live navigation uploads from the extension and credential enrollment still use
 only the configured address.
 

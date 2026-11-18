@@ -19,7 +19,7 @@ struct ChatScreenChrome: ViewModifier {
         content
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 6) {
-                    HostAvailabilityLines(target: screen.target, workspace: workspace)
+                    HostAvailabilityLines(target: screen.target, lines: \.chat)
                         .padding(.horizontal, 16)
                     ScreenForkOriginHeader(screen: screen, onOpen: onOpenConversation)
                 }

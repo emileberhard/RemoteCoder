@@ -44,7 +44,12 @@ struct ConversationHistoryView: View {
                     .chatPresentationDiagnostics("sheet-move-agent")
             }
             .safeAreaInset(edge: .top) {
-                if isVisible { HostAvailabilityStrip(lines: workspace.availabilityStrip).padding(.horizontal) }
+                if isVisible {
+                    VStack(spacing: 2) {
+                        ForEach(workspace.models, id: \.hostID) { HostAvailabilityLines(target: $0, lines: \.strip) }
+                    }
+                    .padding(.horizontal)
+                }
             }
             .chatRenamePrompt($renamingChat, workspace: workspace)
             .modifier(WindowActivations(count: $windowActivations))

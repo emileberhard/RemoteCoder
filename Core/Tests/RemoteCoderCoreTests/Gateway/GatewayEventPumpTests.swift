@@ -136,13 +136,13 @@ struct GatewayEventPumpTests {
             await socket.closeBeforeReady(code: .privateCode(4012))
             await socket.closeConnections(code: .privateCode(4012))
             #expect(await events.next() == .restarting)
-            #expect((await events.next())?.failureCause == .refused)
+            #expect((await events.next())?.failureCause == .noAnswer)
             try #require(await waitUntil(timeout: .seconds(30)) { sink.connectivity.last?.failureCause != nil })
             #expect(sink.connectivity.contains(.restarting))
             #expect(await socket.acceptedConnections >= 2)
             let error = await #expect(throws: GatewayClient.ClientError.self) { try await client.connectIfNeeded() }
             #expect({ if case .gatewayNotReady = error { true } else { false } }())
-            #expect(await client.connectivity.failureCause == .refused)
+            #expect(await client.connectivity.failureCause == .noAnswer)
         }
     }
 
@@ -278,13 +278,13 @@ private final class PausedReplaySink: GatewayEventSink {
 }
 
 private extension GatewayConnectivity {
-    var failureCause: GatewayConnectionFailure.Cause? {
-        if case .unreachable(let failure) = self { failure.cause } else { nil }
+    var failureCause: GatewayConnectionFailure? {
+        if case .unreachable(let failure) = self { failure } else { nil }
     }
 }
 
 private extension GatewayConnectionEvent {
-    var failureCause: GatewayConnectionFailure.Cause? {
-        if case .unreachable(let failure) = self { failure.cause } else { nil }
+    var failureCause: GatewayConnectionFailure? {
+        if case .unreachable(let failure) = self { failure } else { nil }
     }
 }

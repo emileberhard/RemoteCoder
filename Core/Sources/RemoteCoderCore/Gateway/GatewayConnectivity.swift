@@ -11,13 +11,7 @@ enum GatewayConnectivity: Sendable, Equatable {
     }
 }
 
-struct GatewayConnectionFailure: Sendable, Equatable {
-    enum Cause: Sendable, Equatable {
-        case noAnswer
-        case credentialsRejected
-        case refused
-    }
-
-    let cause: Cause
-    let since: Date
+enum GatewayConnectionFailure: Sendable, Equatable {
+    case noAnswer
+    case credentialsRejected
 }

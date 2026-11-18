@@ -299,7 +299,7 @@ private struct ChatScreen: View {
         .defaultFocus($inputFocused, true)
         #endif
         .modifier(conversationDetails)
-        .overlay { HostEdgeGlow(target: screen.target, workspace: workspace) }
+        .overlay { HostEdgeGlow(target: screen.target) }
         .overlay {
             if let commandPalette {
                 CommandPalette(catalog: commandPalette, dismiss: { self.commandPalette = nil })

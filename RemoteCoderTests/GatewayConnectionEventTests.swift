@@ -40,7 +40,7 @@ struct GatewayConnectionEventTests {
             Issue.record("expected an unreachable event")
             return
         }
-        #expect(failure.cause == .noAnswer)
+        #expect(failure == .noAnswer)
         #expect(await events.next() == nil)
     }
 }

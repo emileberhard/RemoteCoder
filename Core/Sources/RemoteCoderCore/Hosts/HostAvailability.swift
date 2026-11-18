@@ -23,16 +23,12 @@ struct HostAvailability: Sendable, Equatable {
         case offline
         case unreachable
         case unreachableFromHere
-        case needsAttention(Fix)
-    }
-
-    enum Fix: Sendable, Equatable {
         case credentialsRejected
-        case refused
     }
 
     static let warningGrace: TimeInterval = 5 * 60
     static let peerFreshness: TimeInterval = 2 * 60
+    static let peerLossDetection: TimeInterval = 30
 
     let reach: Reach
     let lastSeen: Date?
@@ -44,8 +40,15 @@ struct HostAvailability: Sendable, Equatable {
 
     var isConnected: Bool { route != nil }
 
-    static func derive(connectivity: GatewayConnectivity, role: HostRole, lastSeen: Date?, tasksRunningAtLoss: Int,
-                       peerSawAt: Date?, now: Date) -> (availability: HostAvailability, changesAt: Date?) {
+    var hasStoppedAnswering: Bool {
+        switch reach {
+        case .offline, .unreachable, .unreachableFromHere, .credentialsRejected: true
+        case .connected, .connecting, .restarting: false
+        }
+    }
+
+    static func derive(connectivity: GatewayConnectivity, role: HostRole, lastSeen: Date?, unreachableSince: Date?,
+                       tasksRunningAtLoss: Int, peerSawAt: Date?, now: Date) -> (availability: HostAvailability, changesAt: Date?) {
         func value(_ reach: Reach) -> HostAvailability {
             HostAvailability(reach: reach, lastSeen: lastSeen, tasksRunningAtLoss: tasksRunningAtLoss)
         }
@@ -53,17 +56,14 @@ struct HostAvailability: Sendable, Equatable {
         case .connected(let route): return (value(.connected(route)), nil)
         case .restarting: return (value(.restarting), nil)
         case .disconnected: return (value(.connecting), nil)
-        case .unreachable(let failure):
-            switch failure.cause {
-            case .credentialsRejected: return (value(.needsAttention(.credentialsRejected)), nil)
-            case .refused: return (value(.needsAttention(.refused)), nil)
-            case .noAnswer: break
-            }
-            if let peerSawAt, peerSawAt >= failure.since, now.timeIntervalSince(peerSawAt) < peerFreshness {
+        case .unreachable(.credentialsRejected): return (value(.credentialsRejected), nil)
+        case .unreachable(.noAnswer):
+            let since = unreachableSince ?? now
+            if let peerSawAt, peerSawAt >= since + peerLossDetection, now.timeIntervalSince(peerSawAt) < peerFreshness {
                 return (value(.unreachableFromHere), peerSawAt + peerFreshness)
             }
             guard role == .stationary else { return (value(.offline), nil) }
-            let warnsAt = failure.since + warningGrace
+            let warnsAt = since + warningGrace
             return now >= warnsAt ? (value(.unreachable), nil) : (value(.offline), warnsAt)
         }
     }
@@ -80,6 +80,7 @@ final class HostAvailabilityTracker {
     @ObservationIgnored private(set) var connectivity = GatewayConnectivity.disconnected
     @ObservationIgnored private var internalBattery: Bool?
     @ObservationIgnored private var lastSeen: Date?
+    @ObservationIgnored private var unreachableSince: Date?
     @ObservationIgnored private var tasksRunningAtLoss = 0
     @ObservationIgnored private var peerSawAt: Date?
     @ObservationIgnored private var peerViewRequestedAt: Date?
@@ -92,6 +93,7 @@ final class HostAvailabilityTracker {
         self.now = now
         internalBattery = HostPreferences.internalBattery(hostID: hostID, defaults: defaults)
         lastSeen = HostPreferences.lastSeen(hostID: hostID, defaults: defaults)
+        unreachableSince = HostPreferences.unreachableSince(hostID: hostID, defaults: defaults)
         current = HostAvailability(reach: .connecting, lastSeen: lastSeen, tasksRunningAtLoss: 0)
     }
 
@@ -100,18 +102,18 @@ final class HostAvailabilityTracker {
     func connectivityChanged(_ connectivity: GatewayConnectivity, runningTasks: Int) {
         guard !isRetired, connectivity != self.connectivity else { return }
         let wasConnected = self.connectivity.route != nil
-        let wasUnreachable = if case .unreachable = self.connectivity { true } else { false }
         self.connectivity = connectivity
         if connectivity.route != nil {
             tasksRunningAtLoss = 0
             peerSawAt = nil
             recordLastSeen()
+            setUnreachableSince(nil)
         } else if wasConnected {
             tasksRunningAtLoss = runningTasks
             recordLastSeen()
         }
         if case .unreachable = connectivity {
-            if !wasUnreachable { requestPeerView() }
+            if unreachableSince == nil { setUnreachableSince(now()) }
         } else {
             peerViewRequestedAt = nil
         }
@@ -137,9 +139,10 @@ final class HostAvailabilityTracker {
         reevaluation = nil
     }
 
-    private func requestPeerView() {
-        peerViewRequestedAt = now()
-        requestsPeerView()
+    private var peerViewDue: Date? {
+        guard connectivity == .unreachable(.noAnswer), let unreachableSince else { return nil }
+        return peerViewRequestedAt.map { $0 + HostAvailability.peerFreshness / 2 }
+            ?? unreachableSince + HostAvailability.peerLossDetection
     }
 
     private func recordLastSeen() {
@@ -148,19 +151,29 @@ final class HostAvailabilityTracker {
         HostPreferences.setLastSeen(seen, hostID: hostID, defaults: defaults)
     }
 
+    private func setUnreachableSince(_ date: Date?) {
+        guard date != unreachableSince else { return }
+        unreachableSince = date
+        HostPreferences.setUnreachableSince(date, hostID: hostID, defaults: defaults)
+    }
+
     private func reevaluate() {
         reevaluation?.cancel()
         reevaluation = nil
+        let now = now()
+        if let due = peerViewDue, due <= now {
+            peerViewRequestedAt = now
+            requestsPeerView()
+        }
         let derived = HostAvailability.derive(connectivity: connectivity, role: role, lastSeen: lastSeen,
-                                              tasksRunningAtLoss: tasksRunningAtLoss, peerSawAt: peerSawAt, now: now())
+                                              unreachableSince: unreachableSince, tasksRunningAtLoss: tasksRunningAtLoss,
+                                              peerSawAt: peerSawAt, now: now)
         if derived.availability != current { current = derived.availability }
-        let peerViewDue = peerViewRequestedAt.map { $0 + HostAvailability.peerFreshness }
         guard let next = [derived.changesAt, peerViewDue].compactMap({ $0 }).min() else { return }
-        let delay = max(0, next.timeIntervalSince(now()))
+        let delay = max(0, next.timeIntervalSince(now))
         reevaluation = Task { [weak self] in
             guard (try? await Task.sleep(for: .seconds(delay))) != nil, let self, !self.isRetired else { return }
             self.reevaluation = nil
-            if peerViewDue.map({ self.now() >= $0 }) == true { self.requestPeerView() }
             self.reevaluate()
         }
     }

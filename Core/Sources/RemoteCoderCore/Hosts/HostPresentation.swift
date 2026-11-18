@@ -27,11 +27,12 @@ struct HostPresentation: Sendable, Equatable {
     }
 
     let rowLabel: String?
-    let strip: Line?
+    let strip: [Line]
     let drawerStatus: DrawerStatus?
     let chat: [Line]
     let edge: Edge
-    let sendHeldReason: String
+    let sendHeldReason: String?
+    let connectingNotice: String
 
     struct Context: Sendable {
         let hostName: String
@@ -52,32 +53,33 @@ struct HostPresentation: Sendable, Equatable {
             "went offline\(seen.map { " at \($0)" } ?? "") with \(availability.tasksRunningAtLoss) task\(availability.tasksRunningAtLoss == 1 ? "" : "s") running"
         } else { nil }
         let offline = seen.map { "offline · last seen \($0)" } ?? "offline"
+        connectingNotice = "Connecting to \(host)…"
 
         switch availability.reach {
         case .connected(let route):
             rowLabel = nil
-            strip = nil
+            strip = []
             drawerStatus = historyFailure.map { .problem(Self.words(for: $0, host: host)) }
             chat = []
             edge = .connected(route)
-            sendHeldReason = ""
+            sendHeldReason = nil
         case .connecting:
             rowLabel = nil
-            strip = nil
+            strip = []
             drawerStatus = nil
             chat = []
             edge = .neutral
             sendHeldReason = "Couldn't reach \(host)"
         case .restarting:
             rowLabel = nil
-            strip = nil
+            strip = []
             drawerStatus = .updating("Updating \(host)…")
             chat = []
             edge = .neutral
             sendHeldReason = "\(host) is updating"
         case .offline:
             rowLabel = "offline"
-            strip = nil
+            strip = []
             drawerStatus = nil
             chat = [Line(text: lostWork ?? offline, tone: .neutral)]
             edge = .neutral
@@ -85,7 +87,7 @@ struct HostPresentation: Sendable, Equatable {
         case .unreachable:
             let words = seen.map { "Can't reach \(host) since \($0)" } ?? "Can't reach \(host)"
             rowLabel = "offline"
-            strip = Line(text: words, tone: .warning)
+            strip = [Line(text: words, tone: .warning)]
             drawerStatus = nil
             chat = [Line(text: words, tone: .warning)] + (lostWork.map { [Line(text: $0, tone: .neutral)] } ?? [])
             edge = .warning
@@ -93,21 +95,18 @@ struct HostPresentation: Sendable, Equatable {
         case .unreachableFromHere:
             let words = "Can't reach \(host) from this \(context.device)"
             rowLabel = "offline"
-            strip = Line(text: words, tone: .warning)
+            strip = [Line(text: words, tone: .warning)]
             drawerStatus = nil
             chat = [Line(text: words, tone: .warning)] + (lostWork.map { [Line(text: $0, tone: .neutral)] } ?? [])
             edge = .warning
             sendHeldReason = words
-        case .needsAttention(let cause):
-            let words = switch cause {
-            case .credentialsRejected: "\(host) didn't accept this \(context.device)'s credentials. Add it again in Settings → Hosts."
-            case .refused: "\(host) refused the connection."
-            }
+        case .credentialsRejected:
+            let words = "\(host) didn't accept this \(context.device)'s credentials. Add it again in Settings → Hosts."
             rowLabel = "offline"
-            strip = Line(text: words, tone: .warning)
+            strip = [Line(text: words, tone: .warning)]
             drawerStatus = nil
             chat = [Line(text: words, tone: .warning)]
-            edge = .neutral
+            edge = .warning
             sendHeldReason = words
         }
     }

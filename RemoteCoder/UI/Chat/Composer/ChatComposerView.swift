@@ -205,6 +205,15 @@ struct ChatComposerView: View {
                 dismissibleNotice(warning.message) { screen.target.gatewayWarning = nil }
                     .accessibilityIdentifier("gateway-warning")
             }
+            if let notice = screen.connectingForSendNotice {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text(notice).scaledFont(.footnote).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .accessibilityIdentifier("send-connecting")
+            }
             if let reason = screen.sendHeldReason {
                 dismissibleNotice(reason) { screen.clearSendHeld() }
                     .accessibilityIdentifier("send-held")
