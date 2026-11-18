@@ -2051,8 +2051,8 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   best effort, since ActivityKit refuses a request from the background.
   `VoiceCall` owns its content state (phase, mute, title and the agent's last
   finished line) and publishes only when one of them changes, never per
-  transcript delta. `VoiceCallLiveActivity` bounds the title and line in UTF-8
-  bytes to stay inside ActivityKit's 4 KB payload, runs updates one at a time
+  transcript delta. `VoiceCallLiveActivity` bounds the host label, title and line in
+  UTF-8 bytes, leaving room for encoding inside ActivityKit's 4 KB payload, runs updates one at a time
   and coalesces to the newest state. Teardown starts ending the activity at
   once, after the update in flight, rather than after the gateway stop.
 - `RemoteCoderVoiceCallWidget` renders that activity. The Lock Screen and the

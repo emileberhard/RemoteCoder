@@ -400,6 +400,7 @@ final class VoiceCall {
     ) async {
         await orphanedLiveActivityCleanup.value
         if let teardownTask { await teardownTask.value }
+        guard model.acceptsWork else { return }
         let callID = UUID()
         guard lifecycle.start(callID: callID) else { return }
         await begin(callID, using: model, resuming: context)
@@ -408,6 +409,7 @@ final class VoiceCall {
     func startWithLiveActivity(using model: any VoiceCallHost) async throws {
         await orphanedLiveActivityCleanup.value
         while let teardownTask { await teardownTask.value }
+        guard model.acceptsWork else { return }
         let callID = lifecycle.callID ?? UUID()
         if liveActivity?.isOngoing != true {
             liveActivity = try .request(callID: callID, hostName: model.hostDisplayName, state: liveActivityState)

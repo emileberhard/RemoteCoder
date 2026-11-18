@@ -25,7 +25,9 @@ final class VoiceCallLiveActivity {
         }
         do {
             let activity = try Activity.request(
-                attributes: RemoteCoderVoiceCallAttributes(callID: callID, startedAt: .now, hostName: hostName),
+                attributes: RemoteCoderVoiceCallAttributes(
+                    callID: callID, startedAt: .now, hostName: hostName.prefix(utf8Bytes: 64)
+                ),
                 content: Self.content(state)
             )
             return VoiceCallLiveActivity(activity: activity, state: state)
@@ -58,8 +60,8 @@ final class VoiceCallLiveActivity {
 
     private static func content(_ state: ContentState) -> ActivityContent<ContentState> {
         var bounded = state
-        bounded.title = state.title?.prefix(utf8Bytes: 256)
-        bounded.caption = state.caption?.prefix(utf8Bytes: 1_024)
+        bounded.title = state.title?.prefix(utf8Bytes: 128)
+        bounded.caption = state.caption?.prefix(utf8Bytes: 512)
         return ActivityContent(state: bounded, staleDate: nil, relevanceScore: 1_000)
     }
 

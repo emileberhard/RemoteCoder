@@ -6,6 +6,7 @@ import Foundation
 protocol VoiceCallHost: AnyObject {
     var hostID: UUID { get }
     var hostDisplayName: String { get }
+    var acceptsWork: Bool { get }
     var activeSessionID: String? { get }
     var gatewayClient: GatewayClient { get }
     var voiceHistoryStore: RealtimeVoiceHistoryStore { get }
