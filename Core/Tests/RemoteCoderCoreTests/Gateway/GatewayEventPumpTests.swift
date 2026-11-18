@@ -88,6 +88,64 @@ struct GatewayEventPumpTests {
         }
     }
 
+    @Test func revisitingAChatKeepsItsPumpAfterDictationOptOut() async throws {
+        let temporary = TemporaryHostStorage()
+        defer { temporary.cleanUp() }
+        let hostA = UUID()
+        let hostB = UUID()
+        let sessionsA = ConversationSessions(hostID: hostA,
+            sessionIndex: ConversationIndex(hostID: hostA, storage: temporary.storage),
+            contentSubscriptions: RecordingContentSubscriptions(), storage: temporary.storage)
+        let sessionsB = ConversationSessions(hostID: hostB,
+            sessionIndex: ConversationIndex(hostID: hostB, storage: temporary.storage),
+            contentSubscriptions: RecordingContentSubscriptions(), storage: temporary.storage)
+        let socketA = try DeviceToolSocketFixture(declarationReply: .accepted)
+        let socketB = try DeviceToolSocketFixture(declarationReply: .accepted)
+        let portA = try await socketA.start()
+        let portB = try await socketB.start()
+        let clientA = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(portA)")),
+            authToken: "fixture", hostLabel: "A"), routes: nil)
+        let clientB = GatewayClient(config: .init(url: try #require(URL(string: "ws://127.0.0.1:\(portB)")),
+            authToken: "fixture", hostLabel: "B"), routes: nil)
+        let sinkA = LinkRecordingSink()
+        let sinkB = LinkRecordingSink()
+        let pumpA = GatewayEventPump(gateway: clientA, conversations: sessionsA, sink: sinkA)
+        let pumpB = GatewayEventPump(gateway: clientB, conversations: sessionsB, sink: sinkB)
+        defer {
+            let stopped = pumpA.stop() + pumpB.stop()
+            await clientA.retire()
+            await clientB.retire()
+            await socketA.stop()
+            await socketB.stop()
+            for task in stopped { await task.value }
+        }
+        var lifecycleA = TargetLifecycle()
+        var lifecycleB = TargetLifecycle()
+        _ = lifecycleA.handle(.presentation(TargetPresentation(presented: true)))
+        _ = lifecycleA.handle(.hostPrepared)
+        pumpA.startIfNeeded()
+        #expect(await waitUntil { await clientA.isConnected && !sinkA.healths.isEmpty })
+        _ = lifecycleA.handle(.presentation(TargetPresentation(presented: false, drawerOpen: false)))
+        _ = lifecycleB.handle(.presentation(TargetPresentation(presented: true)))
+        pumpB.startIfNeeded()
+        #expect(await waitUntil { await clientB.isConnected })
+        _ = lifecycleA.handle(.browserDictationHost(true))
+        _ = lifecycleB.handle(.browserDictationHost(true))
+        pumpA.startForBrowserDictation()
+        pumpB.startForBrowserDictation()
+        _ = lifecycleA.handle(.browserDictationHost(false))
+        _ = lifecycleB.handle(.browserDictationHost(false))
+        pumpA.releaseBrowserDictation()
+        pumpB.releaseBrowserDictation()
+        _ = lifecycleB.handle(.presentation(TargetPresentation(presented: false, drawerOpen: false)))
+        #expect(lifecycleA.handle(.presentation(TargetPresentation(presented: true))).isEmpty)
+        let count = sinkA.healths.count
+        try await socketA.send(.notification(.init(method: "daemon/ready", params: .object([
+            "notificationEpoch": .string("fixture"), "notificationSequence": .number(0)
+        ]))))
+        #expect(await waitUntil { sinkA.healths.count > count })
+    }
+
     @Test func retiringAnExplicitReplayReleasesItsClaimForTheReplacementPump() async throws {
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
