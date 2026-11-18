@@ -559,7 +559,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             eventPump.startIfNeeded()
             directories.startIfNeeded()
         }
-        if lifecycle.browserDictationHostActive { eventPump.startIfNeeded() }
+        if lifecycle.browserDictationHostActive { eventPump.startForBrowserDictation() }
         startHistoryAutoRefreshIfNeeded()
         guard acceptsWork else { return }
 
@@ -846,7 +846,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
         if enabled {
             let effects = lifecycle.handle(.browserDictationHost(true))
             await gateway.resumeLivenessChecks()
-            eventPump.startIfNeeded()
+            eventPump.startForBrowserDictation()
             await gateway.browserDictationRoleChanged()
             await perform(effects)
         } else {
@@ -857,7 +857,7 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
     func browserDictationDidDrain() async {
         guard acceptsWork, !Task.isCancelled, browserDictationRole?.enabled == false else { return }
         let effects = lifecycle.handle(.browserDictationHost(false))
-        eventPump.releaseBrowserDictation(lifecycle: lifecycle)
+        eventPump.releaseBrowserDictation()
         if lifecycle.isBackgrounded { await gateway.suspendLivenessChecks() }
         await perform(effects)
     }

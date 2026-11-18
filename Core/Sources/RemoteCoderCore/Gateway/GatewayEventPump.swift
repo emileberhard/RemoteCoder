@@ -57,6 +57,8 @@ final class GatewayEventPump {
     private let conversations: ConversationSessions
     private weak var sink: (any GatewayEventSink)?
     private let logger = AppLogger(category: "GatewayNotificationPump")
+    private var chatHold = false
+    private var browserDictationHold = false
     private var task: Task<Void, Never>?
     private var connectionTask: Task<Void, Never>?
     private var networkTask: Task<Void, Never>?
@@ -74,7 +76,17 @@ final class GatewayEventPump {
     private var isLive: Bool { sink.map { $0.acceptsGatewayEvents } ?? false }
 
     func startIfNeeded() {
-        guard task == nil, isLive else { return }
+        chatHold = true
+        startIfHeld()
+    }
+
+    func startForBrowserDictation() {
+        browserDictationHold = true
+        startIfHeld()
+    }
+
+    private func startIfHeld() {
+        guard task == nil, isLive, chatHold || browserDictationHold else { return }
         let gateway = self.gateway
         let conversations = self.conversations
         let target = WeakPump(value: self)
@@ -105,13 +117,16 @@ final class GatewayEventPump {
         resumeGapRecovery()
     }
 
-    func releaseBrowserDictation(lifecycle: TargetLifecycle) {
-        guard !lifecycle.browserDictationHostActive, !lifecycle.needsGatewayLoops else { return }
+    func releaseBrowserDictation() {
+        browserDictationHold = false
+        guard !chatHold else { return }
         stop()
     }
 
     @discardableResult
     func stop() -> [Task<Void, Never>] {
+        chatHold = false
+        browserDictationHold = false
         generation = UUID()
         let running = [task, connectionTask, networkTask, gapRecoveryTask].compactMap { $0 }
         task?.cancel()

@@ -65,10 +65,20 @@ struct GatewayEventPumpTests {
             await socket.stop()
             for task in stopped { await task.value }
         }
-        pump.startIfNeeded()
+        if chatNeeded { pump.startIfNeeded() }
+        pump.startForBrowserDictation()
         #expect(await waitUntil { await client.isConnected })
+        _ = lifecycle.handle(.presentation(TargetPresentation(presented: false, drawerOpen: false)))
         _ = lifecycle.handle(.browserDictationHost(false))
-        pump.releaseBrowserDictation(lifecycle: lifecycle)
+        pump.releaseBrowserDictation()
+        if chatNeeded {
+            _ = lifecycle.handle(.presentation(TargetPresentation(presented: true)))
+            let count = sink.healths.count
+            try await socket.send(.notification(.init(method: "daemon/ready", params: .object([
+                "notificationEpoch": .string("fixture"), "notificationSequence": .number(0)
+            ]))))
+            #expect(await waitUntil { sink.healths.count > count })
+        }
         await socket.closeConnections(code: .protocolCode(.goingAway))
         if chatNeeded {
             #expect(await waitUntil(timeout: .seconds(10)) { await socket.acceptedConnections >= 2 })
