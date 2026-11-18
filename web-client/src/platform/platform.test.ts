@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { Frame } from "../protocol/boundary";
+import type { TranscriptionSettings } from "../transcription-settings";
 import type { FeatureTransport, VoiceContext } from "./contracts";
 import { BrowserDictation } from "./dictation";
 import type { RecordingStore, SavedRecording } from "./recordings";
 import { decodePCM16 } from "./speech";
+import { transcribeRecording } from "./transcription";
 import { BrowserVoiceSession, type VoiceEnvironment } from "./voice";
 
 function deferred<T>() {
@@ -92,6 +94,8 @@ const voiceContext: VoiceContext = {
   model: "gpt-6.1-sol",
   initialItems: [{ role: "user", text: "Continue this exact conversation" }],
 };
+
+const scribe = (): TranscriptionSettings => ({ model: "elevenLabsScribeV2", language: "automatic" });
 
 class MemoryRecordings implements RecordingStore {
   readonly saved = new Map<string, SavedRecording>();
@@ -215,6 +219,7 @@ describe("browser speech service ownership", () => {
       "host-1",
       () => undefined,
       (text) => texts.push(text),
+      scribe,
       {
         store,
         capture: async () => media.stream,
@@ -249,6 +254,7 @@ describe("browser speech service ownership", () => {
       "host-1",
       () => undefined,
       (text) => texts.push(text),
+      scribe,
       {
         store,
         capture: async () => mediaStream().stream,
@@ -275,5 +281,118 @@ describe("browser speech service ownership", () => {
     decodePCM16(new Uint8Array([0, 128, 0, 0, 0, 64, 255, 127]), 24000, context);
     expect([...samples]).toEqual([-1, 0, 0.5, 32767 / 32768]);
     expect(() => decodePCM16(new Uint8Array([1]), 24000, context)).toThrow("incomplete PCM");
+  });
+});
+
+describe("dictation transcription follows the native batch engines", () => {
+  type Sent = { url: string; init?: RequestInit };
+  function relay(responses: unknown[]) {
+    const sent: Sent[] = [];
+    const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push({ url: String(input), init });
+      return new Response(JSON.stringify(responses.shift()));
+    };
+    return { sent, fetch };
+  }
+  function formOf(request?: Sent) {
+    const body = request?.init?.body;
+    if (!(body instanceof FormData)) throw new Error("Expected a multipart request");
+    return body;
+  }
+  const audio = new Blob(["recorded microphone audio"], { type: "audio/webm" });
+  const signal = new AbortController().signal;
+
+  test("Azure MAI-Transcribe-2 receives native's clean definition and 16 kHz PCM WAV", async () => {
+    const { sent, fetch } = relay([{ combinedPhrases: [{ text: "Hej" }, { text: "and hello" }] }]);
+    const text = await transcribeRecording(
+      "host-1",
+      audio,
+      { model: "azureMAITranscribe2", language: "englishAndSwedish" },
+      signal,
+      {
+        fetch,
+        decode: async (_, rate) => (rate === 16_000 ? new Float32Array([0, 1, -1]) : new Float32Array()),
+      },
+    );
+    expect(text).toBe("Hej\nand hello");
+    expect(sent[0]?.url).toBe(
+      "/api/hosts/host-1/speech/azure/speechtotext/transcriptions:transcribe?api-version=2025-10-15",
+    );
+    const form = formOf(sent[0]);
+    expect([...form.keys()]).toEqual(["definition", "audio"]);
+    expect(JSON.parse(String(form.get("definition")))).toEqual({
+      enhancedMode: { enabled: true, model: "MAI-Transcribe-2", modelOptions: { transcribeStyle: "clean" } },
+    });
+    const wav = new DataView(await (form.get("audio") as File).arrayBuffer());
+    expect(wav.byteLength).toBe(50);
+    expect(wav.getUint32(24, true)).toBe(16_000);
+    expect([wav.getInt16(44, true), wav.getInt16(46, true), wav.getInt16(48, true)]).toEqual([
+      0, 32767, -32768,
+    ]);
+  });
+
+  test("a single language becomes the provider's language and streaming models use their batch model", async () => {
+    const azure = relay([{ combinedPhrases: [{ text: "Hej" }] }]);
+    await transcribeRecording(
+      "host-1",
+      audio,
+      { model: "azureMAITranscribe2", language: "swedish" },
+      signal,
+      {
+        fetch: azure.fetch,
+        decode: async () => new Float32Array([0]),
+      },
+    );
+    expect(JSON.parse(String(formOf(azure.sent[0]).get("definition"))).locales).toEqual(["sv"]);
+    const eleven = relay([{ text: "Hello" }]);
+    await transcribeRecording(
+      "host-1",
+      audio,
+      { model: "elevenLabsScribeV2Realtime", language: "english" },
+      signal,
+      { fetch: eleven.fetch },
+    );
+    const form = formOf(eleven.sent[0]);
+    expect(eleven.sent[0]?.url).toBe("/api/hosts/host-1/speech/elevenlabs/v1/speech-to-text");
+    expect([...form.keys()]).toEqual(["file", "model_id", "language_code"]);
+    expect([form.get("model_id"), form.get("language_code")]).toEqual(["scribe_v2", "en"]);
+  });
+
+  test("AssemblyAI uploads, submits language detection for several languages and polls to completion", async () => {
+    const { sent, fetch } = relay([
+      { upload_url: "https://cdn.assemblyai.com/upload/1" },
+      { id: "transcript-1" },
+      { status: "processing" },
+      { status: "completed", text: "Klart" },
+    ]);
+    const pauses: number[] = [];
+    const text = await transcribeRecording(
+      "host-1",
+      audio,
+      { model: "assemblyAIUniversal35Pro", language: "englishAndSwedish" },
+      signal,
+      { fetch, wait: async (milliseconds) => void pauses.push(milliseconds) },
+    );
+    expect(text).toBe("Klart");
+    expect(sent.map((request) => request.url.replace("/api/hosts/host-1/speech/assemblyai/", ""))).toEqual([
+      "v2/upload",
+      "v2/transcript",
+      "v2/transcript/transcript-1",
+      "v2/transcript/transcript-1",
+    ]);
+    expect(JSON.parse(String(sent[1]?.init?.body))).toEqual({
+      audio_url: "https://cdn.assemblyai.com/upload/1",
+      speech_models: ["universal-3-5-pro", "universal-2"],
+      language_detection: true,
+      language_detection_options: { expected_languages: ["en", "sv"] },
+    });
+    expect(pauses).toEqual([1000]);
+  });
+
+  test("an empty transcript is a failure rather than an empty insertion", async () => {
+    const { fetch } = relay([{ text: "  " }]);
+    await expect(transcribeRecording("host-1", audio, scribe(), signal, { fetch })).rejects.toThrow(
+      "Transcription returned no text.",
+    );
   });
 });

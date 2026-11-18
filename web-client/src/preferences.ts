@@ -1,5 +1,11 @@
 import { object, type Provider } from "./protocol/boundary";
 import type { JsonValue } from "./protocol/generated/serde_json/JsonValue";
+import {
+  type TranscriptionLanguage,
+  type TranscriptionModel,
+  transcriptionLanguages,
+  transcriptionModels,
+} from "./transcription-settings";
 
 export type ThemeID = (typeof themes)[number];
 export type Effort = (typeof efforts)[number];
@@ -16,6 +22,8 @@ export type PreferenceValues = {
   "codex.fastModeEnabled": boolean | "ultrafast";
   "appearance.selectedThemeID": ThemeID;
   "conversationDrawer.mode": "priority" | "projects";
+  "transcription.model": TranscriptionModel;
+  "transcription.language": TranscriptionLanguage;
 };
 export type PreferenceKey = keyof PreferenceValues;
 export type PreferenceEntry = { value: JsonValue; updatedAt: number; device: string };
@@ -32,6 +40,8 @@ const kinds: Record<PreferenceKey, "string" | "speed"> = {
   "codex.fastModeEnabled": "speed",
   "appearance.selectedThemeID": "string",
   "conversationDrawer.mode": "string",
+  "transcription.model": "string",
+  "transcription.language": "string",
 };
 const themes = [
   "caribbeanSunset",
@@ -129,6 +139,10 @@ export class SyncedPreferences {
     } else if (typeof value !== kinds[key]) return null;
     if (key === "conversationDrawer.mode" && value !== "priority" && value !== "projects") return null;
     if (key === "appearance.selectedThemeID" && !themes.includes(value as ThemeID)) return null;
+    if (key === "transcription.model" && !transcriptionModels.includes(value as TranscriptionModel))
+      return null;
+    if (key === "transcription.language" && !transcriptionLanguages.includes(value as TranscriptionLanguage))
+      return null;
     if (
       (key === "codex.defaultReasoningSelection" || key === "codex.newChatReasoning") &&
       !(key === "codex.newChatReasoning" && value === "last-selected") &&

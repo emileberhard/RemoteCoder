@@ -32,7 +32,9 @@ Unknown keys remain with their owning client. Values native defaults cannot repr
 | `codex.defaultReasoningSelection` | Last explicit reasoning; absent/unrecognized means high. Clamp to nearest supported visible level, lower on a tie, or automatic if none. |
 | `codex.fastModeEnabled` | Standard (`false`), Fast (`true`), or `"ultrafast"` |
 | `appearance.selectedThemeID` | Native theme ID; absent/unrecognized uses Caribbean Sunset in memory. |
+| `transcription.model` | Native `TranscriptionModel`; absent/unrecognized uses Scribe v2 Realtime. Dictation runs its batch engine: Scribe v2, Universal-3.5 Pro or MAI-Transcribe-2. |
+| `transcription.language` | Native `TranscriptionLanguage`; absent/unrecognized is automatic. One language is sent as the provider's language; several are detection hints. |
 
-Pinned conversations are **not synced preferences**. Their per-host flags use the gateway's conversation marks replica, shared with native clients. Drawer folds/filter, working directories, host/installation identities, notifications and haptics stay device-local. Drawer mode, account nicknames, transcription, automatic speech and realtime voice stay with their existing owners.
+Pinned conversations are **not synced preferences**. Their per-host flags use the gateway's conversation marks replica, shared with native clients. Drawer folds/filter, working directories, host/installation identities, notifications and haptics stay device-local. Drawer mode, account nicknames, the dictation dictionary and voice selection, automatic speech and realtime voice stay with their existing owners.
 
 The initial Codex model comes from `NewChatDefaults.initialCodexModelID` through the existing native model generator (`bun scripts/generate-native-models.ts`), alongside the Claude catalog. Its generated `src/protocol/native-model-defaults.json` is consumed by the workspace and verified against the owning Swift source; do not add another fallback model constant.

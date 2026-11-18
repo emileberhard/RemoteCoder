@@ -1,19 +1,17 @@
-import { canceled, errorMessage, isCanceled, requiredString } from "./contracts";
+import type { TranscriptionSettings } from "../transcription-settings";
+import { canceled, errorMessage, isCanceled } from "./contracts";
 import { BrowserRecordingStore, type RecordingStore, type SavedRecording } from "./recordings";
-import { relayJSON, type SpeechFetch, speechURL } from "./relay";
+import { type TranscriptionOptions, transcribeRecording } from "./transcription";
 
 export type DictationState = {
   status: "idle" | "starting" | "recording" | "transcribing" | "failed";
   error?: string;
 };
 
-export type DictationOptions = {
-  model?: string;
-  language?: string;
+export type DictationOptions = TranscriptionOptions & {
   store?: RecordingStore;
   capture?: () => Promise<MediaStream>;
   recorder?: (stream: MediaStream, options: MediaRecorderOptions) => MediaRecorder;
-  fetch?: SpeechFetch;
 };
 
 type Capture = { recorder: MediaRecorder; stream: MediaStream; result: Promise<Blob> };
@@ -32,6 +30,7 @@ export class BrowserDictation {
     readonly hostId: string,
     private readonly onState: (state: DictationState) => void,
     private readonly onTranscript: (text: string) => void,
+    private readonly settings: () => TranscriptionSettings,
     private readonly options: DictationOptions = {},
   ) {
     this.store = options.store ?? new BrowserRecordingStore();
@@ -149,26 +148,13 @@ export class BrowserDictation {
     this.transcription = controller;
     this.publish({ status: "transcribing" });
     try {
-      const body = new FormData();
-      const extension = recording.blob.type.includes("mp4")
-        ? "m4a"
-        : recording.blob.type.includes("ogg")
-          ? "ogg"
-          : "webm";
-      body.append("file", recording.blob, `dictation.${extension}`);
-      body.append("model", this.options.model ?? "gpt-4o-transcribe");
-      body.append("response_format", "json");
-      if (this.options.language) body.append("language", this.options.language);
-      const response = await (this.options.fetch ?? fetch)(
-        speechURL(this.hostId, "openai", "v1/audio/transcriptions"),
-        {
-          method: "POST",
-          body,
-          signal: controller.signal,
-        },
+      const text = await transcribeRecording(
+        this.hostId,
+        recording.blob,
+        this.settings(),
+        controller.signal,
+        this.options,
       );
-      const result = await relayJSON(response, 2 * 1024 * 1024);
-      const text = requiredString(result.text, "transcribed text").trim();
       if (generation !== this.generation || this.retired) return;
       this.onTranscript(text);
       await this.store.remove(recording.id);

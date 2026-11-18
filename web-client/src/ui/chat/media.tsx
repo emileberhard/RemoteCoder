@@ -12,6 +12,7 @@ import {
   type VoiceState,
 } from "../../platform";
 import { addressKey } from "../../protocol/boundary";
+import { defaultTranscriptionModel } from "../../transcription-settings";
 import type { Conversation } from "../../workspace/conversation-session";
 import { useWorkspace } from "../workspace-context";
 
@@ -98,6 +99,10 @@ export function DictationControl() {
           throw new Error("The original dictation draft is unavailable; the recording was retained.");
         workspace.updateDraft({ text: [draft.text.trimEnd(), text].filter(Boolean).join("\n") }, key);
       },
+      () => ({
+        model: workspace.preference("transcription.model") ?? defaultTranscriptionModel,
+        language: workspace.preference("transcription.language") ?? "automatic",
+      }),
     );
     service.current = dictation;
     void refresh(dictation).catch((error) => workspace.report(error));

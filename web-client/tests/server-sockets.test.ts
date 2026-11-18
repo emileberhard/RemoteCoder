@@ -148,7 +148,7 @@ describe("live browser bridge socket transport", () => {
           contentType: request.headers.get("content-type"),
           providerKey: request.headers.get("x-goog-api-key"),
         });
-        if (url.pathname === "/speech/openai/v1/audio/transcriptions")
+        if (url.pathname === "/speech/azure/speechtotext/transcriptions:transcribe")
           return new Response("provider unavailable", {
             status: 429,
             headers: {
@@ -475,10 +475,10 @@ describe("live browser bridge socket transport", () => {
   test("speech HTTP preserves multipart, query, rejection, and status using only the server credential", async () => {
     const cookie = await createSession();
     const form = new FormData();
-    form.set("model", "gpt-4o-transcribe");
-    form.set("file", new Blob(["isolated-audio"], { type: "audio/webm" }), "recording.webm");
+    form.set("definition", JSON.stringify({ locales: ["en"] }));
+    form.set("audio", new Blob(["isolated-audio"], { type: "audio/wav" }), "recording.wav");
     const response = await fetch(
-      `${origin}/api/hosts/test-host/speech/openai/v1/audio/transcriptions?language=en`,
+      `${origin}/api/hosts/test-host/speech/azure/speechtotext/transcriptions:transcribe?api-version=2025-10-15`,
       {
         method: "POST",
         headers: {
@@ -496,7 +496,7 @@ describe("live browser bridge socket transport", () => {
     expect(await response.text()).toBe("provider unavailable");
     const request = upstreamRequests.at(-1);
     if (!request) throw new Error("Speech request did not reach the gateway");
-    expect(request.path).toBe("/speech/openai/v1/audio/transcriptions?language=en");
+    expect(request.path).toBe("/speech/azure/speechtotext/transcriptions:transcribe?api-version=2025-10-15");
     expect(request.contentType).toStartWith("multipart/form-data; boundary=");
     expect(request.body).toContain("isolated-audio");
     expect(request.authorization).toBe("Bearer isolated-test-gateway-token");
@@ -581,7 +581,7 @@ describe("live browser bridge socket transport", () => {
       }
       const cookie = await createSession();
       const request = () =>
-        fetch(`${origin}/api/hosts/test-host/speech/openai/v1/audio/transcriptions`, {
+        fetch(`${origin}/api/hosts/test-host/speech/azure/speechtotext/transcriptions:transcribe`, {
           method: "POST",
           headers: { Cookie: cookie, Origin: origin },
           body: "isolated-audio",

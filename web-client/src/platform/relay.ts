@@ -12,7 +12,9 @@ export class SpeechRelayError extends Error {
   }
 }
 
-export function speechURL(hostId: string, provider: "openai" | "gemini", path: string): string {
+export type SpeechProvider = "azure" | "elevenlabs" | "assemblyai" | "gemini";
+
+export function speechURL(hostId: string, provider: SpeechProvider, path: string): string {
   return `/api/hosts/${encodeURIComponent(hostId)}/speech/${provider}/${path}`;
 }
 

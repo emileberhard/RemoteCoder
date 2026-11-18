@@ -103,7 +103,6 @@ function speechTransport(provider: string, method: string, path: string) {
     return "websocket";
   if (
     [
-      "openai POST v1/audio/transcriptions",
       "elevenlabs POST v1/speech-to-text",
       "gemini POST upload/v1beta/files",
       "gemini POST v1beta/interactions",
