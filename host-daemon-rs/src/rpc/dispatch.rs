@@ -356,7 +356,7 @@ const METHOD_SPECS: &[MethodSpec] = &[
     spec!(
         "dictation/host/declare",
         DictationHosts,
-        Some(RequestLifetime::Command),
+        Some(RequestLifetime::Connection),
         0
     ),
     spec!(

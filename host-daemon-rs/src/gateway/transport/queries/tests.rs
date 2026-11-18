@@ -110,6 +110,45 @@ impl Connection {
 }
 
 #[tokio::test]
+async fn dictation_declarations_are_applied_in_socket_order_without_command_capacity() {
+    let mut connection = Connection::new();
+    let permits: Vec<_> = (0..16)
+        .map(|_| {
+            connection
+                .gateway
+                .request_budgets
+                .command
+                .try_acquire(1)
+                .unwrap()
+        })
+        .collect();
+    connection
+        .send(json!({"id":1,"method":"dictation/host/declare","params":{"serving":false}}))
+        .await;
+    let ClientCommand::Text(withdrawal) =
+        connection.responses.try_recv().expect("inline withdrawal")
+    else {
+        panic!("text response")
+    };
+    assert_eq!(
+        serde_json::from_str::<Value>(&withdrawal).unwrap(),
+        json!({"id":1,"result":{}})
+    );
+    connection
+        .send(json!({"id":2,"method":"dictation/host/declare","params":{"serving":true}}))
+        .await;
+    let ClientCommand::Text(enable) = connection.responses.try_recv().expect("inline enable")
+    else {
+        panic!("text response")
+    };
+    assert_eq!(
+        serde_json::from_str::<Value>(&enable).unwrap(),
+        json!({"id":2,"result":{}})
+    );
+    drop(permits);
+}
+
+#[tokio::test]
 async fn command_cancellation_is_scoped_to_the_exact_connection_and_id() {
     let mut first = Connection::new();
     let mut second = Connection::new();

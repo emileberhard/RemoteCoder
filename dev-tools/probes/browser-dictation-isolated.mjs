@@ -58,10 +58,27 @@ try {
     const operationId = await gateway.within(started, 5000, "Host did not receive the cancel probe");
     requester.ws.send(JSON.stringify({ method: "$/cancelRequest", params: { id: requestId } }));
     assert.equal(await gateway.within(cancelled, 5000, "Host did not receive cancellation"), operationId);
+    mode = "success";
+    const declarations = new Set();
+    const confirmed = new Promise(resolve => {
+        host.ws.addEventListener("message", event => {
+            const message = JSON.parse(String(event.data));
+            if (message.id === "withdraw-probe" || message.id === "enable-probe") {
+                assert(!message.error);
+                declarations.add(message.id);
+                if (declarations.size === 2) resolve();
+            }
+        });
+    });
+    host.ws.send(JSON.stringify({ id: "withdraw-probe", method: "dictation/host/declare", params: { serving: false } }));
+    host.ws.send(JSON.stringify({ id: "enable-probe", method: "dictation/host/declare", params: { serving: true } }));
+    await gateway.within(confirmed, 5000, "Ordered declarations were not acknowledged");
+    assert.deepEqual((await requester.rpc("dictation/transcribe", { path, durationMs: 10 })).result,
+        { text: "Isolated dictation", model: "batch" });
     mode = "disconnect";
     const lost = await requester.rpc("dictation/transcribe", { path, durationMs: 10 });
     assert.equal(lost.error.data.reason, "hostLost");
-    console.log(JSON.stringify({ status: "passed", upload: true, download: true, transcript: true, noHost: true, cancelled: true, hostLost: true }));
+    console.log(JSON.stringify({ status: "passed", upload: true, download: true, transcript: true, noHost: true, cancelled: true, orderedDeclarations: true, hostLost: true }));
 } finally {
     await gateway.stop();
     await gateway.stopNativeDaemon(gateway.nativeDefault);
