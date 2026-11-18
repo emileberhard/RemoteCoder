@@ -6,11 +6,15 @@ gateway and calls `dictation/transcribe` with the upload path and duration.
 The duration is positive and at most 30 minutes; the deadline is 120 seconds
 plus that duration. A failed conversion, upload, request or host operation
 falls back to the browser's existing relay using the original recording. A
-failed relay leaves the saved recording available for Retry.
+failed relay leaves the saved recording available for Retry. A nonempty
+transcript is inserted and durably flushed as one draft operation; a failed
+flush restores the previous draft and retains the recording.
 
 An opted-in Mac app declares `dictation/host/declare` on each connection. The
-newest serving declaration receives new operations; already admitted work stays
-with its chosen connection. The gateway permits four operations, validates the
+newest serving declaration receives new operations; declarations are applied in
+socket order and already admitted work stays with its chosen connection. A host
+that reports it is no longer serving removes only the declaration selected for
+that operation, preserving any newer declaration. The gateway permits four operations, validates the
 path as a bounded finished upload, forwards `dictation/host/transcribe`, and
 relays a matching `dictation/host/result`. It sends `dictation/host/cancel` on
 requester loss, explicit request cancellation or deadline. Transcript text is

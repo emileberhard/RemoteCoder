@@ -181,6 +181,7 @@ struct DeviceToolHostTests {
         try await fixture.releaseRequests(result: .object([:]))
         #expect(await waitUntil { await fixture.recordedRequests.filter { $0.method == "dictation/host/declare" }.count >= 3 })
         let results = await fixture.recordedRequests.filter { $0.method == "dictation/host/result" }
+        #expect(results.first { $0.params?.objectValue?["operationId"] == .string("disabled") }?.params?.objectValue?["reason"] == .string("notServing"))
         #expect(results.first { $0.params?.objectValue?["operationId"] == .string("disabled") }?.params?.objectValue?["outcome"] == .string("failed"))
         #expect(results.first { $0.params?.objectValue?["operationId"] == .string("after-disable") }?.params?.objectValue?["outcome"] == .string("failed"))
         #expect(results.first { $0.params?.objectValue?["operationId"] == .string("before-redeclare") }?.params?.objectValue?["outcome"] == .string("failed"))
