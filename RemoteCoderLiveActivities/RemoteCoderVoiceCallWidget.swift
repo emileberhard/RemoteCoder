@@ -73,7 +73,7 @@ private struct CallControls: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .tint(state.isMuted ? .orange : .gray)
+            .tint(state.isMuted ? .orange : .primary)
 
             Button(intent: EndVoiceCallIntent(callID: callID)) {
                 Label("End", systemImage: "phone.down.fill")
@@ -96,6 +96,7 @@ private struct Caption: View {
             Text(text)
                 .font(.footnote)
                 .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -169,6 +170,7 @@ struct RemoteCoderVoiceCallWidget: Widget {
                         .font(.headline)
                         .foregroundStyle(.orange)
                         .frame(maxWidth: 64, alignment: .trailing)
+                        .padding(.trailing, 8)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(spacing: 2) {
