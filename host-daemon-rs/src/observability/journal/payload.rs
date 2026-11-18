@@ -41,6 +41,13 @@ pub(super) fn parse_and_elide(raw: &str) -> Payload {
 pub(super) fn redact_call_details(value: &mut Value) {
     match value {
         Value::Object(map) => {
+            if map.get("method").and_then(Value::as_str) == Some("dictation/host/result") {
+                for field in ["params", "request"] {
+                    if let Some(value) = map.get_mut(field) {
+                        *value = json!({"_redacted": true});
+                    }
+                }
+            }
             if matches!(
                 map.get("method").and_then(Value::as_str),
                 Some("sessions/conversations/search" | "sessions/conversations/searchByMeaning")
@@ -125,7 +132,6 @@ pub(super) fn redact_rpc_payload(payload: &mut Payload, method: Option<&str>, re
             *value = json!({"_redacted": true});
         }
     } else if !request
-        && method.is_none()
         && let Some(Value::Object(result)) = map.get_mut("result")
         && let Some(text) = result.get_mut("text")
     {

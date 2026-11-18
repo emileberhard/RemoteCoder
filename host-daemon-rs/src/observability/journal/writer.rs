@@ -483,6 +483,24 @@ mod tests {
             assert!(!input.to_string().contains(secret));
             assert!(!output.to_string().contains(secret));
         }
+        let nested = writer.render(Admitted::now(Record::RpcRequest {
+            client_id: 4,
+            payload: Arc::from(json!({"id":4,"method":"agent/cluster/dispatch","params":{"method":"dictation/host/result","request":{"text":secret}}}).to_string()),
+        }));
+        assert!(!nested.to_string().contains(secret));
+        for method in ["dictation/transcribe", "test/other"] {
+            writer.render(Admitted::now(Record::RpcRequest {
+                client_id: 5,
+                payload: Arc::from(json!({"id":5,"method":method,"params":{}}).to_string()),
+            }));
+        }
+        let ambiguous = writer.render(Admitted::now(Record::RpcResponse {
+            client_id: Some(5),
+            payload: Arc::from(
+                json!({"id":5,"result":{"text":secret,"model":"batch"}}).to_string(),
+            ),
+        }));
+        assert!(!ambiguous.to_string().contains(secret));
         let unmatched = writer.render(Admitted::now(Record::RpcResponse {
             client_id: Some(9),
             payload: Arc::from(json!({"id":3,"result":{"text":secret}}).to_string()),
