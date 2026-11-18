@@ -31,7 +31,12 @@ struct ChatSidebarContainer<Detail: View, Sidebar: View>: View {
             sidebar
                 .navigationSplitViewColumnWidth(min: 260 * scale, ideal: 300 * scale, max: 380 * scale)
         } detail: {
-            NavigationStack { detail }
+            NavigationStack {
+                detail
+                    #if os(macOS)
+                    .frame(minWidth: 340)
+                    #endif
+            }
         }
     }
 
