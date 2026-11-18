@@ -275,6 +275,65 @@ describe("browser speech service ownership", () => {
     service.dispose();
   });
 
+  test("stopping a new recording is not swallowed by a canceled recording's pending finish", async () => {
+    const decoding = deferred<Float32Array>();
+    const recorders: MediaRecorder[] = [];
+    const service = new BrowserDictation(
+      "host-1",
+      () => undefined,
+      () => undefined,
+      () => ({ model: "azureMAITranscribe2", language: "automatic" }),
+      {
+        store: new MemoryRecordings(),
+        capture: async () => mediaStream().stream,
+        recorder: () => {
+          const created = recorder();
+          recorders.push(created);
+          return created;
+        },
+        decode: () => decoding.promise,
+        fetch: async () => new Response(JSON.stringify({ combinedPhrases: [{ text: "Hej" }] })),
+      },
+    );
+    await service.start();
+    const first = service.finish();
+    await settle();
+    service.cancel();
+    await service.start();
+    const second = service.finish();
+    expect(recorders[1]?.state).toBe("inactive");
+    decoding.resolve(new Float32Array([0]));
+    await Promise.all([first, second]);
+    service.dispose();
+  });
+
+  test("a recording keeps the settings it started with", async () => {
+    const sent: string[] = [];
+    let settings: TranscriptionSettings = { model: "elevenLabsScribeV2", language: "english" };
+    const service = new BrowserDictation(
+      "host-1",
+      () => undefined,
+      () => undefined,
+      () => settings,
+      {
+        store: new MemoryRecordings(),
+        capture: async () => mediaStream().stream,
+        recorder,
+        fetch: async (input, init) => {
+          const body = init?.body;
+          if (!(body instanceof FormData)) throw new Error("Expected a multipart request");
+          sent.push(`${String(input)} ${body.get("language_code")}`);
+          return new Response(JSON.stringify({ text: "Hello" }));
+        },
+      },
+    );
+    await service.start();
+    settings = { model: "azureMAITranscribe2", language: "swedish" };
+    await service.finish();
+    expect(sent).toEqual(["/api/hosts/host-1/speech/elevenlabs/v1/speech-to-text en"]);
+    service.dispose();
+  });
+
   test("PCM speech playback interprets signed little endian samples", () => {
     const samples = new Float32Array(4);
     const context = { createBuffer: () => ({ getChannelData: () => samples }) } as unknown as AudioContext;
@@ -387,6 +446,23 @@ describe("dictation transcription follows the native batch engines", () => {
       language_detection_options: { expected_languages: ["en", "sv"] },
     });
     expect(pauses).toEqual([1000]);
+  });
+
+  test("an unreadable AssemblyAI status fails instead of polling forever", async () => {
+    const { fetch } = relay([
+      { upload_url: "https://cdn.assemblyai.com/upload/1" },
+      { id: "transcript-1" },
+      {},
+    ]);
+    await expect(
+      transcribeRecording(
+        "host-1",
+        audio,
+        { model: "assemblyAIUniversal35Pro", language: "automatic" },
+        signal,
+        { fetch, wait: async () => undefined },
+      ),
+    ).rejects.toThrow("AssemblyAI returned an unreadable transcript status");
   });
 
   test("an empty transcript is a failure rather than an empty insertion", async () => {

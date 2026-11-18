@@ -1,7 +1,11 @@
 import type { TranscriptionSettings } from "../transcription-settings";
 import { canceled, errorMessage, isCanceled } from "./contracts";
 import { BrowserRecordingStore, type RecordingStore, type SavedRecording } from "./recordings";
-import { type TranscriptionOptions, transcribeRecording } from "./transcription";
+import {
+  maximumRecordingMilliseconds,
+  type TranscriptionOptions,
+  transcribeRecording,
+} from "./transcription";
 
 export type DictationState = {
   status: "idle" | "starting" | "recording" | "transcribing" | "failed";
@@ -14,13 +18,19 @@ export type DictationOptions = TranscriptionOptions & {
   recorder?: (stream: MediaStream, options: MediaRecorderOptions) => MediaRecorder;
 };
 
-type Capture = { recorder: MediaRecorder; stream: MediaStream; result: Promise<Blob> };
+type Capture = {
+  recorder: MediaRecorder;
+  stream: MediaStream;
+  result: Promise<Blob>;
+  settings: TranscriptionSettings;
+  limit: ReturnType<typeof setTimeout>;
+};
 
 export class BrowserDictation {
   private generation = 0;
   private capture?: Capture;
   private transcription?: AbortController;
-  private finishing?: Promise<void>;
+  private finishing?: { capture: Capture; operation: Promise<void> };
   private unsaved?: SavedRecording;
   private retired = false;
   private readonly store: RecordingStore;
@@ -47,6 +57,7 @@ export class BrowserDictation {
       throw new Error("Dictation is already active");
     this.cancel();
     const generation = this.generation;
+    const settings = this.settings();
     this.publish({ status: "starting" });
     let acquiredStream: MediaStream | undefined;
     try {
@@ -56,7 +67,12 @@ export class BrowserDictation {
           if (!navigator.mediaDevices?.getUserMedia)
             throw new Error("Microphone capture requires HTTPS or localhost");
           return navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+            audio: {
+              channelCount: 1,
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            },
           });
         })
       )();
@@ -73,15 +89,9 @@ export class BrowserDictation {
         { ...(mime ? { mimeType: mime } : {}), audioBitsPerSecond: 64000 },
       );
       const chunks: Blob[] = [];
-      let bytes = 0;
       const result = new Promise<Blob>((resolve, reject) => {
         recorder.ondataavailable = (event) => {
-          bytes += event.data.size;
-          if (bytes > 24 * 1024 * 1024) {
-            reject(new Error("The recording exceeds the 24 MiB transcription limit"));
-            this.cancel();
-            this.publish({ status: "failed", error: "The recording exceeds the 24 MiB transcription limit" });
-          } else if (event.data.size) chunks.push(event.data);
+          if (event.data.size) chunks.push(event.data);
         };
         recorder.onerror = () => reject(new Error("The browser could not record microphone audio"));
         recorder.onstop = () => {
@@ -90,12 +100,17 @@ export class BrowserDictation {
         };
       });
       void result.catch(() => undefined);
-      this.capture = { recorder, stream, result };
+      const limit = setTimeout(() => void this.finish().catch(() => undefined), maximumRecordingMilliseconds);
+      this.capture = { recorder, stream, result, settings, limit };
       recorder.start(1000);
       this.publish({ status: "recording" });
     } catch (error) {
       for (const track of acquiredStream?.getTracks() ?? []) track.stop();
-      if (this.capture?.stream === acquiredStream) this.capture = undefined;
+      const failed = this.capture;
+      if (failed && failed.stream === acquiredStream) {
+        clearTimeout(failed.limit);
+        this.capture = undefined;
+      }
       if (generation !== this.generation || this.retired || isCanceled(error)) return;
       this.publish({ status: "failed", error: errorMessage(error) });
       throw error;
@@ -103,23 +118,24 @@ export class BrowserDictation {
   }
 
   finish(): Promise<void> {
-    if (this.finishing) return this.finishing;
     const capture = this.capture;
+    const current = this.finishing;
+    if (current && (!capture || current.capture === capture)) return current.operation;
     if (!capture) return Promise.resolve();
-    const generation = this.generation;
-    const operation = this.finishCapture(capture, generation);
-    this.finishing = operation;
-    void operation
+    const finishing = { capture, operation: this.finishCapture(capture, this.generation) };
+    this.finishing = finishing;
+    void finishing.operation
       .finally(() => {
-        if (this.finishing === operation) this.finishing = undefined;
+        if (this.finishing === finishing) this.finishing = undefined;
       })
       .catch(() => undefined);
-    return operation;
+    return finishing.operation;
   }
 
   private async finishCapture(capture: Capture, generation: number): Promise<void> {
     this.publish({ status: "transcribing" });
     try {
+      clearTimeout(capture.limit);
       if (capture.recorder.state !== "inactive") capture.recorder.stop();
       const blob = await capture.result;
       if (this.capture === capture) this.capture = undefined;
@@ -135,7 +151,7 @@ export class BrowserDictation {
       await this.store.save(recording);
       if (this.unsaved === recording) this.unsaved = undefined;
       if (generation !== this.generation || this.retired) return;
-      await this.transcribe(recording, generation);
+      await this.transcribe(recording, capture.settings, generation);
     } catch (error) {
       if (generation !== this.generation || this.retired || isCanceled(error)) return;
       this.publish({ status: "failed", error: errorMessage(error) });
@@ -143,7 +159,11 @@ export class BrowserDictation {
     }
   }
 
-  private async transcribe(recording: SavedRecording, generation: number): Promise<void> {
+  private async transcribe(
+    recording: SavedRecording,
+    settings: TranscriptionSettings,
+    generation: number,
+  ): Promise<void> {
     const controller = new AbortController();
     this.transcription = controller;
     this.publish({ status: "transcribing" });
@@ -151,7 +171,7 @@ export class BrowserDictation {
       const text = await transcribeRecording(
         this.hostId,
         recording.blob,
-        this.settings(),
+        settings,
         controller.signal,
         this.options,
       );
@@ -181,7 +201,7 @@ export class BrowserDictation {
     if (!recording) throw new Error("The saved recording is unavailable");
     const generation = ++this.generation;
     try {
-      await this.transcribe(recording, generation);
+      await this.transcribe(recording, this.settings(), generation);
     } catch (error) {
       if (generation === this.generation && !this.retired && !isCanceled(error)) {
         this.publish({ status: "failed", error: errorMessage(error) });
@@ -203,6 +223,7 @@ export class BrowserDictation {
     const capture = this.capture;
     this.capture = undefined;
     if (capture) {
+      clearTimeout(capture.limit);
       if (capture.recorder.state !== "inactive") capture.recorder.stop();
       for (const track of capture.stream.getTracks()) track.stop();
     }

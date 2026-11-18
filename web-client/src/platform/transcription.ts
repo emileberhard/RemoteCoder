@@ -1,4 +1,8 @@
-import { languageHints, type TranscriptionSettings } from "../transcription-settings";
+import {
+  languageHints,
+  type TranscriptionModel,
+  type TranscriptionSettings,
+} from "../transcription-settings";
 import { canceled, record, requiredString } from "./contracts";
 import { relayJSON, type SpeechFetch, type SpeechProvider, speechURL } from "./relay";
 
@@ -13,6 +17,16 @@ export type TranscriptionOptions = {
 const azureSampleRate = 16_000;
 const relayBodyLimit = 64 * 1024 * 1024;
 const responseLimit = 2 * 1024 * 1024;
+const azureSampleBudget = Math.floor((relayBodyLimit - 64 * 1024 - 44) / 2);
+export const maximumRecordingMilliseconds = 30 * 60 * 1000;
+
+const batchEngine = {
+  elevenLabsScribeV2Realtime: "elevenLabs",
+  elevenLabsScribeV2: "elevenLabs",
+  assemblyAIUniversal35ProRealtime: "assemblyAI",
+  assemblyAIUniversal35Pro: "assemblyAI",
+  azureMAITranscribe2: "azure",
+} as const satisfies Record<TranscriptionModel, "azure" | "elevenLabs" | "assemblyAI">;
 
 export async function transcribeRecording(
   hostId: string,
@@ -26,9 +40,10 @@ export async function transcribeRecording(
       relayJSON(response, responseLimit),
     );
   const languages = languageHints[settings.language];
-  const text = await (settings.model === "azureMAITranscribe2"
+  const engine = batchEngine[settings.model];
+  const text = await (engine === "azure"
     ? azure(audio, languages, request, options.decode ?? decodeMono, signal)
-    : settings.model.startsWith("elevenLabs")
+    : engine === "elevenLabs"
       ? elevenLabs(audio, languages, request)
       : assemblyAI(audio, languages, request, options.wait ?? wait, signal));
   if (!text.trim()) throw new Error("Transcription returned no text.");
@@ -50,7 +65,7 @@ async function azure(
 ) {
   const samples = await decode(audio, azureSampleRate);
   if (signal.aborted) throw canceled();
-  if (44 + samples.length * 2 > relayBodyLimit - 64 * 1024)
+  if (samples.length > azureSampleBudget)
     throw new Error("The recording is too long for MAI-Transcribe-2 dictation");
   const body = new FormData();
   body.append(
@@ -113,6 +128,8 @@ async function assemblyAI(
     if (status.status === "completed") return typeof status.text === "string" ? status.text : "";
     if (status.status === "error")
       throw new Error(typeof status.error === "string" ? status.error : "AssemblyAI transcription failed");
+    if (status.status !== "queued" && status.status !== "processing")
+      throw new Error("AssemblyAI returned an unreadable transcript status");
     await pause(1000, signal);
   }
 }
@@ -144,6 +161,9 @@ function wait(milliseconds: number, signal: AbortSignal) {
 
 async function decodeMono(audio: Blob, sampleRate: number): Promise<Float32Array> {
   const decoded = await new OfflineAudioContext(1, 1, sampleRate).decodeAudioData(await audio.arrayBuffer());
+  if (decoded.length > azureSampleBudget)
+    throw new Error("The recording is too long for MAI-Transcribe-2 dictation");
+  if (decoded.numberOfChannels === 1) return decoded.getChannelData(0);
   const mono = new Float32Array(decoded.length);
   for (let channel = 0; channel < decoded.numberOfChannels; channel++) {
     const samples = decoded.getChannelData(channel);
