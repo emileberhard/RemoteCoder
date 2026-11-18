@@ -1447,7 +1447,11 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                                        generation: UUID, revision: Int) async {
         let enabled = await binding.enabled()
         guard generation == connectionGeneration, !Task.isCancelled else { return }
-        guard enabled, revision == browserDeclarationRevision, browserLastSentServing == true else {
+        guard enabled, browserLastSentServing == true else {
+            scheduleBrowserDictationResult(BrowserDictationResult(operationId: request.operationId, outcome: .failed, reason: "notServing"), generation: generation)
+            return
+        }
+        guard revision == browserDeclarationRevision else {
             scheduleBrowserDictationResult(BrowserDictationResult(operationId: request.operationId, outcome: .failed), generation: generation)
             return
         }

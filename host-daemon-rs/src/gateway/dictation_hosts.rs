@@ -52,14 +52,21 @@ enum Outcome {
 
 struct Pending {
     host: ClientTx,
+    declaration: u64,
     deadline: tokio::time::Instant,
     result: Option<oneshot::Sender<HostResult>>,
 }
 
+struct ServingHost {
+    client: ClientTx,
+    declaration: u64,
+}
+
 #[derive(Default)]
 struct State {
-    hosts: IndexMap<u64, ClientTx>,
+    hosts: IndexMap<u64, ServingHost>,
     pending: HashMap<String, Pending>,
+    next_declaration: u64,
 }
 
 #[derive(Default)]
@@ -85,7 +92,15 @@ impl DictationHosts {
             if state.hosts.len() >= MAX_HOSTS {
                 return Err(reason("busy"));
             }
-            state.hosts.insert(client.id, client.clone());
+            let declaration = state.next_declaration;
+            state.next_declaration = state.next_declaration.wrapping_add(1);
+            state.hosts.insert(
+                client.id,
+                ServingHost {
+                    client: client.clone(),
+                    declaration,
+                },
+            );
         }
         Ok(json!({}))
     }
@@ -106,7 +121,10 @@ impl DictationHosts {
                 .is_some_and(|s| s.len() > 2 * 1024 * 1024)
             || result.model.as_ref().is_some_and(|s| s.len() > 1024)
             || result.detail.as_ref().is_some_and(|s| s.len() > 4096)
-            || result.reason.as_ref().is_some_and(|s| s != "busy")
+            || result
+                .reason
+                .as_ref()
+                .is_some_and(|s| s != "busy" && s != "notServing")
         {
             return Err(RpcError::new(
                 RpcCode::InvalidParams,
@@ -131,10 +149,22 @@ impl DictationHosts {
         {
             return Ok(json!({"accepted":false}));
         }
+        let not_serving = matches!(result.outcome, Outcome::Failed)
+            && result.reason.as_deref() == Some("notServing");
+        let declaration = pending.declaration;
         let accepted = pending
             .result
             .take()
             .is_some_and(|sender| sender.send(result).is_ok());
+        if accepted
+            && not_serving
+            && state
+                .hosts
+                .get(&client_id)
+                .is_some_and(|host| host.declaration == declaration)
+        {
+            state.hosts.shift_remove(&client_id);
+        }
         Ok(json!({"accepted":accepted}))
     }
 
@@ -176,14 +206,16 @@ impl DictationHosts {
                 .hosts
                 .values()
                 .rev()
-                .find(|host| !host.closed.is_cancelled())
-                .cloned()
+                .find(|host| !host.client.closed.is_cancelled())
+                .map(|host| (host.client.clone(), host.declaration))
                 .ok_or_else(|| reason("noHost"))?;
+            let (host, declaration) = host;
             let (sender, receiver) = oneshot::channel();
             state.pending.insert(
                 id.clone(),
                 Pending {
                     host: host.clone(),
+                    declaration,
                     deadline: deadline_instant,
                     result: Some(sender),
                 },
@@ -428,6 +460,58 @@ mod tests {
         );
         second.closed.cancel();
         assert_eq!(error_reason(new.await.unwrap().unwrap_err()), "hostLost");
+    }
+
+    #[tokio::test]
+    async fn not_serving_removes_only_the_selected_declaration() {
+        for redeclare in [false, true] {
+            let (relay, _dir, path) = fixture().await;
+            let (requester, _) = client(1);
+            let (host, mut rx) = client(2);
+            relay.declare(&host, Declaration { serving: true }).unwrap();
+            let operation = start(&relay, &requester, &path);
+            let request = receive(&mut rx).await;
+            if redeclare {
+                relay.declare(&host, Declaration { serving: true }).unwrap();
+            }
+            relay.result(host.id, serde_json::from_value(json!({
+                "operationId": request["params"]["operationId"], "outcome": "failed", "reason": "notServing"
+            })).unwrap()).unwrap();
+            assert_eq!(
+                error_reason(operation.await.unwrap().unwrap_err()),
+                "failed"
+            );
+            assert_eq!(
+                relay.state.lock().unwrap().hosts.contains_key(&host.id),
+                redeclare
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_newest_host_does_not_mask_the_older_host() {
+        let (relay, _dir, path) = fixture().await;
+        let (requester, _) = client(1);
+        let (older, mut older_rx) = client(2);
+        let (newer, mut newer_rx) = client(3);
+        relay
+            .declare(&older, Declaration { serving: true })
+            .unwrap();
+        relay
+            .declare(&newer, Declaration { serving: true })
+            .unwrap();
+        let first = start(&relay, &requester, &path);
+        let request = receive(&mut newer_rx).await;
+        relay.result(newer.id, serde_json::from_value(json!({
+            "operationId":request["params"]["operationId"], "outcome":"failed", "reason":"notServing"
+        })).unwrap()).unwrap();
+        assert_eq!(error_reason(first.await.unwrap().unwrap_err()), "failed");
+        let second = start(&relay, &requester, &path);
+        let request = receive(&mut older_rx).await;
+        relay.result(older.id, serde_json::from_value(json!({
+            "operationId":request["params"]["operationId"], "outcome":"succeeded", "text":"older host", "model":"batch"
+        })).unwrap()).unwrap();
+        assert_eq!(second.await.unwrap().unwrap()["text"], "older host");
     }
 
     #[tokio::test]
