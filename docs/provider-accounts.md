@@ -385,8 +385,9 @@ already running turn joins that turn's routing, as ordinary steering does. The
 account is fixed for a Claude process: an idle process is replaced for a change;
 a busy one refuses with retryable `ServerBusy` before dispatch. If wake evidence
 is unreadable, the change is likewise refused. A pending `/loop` ends when the
-process is replaced, and the next turn receives a notice to schedule it again;
-cron jobs resume with the session. The gateway advertises `claudeAccount` in its
+process is replaced, and the replacement turn that accepts input receives a notice
+to schedule it again. If cutover fails after retirement, the loop can still end
+without that notice. Cron jobs resume with the session. The gateway advertises `claudeAccount` in its
 ready capabilities, and `rc-gateway` refuses to dispatch a preferred turn when
 that capability is absent.
 

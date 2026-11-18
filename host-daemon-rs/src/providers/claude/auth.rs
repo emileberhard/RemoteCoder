@@ -184,7 +184,7 @@ pub(crate) fn validate_claude_path(path: &Path) -> Result<()> {
     if !path.is_file() {
         return Err(anyhow!("RC_CLAUDE_PATH is not a file: {}", path.display()));
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         anyhow::ensure!(

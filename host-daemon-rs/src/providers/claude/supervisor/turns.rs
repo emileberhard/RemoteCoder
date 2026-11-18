@@ -199,8 +199,19 @@ impl ClaudeSupervisor {
                 account_replacement_ready(runtimes.get(&request.thread_id), group, evidence)?;
             }
             early_admission = Some(self.reserve_start(&request).await?);
+            if self.settings.claude_path.is_absolute() {
+                crate::providers::claude::auth::validate_claude_path(&self.settings.claude_path)
+                    .map_err(|error| {
+                        TurnStartError::internal(format!(
+                            "Claude executable is unavailable: {error:#}"
+                        ))
+                    })?;
+            }
             prepared_runtime = Some(self.prepare_runtime(&request, &policy, &route)?);
+            self.check_callback_generation(&request.thread_id, origin)
+                .await?;
             let mut runtimes = self.runtimes.lock().await;
+            self.refuse_while_closing()?;
             let runtime =
                 account_replacement_ready(runtimes.get(&request.thread_id), group, evidence)?;
             let now = tokio::time::Instant::now();

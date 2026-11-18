@@ -22,8 +22,8 @@ use tracing::warn;
 
 pub(super) struct PreparedRuntime {
     command: ClaudeCommand,
-    mcp: Option<McpRuntimeAccess>,
-    wakes: WakeHold,
+    history: Option<PathBuf>,
+    resume: Option<String>,
 }
 
 impl ClaudeSupervisor {
@@ -266,25 +266,7 @@ impl ClaudeSupervisor {
         history: Option<&Path>,
         route: &claude_exec::Route,
     ) -> std::io::Result<PreparedRuntime> {
-        let wakes = if request.first_turn {
-            WakeHold::default()
-        } else {
-            WakeHold::resuming(
-                history
-                    .and_then(|path| fs::metadata(path).ok())
-                    .map_or(0, |metadata| metadata.len()),
-            )
-        };
-        // Tools ride each spawn: nothing is written to Claude's own config, so
-        // they follow the runtime's dimensions and vanish when it retires.
-        let mcp = match launch.scope() {
-            crate::agents::jobs::model::ToolScope::Full => self.prepare_mcp_access(request, launch),
-            crate::agents::jobs::model::ToolScope::ReadOnly { .. } => None,
-        };
-        let mut args = claude_stream_args(
-            request,
-            mcp.as_ref().map(|access| access.config_path.as_path()),
-        );
+        let mut resume = None;
         if let Some(history) = history {
             let expected = crate::providers::claude::timeline::session_path_for_cwd(
                 &self.settings.claude_home,
@@ -292,16 +274,12 @@ impl ClaudeSupervisor {
                 &request.session_uuid,
             );
             if history != expected && history.canonicalize().ok() != expected.canonicalize().ok() {
-                let resume = args
-                    .last_mut()
-                    .expect("Claude stream arguments include the session");
-                *resume = history.canonicalize()?.to_string_lossy().into_owned();
+                resume = Some(history.canonicalize()?.to_string_lossy().into_owned());
             }
         }
-        launch.apply_args(&mut args);
         let mut command = claude_exec::command_on_route(
             &self.settings,
-            &args,
+            &[],
             route,
             request.claude_account.as_deref(),
         )?;
@@ -329,8 +307,8 @@ impl ClaudeSupervisor {
             .stderr(Stdio::piped());
         Ok(PreparedRuntime {
             command,
-            mcp,
-            wakes,
+            history: history.map(Path::to_path_buf),
+            resume,
         })
     }
 
@@ -355,10 +333,37 @@ impl ClaudeSupervisor {
         prepared: PreparedRuntime,
     ) -> std::io::Result<SpawnedRuntime> {
         let PreparedRuntime {
-            command,
-            mcp,
-            wakes,
+            mut command,
+            history,
+            resume,
         } = prepared;
+        let wakes = if request.first_turn {
+            WakeHold::default()
+        } else {
+            WakeHold::resuming(
+                history
+                    .as_ref()
+                    .and_then(|path| fs::metadata(path).ok())
+                    .map_or(0, |metadata| metadata.len()),
+            )
+        };
+        // Tools ride each spawn: nothing is written to Claude's own config, so
+        // they follow the runtime's dimensions and vanish when it retires.
+        let mcp = match launch.scope() {
+            crate::agents::jobs::model::ToolScope::Full => self.prepare_mcp_access(request, launch),
+            crate::agents::jobs::model::ToolScope::ReadOnly { .. } => None,
+        };
+        let mut args = claude_stream_args(
+            request,
+            mcp.as_ref().map(|access| access.config_path.as_path()),
+        );
+        if let Some(resume) = resume {
+            *args
+                .last_mut()
+                .expect("Claude stream arguments include the session") = resume;
+        }
+        launch.apply_args(&mut args);
+        command.args(&args);
         let mut registry = self
             .process_registry
             .lock()

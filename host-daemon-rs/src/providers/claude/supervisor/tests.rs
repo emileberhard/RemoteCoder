@@ -740,7 +740,7 @@ async fn account_changes_require_a_new_claude_process() {
         crate::test_support::ClaudeCliMode::MessagesAcknowledgeInterrupt(history.clone()),
     );
     let mut settings = home.settings.clone();
-    settings.claude_path = executable;
+    settings.claude_path = executable.clone();
     settings.mcp_endpoint = "http://127.0.0.1:8787/mcp".into();
     let (tx, mut events) = mpsc::channel(128);
     let agent = ClaudeSupervisor::new(settings, tx, Journal::disabled(), McpTokens::default());
@@ -774,6 +774,16 @@ async fn account_changes_require_a_new_claude_process() {
             }
         }
         if index == 1 {
+            let old_token = agent.runtimes.lock().await[&thread]
+                ._mcp
+                .as_ref()
+                .unwrap()
+                .token
+                .clone();
+            assert_eq!(
+                agent.mcp_tokens.identify(&old_token).unwrap().thread_id,
+                thread
+            );
             append_transcript(
                 &history,
                 &wake_tool_records(
@@ -802,7 +812,38 @@ async fn account_changes_require_a_new_claude_process() {
             let error = agent.start_turn(blocked).await.unwrap_err();
             assert_eq!(error.code, RpcCode::Internal);
             assert_eq!(agent.runtimes.lock().await[&thread].process_group_id, pid);
+            assert_eq!(
+                agent.mcp_tokens.identify(&old_token).unwrap().thread_id,
+                thread
+            );
             fs::rename(&held_key, &key).unwrap();
+
+            let held_executable = home.root_path().join("claude-stub-held");
+            fs::rename(&executable, &held_executable).unwrap();
+            let mut blocked = request(&thread, false);
+            blocked.cwd = cwd.clone();
+            blocked.claude_account = Some("second".into());
+            let error = agent.start_turn(blocked).await.unwrap_err();
+            assert_eq!(error.code, RpcCode::Internal);
+            assert!(error.message.contains("executable"));
+            assert_eq!(agent.runtimes.lock().await[&thread].process_group_id, pid);
+            assert_eq!(
+                agent.mcp_tokens.identify(&old_token).unwrap().thread_id,
+                thread
+            );
+            fs::rename(&held_executable, &executable).unwrap();
+
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o600)).unwrap();
+            let mut blocked = request(&thread, false);
+            blocked.cwd = cwd.clone();
+            blocked.claude_account = Some("second".into());
+            let error = agent.start_turn(blocked).await.unwrap_err();
+            assert_eq!(error.code, RpcCode::Internal);
+            assert!(error.message.contains("not executable"));
+            assert_eq!(agent.runtimes.lock().await[&thread].process_group_id, pid);
+            assert!(agent.mcp_tokens.identify(&old_token).is_some());
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
 
             let mut blocked = request(&thread, false);
             blocked.cwd = cwd.clone();
