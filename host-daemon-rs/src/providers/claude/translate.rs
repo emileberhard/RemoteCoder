@@ -22,7 +22,7 @@ const MAX_PENDING_TOOLS: usize = 256;
 const MAX_PENDING_TOOL_BYTES: usize = 16 << 20;
 
 use self::context_usage::token_usage_notification;
-use self::tools::{PendingTool, ToolOutcome, tool_item, tool_result_images, tool_result_text};
+use self::tools::{PendingTool, is_advisor_call};
 
 pub(crate) mod context_usage;
 pub(crate) mod live;
@@ -576,6 +576,13 @@ impl TurnTranslator {
                         return;
                     }
                 }
+                Some("server_tool_use") if is_advisor_call(block) => {
+                    self.start_tool_item(block, out);
+                    if out.capacity_error.is_some() {
+                        return;
+                    }
+                }
+                Some("advisor_tool_result") => self.complete_tool_item(block, None, out),
                 _ => {}
             }
         }
@@ -610,37 +617,9 @@ impl TurnTranslator {
         };
 
         for block in content {
-            if block.get("type").and_then(Value::as_str) != Some("tool_result") {
-                continue;
+            if block.get("type").and_then(Value::as_str) == Some("tool_result") {
+                self.complete_tool_item(block, value.get("tool_use_result").cloned(), out);
             }
-            let Some(tool_use_id) = block.get("tool_use_id").and_then(Value::as_str) else {
-                continue;
-            };
-            let Some(pending) = self.pending_tools.shift_remove(tool_use_id) else {
-                continue;
-            };
-
-            self.pending_tool_bytes -= pending.bytes;
-            let is_error = block
-                .get("is_error")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let outcome = ToolOutcome::Finished {
-                is_error,
-                result_text: tool_result_text(block),
-                images: tool_result_images(block),
-                tool_use_result: value.get("tool_use_result").cloned(),
-                duration_ms: Some((crate::time::unix_millis() - pending.started_at_ms).max(0)),
-            };
-
-            let item = tool_item(
-                tool_use_id,
-                &pending.tool_name,
-                &pending.input,
-                &self.cwd,
-                outcome,
-            );
-            out.notifications.push(self.item_completed(item));
         }
     }
 

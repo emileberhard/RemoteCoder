@@ -70,6 +70,15 @@ struct TokenCounters {
 
 impl TokenCounters {
     fn parse(usage: &Value) -> Option<Self> {
+        let usage = usage
+            .get("iterations")
+            .and_then(Value::as_array)
+            .and_then(|iterations| {
+                iterations
+                    .iter()
+                    .rfind(|iteration| iteration.get("type").and_then(Value::as_str) == Some("message"))
+            })
+            .unwrap_or(usage);
         let counter = |value: Option<&Value>| match value {
             None | Some(Value::Null) => Some(None),
             Some(value) => value.as_i64().filter(|count| *count >= 0).map(Some),
@@ -124,6 +133,32 @@ mod tests {
         assert_eq!(usage["outputTokens"], json!(84));
         assert_eq!(usage["reasoningOutputTokens"], json!(8));
         assert_eq!(usage["totalTokens"], json!(186));
+    }
+
+    #[test]
+    fn usage_with_an_advisor_call_reports_the_latest_request_not_the_sum() {
+        let mut t = translator();
+        let out = t.handle(&json!({
+            "type":"stream_event",
+            "event":{"type":"message_delta","usage":{
+                "input_tokens":4,"cache_creation_input_tokens":48851,
+                "cache_read_input_tokens":48361,"output_tokens":137,
+                "iterations":[
+                    {"type":"message","input_tokens":2,"cache_creation_input_tokens":48361,
+                     "cache_read_input_tokens":0,"output_tokens":62},
+                    {"type":"advisor_message","model":"claude-fable-5-2","input_tokens":49989,
+                     "cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1009},
+                    {"type":"message","input_tokens":2,"cache_creation_input_tokens":490,
+                     "cache_read_input_tokens":48361,"output_tokens":75}
+                ]
+            }}
+        }));
+
+        let usage = &out.notifications[0]["params"]["tokenUsage"]["last"];
+        assert_eq!(usage["inputTokens"], json!(2));
+        assert_eq!(usage["cachedInputTokens"], json!(48361));
+        assert_eq!(usage["outputTokens"], json!(75));
+        assert_eq!(usage["totalTokens"], json!(48928));
     }
 
     #[test]

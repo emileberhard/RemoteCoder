@@ -1585,7 +1585,12 @@ Claude. The `RC_CLAUDE_*` settings are in
   its absolute path and the tool result's image as `imageUrl`, which tool
   media compaction turns into `rcMedia`, where the Codex fork's `view_image`
   names its saved snapshot as `savedPath`; it starts as the ordinary `Read`
-  tool call. A turn that
+  tool call. An advisor call (a `server_tool_use` named `advisor`) is a
+  `dynamicToolCall` row named `advisor`; the `advisor_tool_result` block in
+  the same assistant message completes it, failed only for
+  `advisor_tool_result_error` with its error code as content. Other server
+  tools have no row. The CLI writes both records to the transcript only when
+  the message ends, so during the call the row exists only live. A turn that
   fails while its latest assistant stop is a `cyber` refusal
   (`stop_details.category`) carries upstream's `codexErrorInfo: "cyberPolicy"`;
   automations switch to their refusal fallback on that code.
@@ -1982,7 +1987,9 @@ Claude. The `RC_CLAUDE_*` settings are in
     `result.modelUsage` and the effective auto-compact window. That window is
     resolved from Claude Code's user, project, local and managed settings.
   - It uses the latest request's active context rather than summing a tool
-    loop's repeated requests.
+    loop's repeated requests. When `usage.iterations` is present, as after an
+    advisor call, top-level usage sums every request in the message, so the
+    last `message` iteration is that context.
 - **Model, effort and Fast are mutable conversation settings.**
   - A `turn/start` with `model` carries the whole selection. A `fast` service tier turns Claude Code's
     Fast mode on, `null` turns it off, and an absent tier keeps the parent

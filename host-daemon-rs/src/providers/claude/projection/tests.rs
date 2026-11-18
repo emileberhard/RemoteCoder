@@ -1751,3 +1751,108 @@ async fn an_item_boundary_that_cannot_be_cut_cleanly_is_refused() {
         record_bytes(&records[..2])
     );
 }
+
+fn advisor_session(result: Option<Value>) -> Vec<Value> {
+    let assistant = |uuid: &str, time: &str, block: Value| {
+        json!({"type":"assistant","uuid":uuid,"cwd":CWD,"timestamp":time,
+            "message":{"id":"m1","role":"assistant","content":[block]}})
+    };
+    let mut records = vec![
+        json!({"type":"user","uuid":"U1","cwd":CWD,"timestamp":"2026-11-18T02:36:00.000Z","message":{"role":"user","content":"Consult the advisor."}}),
+        assistant(
+            "a1",
+            "2026-11-18T02:36:09.474Z",
+            json!({"type":"server_tool_use","id":"srvtoolu_1","name":"advisor","input":{}}),
+        ),
+    ];
+    if let Some(content) = result {
+        records.push(assistant(
+            "a2",
+            "2026-11-18T02:36:24.690Z",
+            json!({"type":"advisor_tool_result","tool_use_id":"srvtoolu_1","content":content}),
+        ));
+        records.push(assistant(
+            "a3",
+            "2026-11-18T02:36:25.000Z",
+            json!({"type":"text","text":"done"}),
+        ));
+    }
+    records
+}
+
+#[test]
+fn advisor_calls_render_the_same_row_live_and_in_history() {
+    let cases = [
+        (
+            json!({"type":"advisor_redacted_result","encrypted_content":"EqQB"}),
+            "completed",
+            None,
+        ),
+        (
+            json!({"type":"advisor_result","text":"Use a channel."}),
+            "completed",
+            Some("Use a channel."),
+        ),
+        (
+            json!({"type":"advisor_tool_result_error","error_code":"max_uses_exceeded"}),
+            "failed",
+            Some("max_uses_exceeded"),
+        ),
+    ];
+    for (content, status, text) in cases {
+        let home = TempDir::new().unwrap();
+        let records = advisor_session(Some(content));
+        let entries = all_entries(home.path(), "advisor", &records, None);
+        assert_eq!(ids(&entries), ["U1", "srvtoolu_1", "m1#2"]);
+        let history = without_duration(entries[1]["item"].clone());
+
+        let mut translator = TurnTranslator::new(
+            "claude_advisor".into(),
+            "turn".into(),
+            CWD.into(),
+            None,
+            1_700_000_000_000,
+            std::sync::Arc::default(),
+        );
+        translator.handle(&records[1]);
+        let live = translator.handle(&records[2]);
+        assert_eq!(
+            history,
+            without_duration(live.notifications[0]["params"]["item"].clone())
+        );
+
+        assert_eq!(history["tool"], "advisor");
+        assert_eq!(history["status"], status);
+        assert_eq!(history["success"], status == "completed");
+        assert_eq!(
+            history.get("contentItems"),
+            text.map(|text| json!([{"type":"inputText","text":text}]))
+                .as_ref()
+        );
+    }
+}
+
+#[test]
+fn an_unanswered_advisor_call_stays_in_progress_and_other_server_tools_have_no_row() {
+    let home = TempDir::new().unwrap();
+    let entries = all_entries(home.path(), "pending", &advisor_session(None), None);
+    assert_eq!(ids(&entries), ["U1", "srvtoolu_1"]);
+    assert_eq!(entries[1]["item"]["status"], "inProgress");
+
+    let mut records = advisor_session(None);
+    records[1]["message"]["content"][0]["name"] = json!("web_search");
+    let entries = all_entries(home.path(), "search", &records, None);
+    assert_eq!(ids(&entries), ["U1"]);
+}
+
+#[test]
+fn oversized_advisor_ids_fail_history_admission() {
+    let id = "x".repeat(MAX_PROVIDER_ID_BYTES + 1);
+    for block in [
+        json!({"type":"server_tool_use","id":id,"name":"advisor","input":{}}),
+        json!({"type":"advisor_tool_result","tool_use_id":id}),
+    ] {
+        let record = json!({"type":"assistant","message":{"id":"m1","content":[block]}});
+        assert!(validate_record_ids(&record).is_err());
+    }
+}

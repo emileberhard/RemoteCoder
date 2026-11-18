@@ -102,6 +102,35 @@ impl TurnTranslator {
         );
         out.notifications.push(self.item_started(item));
     }
+
+    pub(super) fn complete_tool_item(
+        &mut self,
+        result: &Value,
+        tool_use_result: Option<Value>,
+        out: &mut Translated,
+    ) {
+        let Some(tool_use_id) = result.get("tool_use_id").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(pending) = self.pending_tools.shift_remove(tool_use_id) else {
+            return;
+        };
+        self.pending_tool_bytes -= pending.bytes;
+        let duration_ms = Some((crate::time::unix_millis() - pending.started_at_ms).max(0));
+        let item = tool_item(
+            tool_use_id,
+            &pending.tool_name,
+            &pending.input,
+            &self.cwd,
+            ToolOutcome::finished(result, tool_use_result, duration_ms),
+        );
+        out.notifications.push(self.item_completed(item));
+    }
+}
+
+pub(crate) fn is_advisor_call(block: &Value) -> bool {
+    block.get("type").and_then(Value::as_str) == Some("server_tool_use")
+        && block.get("name").and_then(Value::as_str) == Some("advisor")
 }
 
 pub(crate) enum ToolOutcome {
@@ -116,6 +145,41 @@ pub(crate) enum ToolOutcome {
 }
 
 impl ToolOutcome {
+    pub(crate) fn finished(
+        result: &Value,
+        tool_use_result: Option<Value>,
+        duration_ms: Option<i64>,
+    ) -> Self {
+        if result.get("type").and_then(Value::as_str) == Some("advisor_tool_result") {
+            let content = result.get("content");
+            let is_error = content
+                .and_then(|content| content.get("type"))
+                .and_then(Value::as_str)
+                == Some("advisor_tool_result_error");
+            let text_field = if is_error { "error_code" } else { "text" };
+            return ToolOutcome::Finished {
+                is_error,
+                result_text: content
+                    .and_then(|content| content.get(text_field))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                tool_use_result: None,
+                images: Vec::new(),
+                duration_ms,
+            };
+        }
+        ToolOutcome::Finished {
+            is_error: result
+                .get("is_error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            result_text: tool_result_text(result),
+            images: tool_result_images(result),
+            tool_use_result,
+            duration_ms,
+        }
+    }
+
     fn status(&self) -> &'static str {
         match self {
             ToolOutcome::InProgress => "inProgress",
@@ -488,7 +552,7 @@ fn data_url(image: &Value) -> String {
     )
 }
 
-pub(crate) fn tool_result_images(block: &Value) -> Vec<Value> {
+fn tool_result_images(block: &Value) -> Vec<Value> {
     let Some(Value::Array(parts)) = block.get("content") else {
         return Vec::new();
     };
@@ -506,7 +570,7 @@ pub(crate) fn tool_result_images(block: &Value) -> Vec<Value> {
         .collect()
 }
 
-pub(crate) fn tool_result_text(block: &Value) -> Option<String> {
+fn tool_result_text(block: &Value) -> Option<String> {
     match block.get("content") {
         Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
         Some(Value::Array(parts)) => {
@@ -827,5 +891,44 @@ mod tests {
         assert_eq!(plan[0]["status"], json!("completed"));
         assert_eq!(plan[1]["status"], json!("inProgress"));
         assert_eq!(plan[2]["status"], json!("pending"));
+    }
+
+    #[test]
+    fn an_advisor_call_is_a_live_tool_row_until_its_result_arrives() {
+        let mut t = translator();
+        let call = json!({"type":"server_tool_use","id":"srvtoolu_1","name":"advisor","input":{}});
+        let result = json!({"type":"advisor_tool_result","tool_use_id":"srvtoolu_1",
+            "content":{"type":"advisor_redacted_result","encrypted_content":"EqQB"}});
+        let assistant = |block: Value| json!({"type":"assistant","message":{"id":"msg_1","content":[block]}});
+
+        t.handle(&json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":call}}));
+        let started = t.handle(&assistant(call.clone()));
+        assert_eq!(methods(&started.notifications), vec!["item/started"]);
+        let item = &started.notifications[0]["params"]["item"];
+        assert_eq!(item["type"], "dynamicToolCall");
+        assert_eq!(item["id"], "srvtoolu_1");
+        assert_eq!(item["tool"], "advisor");
+        assert_eq!(item["status"], "inProgress");
+        let checkpoint = t.live_checkpoint().unwrap();
+        assert_eq!(checkpoint["liveItems"][0]["item"]["id"], "srvtoolu_1");
+
+        let completed = t.handle(&assistant(result));
+        assert_eq!(methods(&completed.notifications), vec!["item/completed"]);
+        let item = &completed.notifications[0]["params"]["item"];
+        assert_eq!(item["status"], "completed");
+        assert_eq!(item["success"], true);
+        assert!(item.get("contentItems").is_none());
+        assert_eq!(t.live_checkpoint().unwrap()["liveItems"], json!([]));
+
+        let text = t.handle(&assistant(json!({"type":"text","text":"done"})));
+        assert_eq!(text.notifications[0]["params"]["item"]["id"], "msg_1#2");
+    }
+
+    #[test]
+    fn only_the_advisor_server_tool_becomes_a_row() {
+        let mut t = translator();
+        let out = t.handle(&json!({"type":"assistant","message":{"id":"msg_1","content":[
+            {"type":"server_tool_use","id":"srvtoolu_2","name":"web_search","input":{"query":"x"}}]}}));
+        assert!(out.notifications.is_empty());
     }
 }

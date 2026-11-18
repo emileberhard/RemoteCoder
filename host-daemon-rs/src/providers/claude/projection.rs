@@ -12,9 +12,7 @@ use crate::providers::claude::timeline::{
 };
 use crate::providers::claude::translate::context_usage::token_usage_notification;
 use crate::providers::claude::translate::narration::{narration_text, sent_message_text};
-use crate::providers::claude::translate::tools::{
-    ToolOutcome, tool_item, tool_result_images, tool_result_text,
-};
+use crate::providers::claude::translate::tools::{ToolOutcome, is_advisor_call, tool_item};
 use crate::providers::claude::translate::{agent_message_item, user_message_item};
 use crate::time::parse_rfc3339_millis;
 use anyhow::{Context, Result, anyhow, bail};
@@ -339,19 +337,28 @@ impl Scan {
             .flatten()
             .enumerate()
         {
-            if part.get("type").and_then(Value::as_str) != Some("tool_result") {
-                continue;
+            if part.get("type").and_then(Value::as_str) == Some("tool_result") {
+                self.record_tool_result(part, span, part_index, timestamp_ms);
             }
-            if let Some(tool_use_id) = part.get("tool_use_id").and_then(Value::as_str) {
-                self.tool_results.insert(
-                    tool_use_id.to_string(),
-                    ToolResult {
-                        record: span,
-                        part: part_index,
-                        completed_at_ms: timestamp_ms,
-                    },
-                );
-            }
+        }
+    }
+
+    fn record_tool_result(
+        &mut self,
+        result: &Value,
+        record: Span,
+        part: usize,
+        completed_at_ms: Option<i64>,
+    ) {
+        if let Some(tool_use_id) = result.get("tool_use_id").and_then(Value::as_str) {
+            self.tool_results.insert(
+                tool_use_id.to_string(),
+                ToolResult {
+                    record,
+                    part,
+                    completed_at_ms,
+                },
+            );
         }
     }
 
@@ -422,6 +429,22 @@ impl Scan {
                             },
                             timestamp_ms,
                         );
+                    }
+                    Some("server_tool_use") if is_advisor_call(value) => {
+                        if let Some(id) = value.get("id").and_then(Value::as_str) {
+                            self.push_row(
+                                id.to_string(),
+                                Source::Tool {
+                                    record: span,
+                                    block,
+                                    result: None,
+                                },
+                                timestamp_ms,
+                            );
+                        }
+                    }
+                    Some("advisor_tool_result") => {
+                        self.record_tool_result(value, span, block, timestamp_ms);
                     }
                     _ => {}
                 }
@@ -1094,19 +1117,13 @@ impl Projection {
                         part.get("tool_use_id").and_then(Value::as_str) == Some(item.id.as_str())
                     })
                     .ok_or_else(|| changed(&item.id))?;
-                ToolOutcome::Finished {
-                    is_error: part
-                        .get("is_error")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                    result_text: tool_result_text(part),
-                    images: tool_result_images(part),
-                    tool_use_result: record.get("toolUseResult").cloned(),
-                    duration_ms: item
-                        .started_at_ms
+                ToolOutcome::finished(
+                    part,
+                    record.get("toolUseResult").cloned(),
+                    item.started_at_ms
                         .zip(result.completed_at_ms)
                         .map(|(started, completed)| (completed - started).max(0)),
-                }
+                )
             }
         };
         Ok(tool_item(
@@ -1132,8 +1149,8 @@ fn validate_record_ids(record: &Value) -> Result<()> {
         .flatten()
     {
         let key = match block.get("type").and_then(Value::as_str) {
-            Some("tool_use") => "id",
-            Some("tool_result") => "tool_use_id",
+            Some("tool_use" | "server_tool_use") => "id",
+            Some("tool_result" | "advisor_tool_result") => "tool_use_id",
             _ => continue,
         };
         if let Some(id) = block.get(key).and_then(Value::as_str) {
