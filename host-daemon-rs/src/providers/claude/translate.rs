@@ -618,7 +618,7 @@ impl TurnTranslator {
 
         for block in content {
             if block.get("type").and_then(Value::as_str) == Some("tool_result") {
-                self.complete_tool_item(block, value.get("tool_use_result").cloned(), out);
+                self.complete_tool_item(block, value.get("tool_use_result"), out);
             }
         }
     }

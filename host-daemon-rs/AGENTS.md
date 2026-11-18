@@ -1987,9 +1987,9 @@ Claude. The `RC_CLAUDE_*` settings are in
     `result.modelUsage` and the effective auto-compact window. That window is
     resolved from Claude Code's user, project, local and managed settings.
   - It uses the latest request's active context rather than summing a tool
-    loop's repeated requests. When `usage.iterations` is present, as after an
-    advisor call, top-level usage sums every request in the message, so the
-    last `message` iteration is that context.
+    loop's repeated requests. When `usage.iterations` lists several `message`
+    requests, as after an advisor call, top-level usage sums them, so the last
+    one is that context; iterations carry no thinking count.
 - **Model, effort and Fast are mutable conversation settings.**
   - A `turn/start` with `model` carries the whole selection. A `fast` service tier turns Claude Code's
     Fast mode on, `null` turns it off, and an absent tier keeps the parent

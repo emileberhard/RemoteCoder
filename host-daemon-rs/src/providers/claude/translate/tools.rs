@@ -106,7 +106,7 @@ impl TurnTranslator {
     pub(super) fn complete_tool_item(
         &mut self,
         result: &Value,
-        tool_use_result: Option<Value>,
+        tool_use_result: Option<&Value>,
         out: &mut Translated,
     ) {
         let Some(tool_use_id) = result.get("tool_use_id").and_then(Value::as_str) else {
@@ -122,7 +122,7 @@ impl TurnTranslator {
             &pending.tool_name,
             &pending.input,
             &self.cwd,
-            ToolOutcome::finished(result, tool_use_result, duration_ms),
+            ToolOutcome::finished(result, tool_use_result.cloned(), duration_ms),
         );
         out.notifications.push(self.item_completed(item));
     }

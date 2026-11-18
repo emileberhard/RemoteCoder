@@ -70,15 +70,17 @@ struct TokenCounters {
 
 impl TokenCounters {
     fn parse(usage: &Value) -> Option<Self> {
-        let usage = usage
+        let requests: Vec<&Value> = usage
             .get("iterations")
             .and_then(Value::as_array)
-            .and_then(|iterations| {
-                iterations.iter().rfind(|iteration| {
-                    iteration.get("type").and_then(Value::as_str) == Some("message")
-                })
-            })
-            .unwrap_or(usage);
+            .into_iter()
+            .flatten()
+            .filter(|iteration| iteration.get("type").and_then(Value::as_str) == Some("message"))
+            .collect();
+        let usage = match requests.as_slice() {
+            [.., latest] if requests.len() > 1 => latest,
+            _ => usage,
+        };
         let counter = |value: Option<&Value>| match value {
             None | Some(Value::Null) => Some(None),
             Some(value) => value.as_i64().filter(|count| *count >= 0).map(Some),
@@ -119,7 +121,8 @@ mod tests {
             "type":"stream_event",
             "event":{"type":"message_delta","usage":{
                 "input_tokens":2,"cache_read_input_tokens":100,"output_tokens":84,
-                "output_tokens_details":{"thinking_tokens":8}
+                "output_tokens_details":{"thinking_tokens":8},
+                "iterations":[{"type":"message","input_tokens":2,"cache_read_input_tokens":100,"output_tokens":84}]
             }}
         }));
 
@@ -143,6 +146,7 @@ mod tests {
             "event":{"type":"message_delta","usage":{
                 "input_tokens":4,"cache_creation_input_tokens":48851,
                 "cache_read_input_tokens":48361,"output_tokens":137,
+                "output_tokens_details":{"thinking_tokens":35},
                 "iterations":[
                     {"type":"message","input_tokens":2,"cache_creation_input_tokens":48361,
                      "cache_read_input_tokens":0,"output_tokens":62},
@@ -158,6 +162,7 @@ mod tests {
         assert_eq!(usage["inputTokens"], json!(2));
         assert_eq!(usage["cachedInputTokens"], json!(48361));
         assert_eq!(usage["outputTokens"], json!(75));
+        assert_eq!(usage["reasoningOutputTokens"], json!(0));
         assert_eq!(usage["totalTokens"], json!(48928));
     }
 
