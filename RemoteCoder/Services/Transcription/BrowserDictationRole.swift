@@ -8,9 +8,9 @@ final class BrowserDictationRole {
     private static let key = "dictation.browserHost"
     private var activity: (any NSObjectProtocol)?
     @ObservationIgnored private var drain: Task<Void, Never>?
-    @ObservationIgnored private let preparation: Task<Void, any Error>
     @ObservationIgnored let host = BrowserDictationHost()
     @ObservationIgnored var onChange: (@MainActor (Bool) async -> Void)?
+    @ObservationIgnored var onDrained: (@MainActor () async -> Void)?
     var holdsConnection: Bool { enabled || drain != nil }
 
     var enabled: Bool {
@@ -22,9 +22,13 @@ final class BrowserDictationRole {
             let selected = enabled
             if selected { updateActivity() }
             drain = Task { [weak self, host] in
-                guard let self else { return }
+                guard let self, !Task.isCancelled, enabled == selected else { return }
                 await onChange?(selected)
-                if !selected { await host.waitUntilIdle() }
+                if !selected {
+                    await host.waitUntilIdle()
+                    guard !Task.isCancelled, !enabled else { return }
+                    await onDrained?()
+                }
                 guard !Task.isCancelled, enabled == selected else { return }
                 drain = nil
                 updateActivity()
@@ -32,20 +36,28 @@ final class BrowserDictationRole {
         }
     }
 
-    init(defaults: UserDefaults, storage: HostStorage) {
+    init(defaults: UserDefaults) {
         self.defaults = defaults
         #if os(macOS)
         enabled = defaults.bool(forKey: Self.key)
-        let directory = storage.directory(for: .device).appending(path: "browser-dictation", directoryHint: .isDirectory)
-        preparation = Task { try await BrowserDictationService.sweepAtLaunch(directory) }
         #else
         enabled = false
-        preparation = Task { () throws -> Void in }
         #endif
         updateActivity()
     }
 
-    func prepare() async throws { try await preparation.value }
+    func teardown() {
+        drain?.cancel()
+        drain = nil
+        onChange = nil
+        onDrained = nil
+        #if os(macOS)
+        if let activity {
+            ProcessInfo.processInfo.endActivity(activity)
+            self.activity = nil
+        }
+        #endif
+    }
 
     private func updateActivity() {
         #if os(macOS)

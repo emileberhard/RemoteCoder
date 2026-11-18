@@ -13,11 +13,15 @@ newest serving declaration receives new operations; already admitted work stays
 with its chosen connection. The gateway permits four operations, validates the
 path as a bounded finished upload, forwards `dictation/host/transcribe`, and
 relays a matching `dictation/host/result`. It sends `dictation/host/cancel` on
-requester loss or deadline. A deadline is `unknown`: the library may already
-contain the capture. Host loss is `hostLost`; absent and busy hosts report
+requester loss, explicit request cancellation or deadline. Transcript text is
+excluded from the gateway journal. A deadline is `unknown`: the library may
+already contain the capture. Host loss is `hostLost`; absent and busy hosts report
 `noHost` and `busy`. Turning the role off removes its declaration without moving
-an admitted operation. Finished uploads follow UploadStore retention, which has
-no supported removal operation for finished entries.
+an admitted operation. The app admits work only while its role is enabled and
+the connection's serving declaration is acknowledged; failed withdrawals are
+retried. The connection stays held through result acknowledgement or failure.
+Finished uploads follow UploadStore retention, which has no supported removal
+operation for finished entries.
 
 The host downloads through `files/download` and runs the native library plan,
 original archive, voice filtering, batch transcription and result archive. Its

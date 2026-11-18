@@ -26,7 +26,6 @@ final class BrowserDictationService {
     private let voices: DictationVoiceProfiles
     private let defaults: UserDefaults
     private let directory: URL
-    private let recordings: DictationRecordingStore<ExecutionTarget>
     private let logger = AppLogger(category: "BrowserDictation")
 
     init(host: GatewayHostConfiguration, routes: GatewayRoutes, access: GatewaySpeechAccess,
@@ -38,21 +37,18 @@ final class BrowserDictationService {
         self.voices = voices
         self.defaults = defaults
         directory = storage.directory(for: .device).appending(path: "browser-dictation", directoryHint: .isDirectory)
-        do {
-            recordings = DictationRecordingStore(directory: directory.appending(path: "recordings", directoryHint: .isDirectory),
-                retention: try DictationRecordingRetention(maximumCount: 5, maximumAge: .seconds(24 * 60 * 60)))
-        } catch { preconditionFailure(error.localizedDescription) }
     }
 
     func execute(_ request: BrowserDictationRequest) async throws -> BrowserDictationOutput {
         try await Self.sweep(directory)
-        for recording in try await recordings.recordings() { try await recordings.discard(recording) }
         let work = directory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try await Self.prepare(work)
         defer {
             do { try await Self.remove(work) }
             catch { logger.error("Browser dictation upload cleanup failed: \(error.localizedDescription)") }
         }
+        let recordings = DictationRecordingStore<ExecutionTarget>(directory: work.appending(path: "recordings", directoryHint: .isDirectory),
+            retention: try DictationRecordingRetention(maximumCount: 5, maximumAge: .seconds(24 * 60 * 60)))
         let downloaded = try await downloader.download(source: .dictation(path: request.path), knownRevision: nil,
             to: work, progress: { _ in }, admit: { _ in })
         guard case .downloaded(_, let file) = downloaded else { throw CocoaError(.fileReadUnknown) }
@@ -74,19 +70,8 @@ final class BrowserDictationService {
             }
         } catch {
             try? await controller.quiesceForTermination()
-            do {
-                for recording in try await recordings.recordings() { try await recordings.discard(recording) }
-            } catch {
-                logger.error("Browser dictation recovery cleanup failed: \(error.localizedDescription)")
-            }
             throw error
         }
-    }
-
-    @concurrent static func sweepAtLaunch(_ directory: URL) async throws {
-        let manager = FileManager.default
-        if manager.fileExists(atPath: directory.path) { try manager.removeItem(at: directory) }
-        try manager.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
     @concurrent private static func prepare(_ directory: URL) async throws {
@@ -96,7 +81,7 @@ final class BrowserDictationService {
     @concurrent private static func sweep(_ directory: URL) async throws {
         let manager = FileManager.default
         try manager.createDirectory(at: directory, withIntermediateDirectories: true)
-        for entry in try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) where entry.lastPathComponent != "recordings" {
+        for entry in try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
             try manager.removeItem(at: entry)
         }
     }

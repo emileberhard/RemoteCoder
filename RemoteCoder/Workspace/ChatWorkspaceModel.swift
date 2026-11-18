@@ -118,7 +118,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         dictationLibrary: SharedDictationLibrary? = nil
     ) {
         self.settings = settings
-        let browserDictationRole = BrowserDictationRole(defaults: defaults, storage: storage)
+        let browserDictationRole = BrowserDictationRole(defaults: defaults)
         self.browserDictationRole = browserDictationRole
         cluster = ClusterModel(defaults: defaults)
         self.storage = storage
@@ -176,6 +176,12 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             let models = self?.models ?? []
             await withTaskGroup(of: Void.self) { group in
                 for model in models { group.addTask { await model.setBrowserDictationHost(enabled) } }
+            }
+        }
+        browserDictationRole.onDrained = { [weak self] in
+            let models = self?.models ?? []
+            await withTaskGroup(of: Void.self) { group in
+                for model in models { group.addTask { await model.browserDictationDidDrain() } }
             }
         }
         startAccountMigration()
@@ -913,6 +919,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     func teardown() {
+        browserDictationRole.teardown()
         supersedePendingNavigation()
         liveActivity.retire()
         for window in windows { window.cancelComposerFocus() }

@@ -5,8 +5,6 @@ import {
 } from "../transcription-settings";
 import { canceled, record, requiredString } from "./contracts";
 
-export { maximumRecordingMilliseconds } from "./dictation-limits";
-
 import { relayJSON, type SpeechFetch, type SpeechProvider, speechURL } from "./relay";
 
 export type DecodeAudio = (audio: Blob, sampleRate: number) => Promise<Float32Array>;

@@ -459,7 +459,6 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
                 library: dictationLibrary, voices: dictationVoices, defaults: chatDefaults)
             browserBinding = BrowserDictationConnection(host: browserDictationRole.host,
                 enabled: { browserDictationRole.enabled }, execute: { request in
-                    try await browserDictationRole.prepare()
                     return try await service.execute(request)
                 })
         } else { browserBinding = nil }
@@ -852,12 +851,14 @@ final class ChatTargetModel: GatewayEventSink, TranscriptRecoverySource, Convers
             await perform(effects)
         } else {
             await gateway.browserDictationRoleChanged()
-            await browserDictationRole?.host.waitUntilIdle()
-            guard !Task.isCancelled, browserDictationRole?.enabled == false else { return }
-            let effects = lifecycle.handle(.browserDictationHost(false))
-            if lifecycle.isBackgrounded { await gateway.suspendLivenessChecks() }
-            await perform(effects)
         }
+    }
+
+    func browserDictationDidDrain() async {
+        guard acceptsWork, !Task.isCancelled, browserDictationRole?.enabled == false else { return }
+        let effects = lifecycle.handle(.browserDictationHost(false))
+        if lifecycle.isBackgrounded { await gateway.suspendLivenessChecks() }
+        await perform(effects)
     }
 
     private func run(_ effects: [TargetLifecycle.Effect]) {

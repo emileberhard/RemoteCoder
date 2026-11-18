@@ -122,7 +122,9 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private let deviceTools: DeviceToolConnection?
     private let browserDictation: BrowserDictationConnection?
     private var browserDeclarationRevision = 0
-    private var browserDeclaredServing = false
+    private var browserDeclaredServing: Bool?
+    private var browserMayHaveDeclared = false
+    private var browserDictationActive: String?
     private var browserDeclaration: (id: UUID, task: Task<Void, Never>)?
     private var deviceResultTasks: [UUID: Task<Void, Never>] = [:]
     private var browserDictationResultTasks: [UUID: Task<Void, Never>] = [:]
@@ -703,15 +705,15 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
 
     func moveToPreferredRoute(while allowed: @escaping @Sendable @MainActor () -> Bool) async -> PreferredRouteMove {
         guard let routes, let current = route else { return .settled }
-        guard isIdle else { return .deferred }
+        guard isIdleForRouteHandover else { return .deferred }
         let generation = connectionGeneration
         guard await routes.preferredRouteResponds(over: current) else { return .settled }
-        guard generation == connectionGeneration, isIdle else { return .deferred }
+        guard generation == connectionGeneration, isIdleForRouteHandover else { return .deferred }
         let candidates = await routes.preferredRoutes(over: current)
         let started = ContinuousClock.now
         guard !candidates.isEmpty, let race = try? await race(candidates) else { return .settled }
         let stillAllowed = await allowed()
-        guard stillAllowed, !Task.isCancelled, generation == connectionGeneration, isIdle else {
+        guard stillAllowed, !Task.isCancelled, generation == connectionGeneration, isIdleForRouteHandover else {
             race.socket.task.cancel(with: .goingAway, reason: nil)
             return .settled
         }
@@ -721,8 +723,8 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         return .settled
     }
 
-    private var isIdle: Bool {
-        isConnected && connectionInFlight == nil && pending.isEmpty
+    var isIdleForRouteHandover: Bool {
+        isConnected && connectionInFlight == nil && pending.isEmpty && browserDictationActive == nil && browserDictationResultTasks.isEmpty
     }
 
     /// Retirement is terminal: late callbacks cannot reconnect a removed host.
@@ -789,7 +791,9 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         connectionGeneration = UUID()
         browserDeclaration?.task.cancel()
         browserDeclaration = nil
-        browserDeclaredServing = false
+        browserDeclaredServing = nil
+        browserMayHaveDeclared = false
+        browserDictationActive = nil
         receiveDeadline = GatewayReceiveDeadline(now: .now)
         receiveTask?.cancel()
         receiveTask = nil
@@ -1382,14 +1386,24 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             let revision = browserDeclarationRevision
             let serving = await browserDictation.enabled()
             guard generation == connectionGeneration, webSocket != nil else { return }
-            if serving || browserDeclaredServing {
+            if serving || browserMayHaveDeclared {
+                if serving { browserMayHaveDeclared = true }
+                browserDeclaredServing = nil
                 do {
                     _ = try await callConnected(method: "dictation/host/declare", params: .object(["serving": .bool(serving)]), timeout: timeouts.request)
+                    guard generation == connectionGeneration, webSocket != nil else { return }
+                    browserDeclaredServing = serving
+                    if !serving { browserMayHaveDeclared = false }
                 } catch {
+                    guard generation == connectionGeneration, webSocket != nil else { return }
                     logger.notice("Browser dictation declaration failed: \(error.localizedDescription)")
+                    if serving, let failure = error as? ClientError, case .serverError(_, let code) = failure, code == -32601 {
+                        browserMayHaveDeclared = false
+                    } else if !serving {
+                        do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                        continue
+                    }
                 }
-                guard generation == connectionGeneration, webSocket != nil else { return }
-                browserDeclaredServing = serving
             }
             if revision == browserDeclarationRevision { return }
         }
@@ -1406,15 +1420,36 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
                 await browserDictation.host.cancel(try JSONDecoder().decode(BrowserDictationCancel.self, from: data), generation: generation)
             } else {
                 let request = try JSONDecoder().decode(BrowserDictationRequest.self, from: data)
-                let result = await browserDictation.host.invoke(request, generation: generation, execute: browserDictation.execute) { [weak self] result in
-                    await self?.scheduleBrowserDictationResult(result, generation: generation)
+                let enabled = await browserDictation.enabled()
+                guard generation == connectionGeneration else { return true }
+                guard enabled, browserDeclaredServing == true else {
+                    scheduleBrowserDictationResult(BrowserDictationResult(operationId: request.operationId, outcome: .failed), generation: generation)
+                    return true
                 }
-                if let result { scheduleBrowserDictationResult(result, generation: generation) }
+                if let active = browserDictationActive {
+                    if active != request.operationId {
+                        scheduleBrowserDictationResult(BrowserDictationResult(operationId: request.operationId, outcome: .failed, reason: "busy"), generation: generation)
+                    }
+                    return true
+                }
+                browserDictationActive = request.operationId
+                let result = await browserDictation.host.invoke(request, generation: generation, execute: browserDictation.execute) { [weak self] result in
+                    await self?.deliverBrowserDictationResult(result, generation: generation)
+                }
+                if let result {
+                    if generation == connectionGeneration, browserDictationActive == request.operationId { browserDictationActive = nil }
+                    scheduleBrowserDictationResult(result, generation: generation)
+                }
             }
         } catch {
             logger.error("Invalid browser dictation notification: \(error.localizedDescription)")
         }
         return true
+    }
+
+    private func deliverBrowserDictationResult(_ result: BrowserDictationResult, generation: UUID) async {
+        await sendBrowserDictationResult(result, generation: generation)
+        if generation == connectionGeneration, browserDictationActive == result.operationId { browserDictationActive = nil }
     }
 
     private func scheduleBrowserDictationResult(_ result: BrowserDictationResult, generation: UUID) {

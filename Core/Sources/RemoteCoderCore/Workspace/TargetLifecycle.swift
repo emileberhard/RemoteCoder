@@ -168,7 +168,8 @@ struct TargetLifecycle: Equatable, Sendable {
         guard browserDictationHostActive != active else { return [] }
         browserDictationHostActive = active
         if active { return releaseHold() }
-        return allowsDisconnect ? disconnectIfNeeded() : []
+        guard allowsDisconnect else { return [] }
+        return activeWorkCount > 0 ? beginGraceIfNeeded() : disconnectIfNeeded()
     }
 
     private mutating func expireGrace() -> [Effect] {

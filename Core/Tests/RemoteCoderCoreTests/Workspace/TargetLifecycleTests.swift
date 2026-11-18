@@ -11,6 +11,15 @@ struct TargetLifecycleTests {
         #expect(!life.allowsDisconnect)
         #expect(life.handle(.browserDictationHost(false)) == [.disconnect])
     }
+    @Test func endingBrowserHostHoldPreservesBackgroundWorkGrace() {
+        var life = TargetLifecycle()
+        _ = life.handle(.activeWorkChanged(count: 1))
+        _ = life.handle(.browserDictationHost(true))
+        _ = life.handle(.appPhase(.background))
+        #expect(life.handle(.browserDictationHost(false)) == [.beginGrace])
+        #expect(life.handle(.graceExpired) == [.disconnect])
+    }
+
     private func lifecycle(work: Int = 0, presented: Bool = true, voice: Bool = false) -> TargetLifecycle {
         var lifecycle = TargetLifecycle()
         _ = lifecycle.handle(.presentation(TargetPresentation(presented: presented)))
