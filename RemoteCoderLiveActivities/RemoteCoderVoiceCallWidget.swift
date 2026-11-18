@@ -11,11 +11,14 @@ private extension CallState {
     var symbolName: String {
         if isMuted { return "mic.slash.fill" }
         return switch phase {
-        case .connecting, .reconnecting: "ellipsis"
+        case .connecting: "ellipsis"
+        case .reconnecting: "exclamationmark.arrow.triangle.2.circlepath"
         case .listening: "mic.fill"
         case .speaking: "waveform"
         }
     }
+
+    var allowsMute: Bool { phase == .listening || phase == .speaking }
 
     var status: String {
         switch phase {
@@ -55,9 +58,13 @@ private struct CallStatusLine: View {
     var body: some View {
         HStack(spacing: 5) {
             CallSymbol(state: state)
-            Text(hostName.map { "\($0) · \(state.status)" } ?? state.status)
-                .foregroundStyle(.secondary)
+            Text(state.status)
+                .layoutPriority(1)
+            if let hostName {
+                Text("· \(hostName)")
+            }
         }
+        .foregroundStyle(.secondary)
         .lineLimit(1)
     }
 }
@@ -74,6 +81,7 @@ private struct CallControls: View {
             }
             .buttonStyle(.bordered)
             .tint(state.isMuted ? .orange : .primary)
+            .disabled(!state.allowsMute)
 
             Button(intent: EndVoiceCallIntent(callID: callID)) {
                 Label("End", systemImage: "phone.down.fill")
@@ -97,6 +105,7 @@ private struct Caption: View {
                 .font(.footnote)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
+                .privacySensitive()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -114,6 +123,7 @@ private struct VoiceCallLockScreen: View {
                     Text(state.displayTitle)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
+                        .privacySensitive()
                     CallStatusLine(state: state, hostName: attributes.hostName)
                         .font(.caption)
                 }
@@ -177,6 +187,7 @@ struct RemoteCoderVoiceCallWidget: Widget {
                         Text(state.displayTitle)
                             .font(.headline)
                             .lineLimit(1)
+                            .privacySensitive()
                         CallStatusLine(state: state, hostName: nil)
                             .font(.caption)
                     }

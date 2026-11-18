@@ -57,7 +57,10 @@ final class VoiceCallLiveActivity {
     }
 
     private static func content(_ state: ContentState) -> ActivityContent<ContentState> {
-        ActivityContent(state: state, staleDate: nil, relevanceScore: 1_000)
+        var bounded = state
+        bounded.title = state.title?.prefix(utf8Bytes: 256)
+        bounded.caption = state.caption?.prefix(utf8Bytes: 1_024)
+        return ActivityContent(state: bounded, staleDate: nil, relevanceScore: 1_000)
     }
 
     @concurrent
@@ -65,5 +68,18 @@ final class VoiceCallLiveActivity {
         for activity in Activity<RemoteCoderVoiceCallAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
+    }
+}
+
+private extension String {
+    func prefix(utf8Bytes limit: Int) -> String {
+        var bytes = 0
+        var end = startIndex
+        for character in self {
+            bytes += character.utf8.count
+            guard bytes <= limit else { break }
+            end = index(after: end)
+        }
+        return String(self[..<end])
     }
 }

@@ -19,6 +19,16 @@ private extension CallState {
         caption: "Tests passed. Want me to open a pull request?")
     static let muted = CallState(phase: .listening, isMuted: true, title: "Fix login flow", caption: nil)
     static let connecting = CallState(phase: .connecting, isMuted: false, title: nil, caption: nil)
+    static let reconnectingLongHost = CallState(phase: .reconnecting, isMuted: false, title: "Refactor the gateway journal",
+        caption: "I'll pick up where we left off once the connection is back and the build has finished on the Mini.")
+}
+
+private extension RemoteCoderVoiceCallAttributes {
+    static let longHost = RemoteCoderVoiceCallAttributes(
+        callID: UUID(uuidString: "6F1C2A4B-3D5E-4F70-8A91-B2C3D4E5F608") ?? UUID(),
+        startedAt: .now.addingTimeInterval(-3_725),
+        hostName: "emils-macbook-pro-build-host"
+    )
 }
 
 #Preview("Lock Screen speaking", as: .content, using: RemoteCoderVoiceCallAttributes.fixture) {
@@ -37,6 +47,12 @@ private extension CallState {
     RemoteCoderVoiceCallWidget()
 } contentStates: {
     CallState.connecting
+}
+
+#Preview("Lock Screen reconnecting, long host", as: .content, using: RemoteCoderVoiceCallAttributes.longHost) {
+    RemoteCoderVoiceCallWidget()
+} contentStates: {
+    CallState.reconnectingLongHost
 }
 
 #Preview("Expanded listening", as: .dynamicIsland(.expanded), using: RemoteCoderVoiceCallAttributes.fixture) {

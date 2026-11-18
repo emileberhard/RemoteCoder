@@ -2050,10 +2050,11 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   requires one (see below); in-app starts and answered agent calls request it
   best effort, since ActivityKit refuses a request from the background.
   `VoiceCall` owns its content state (phase, mute, title and the agent's last
-  finished line, at most 200 characters) and publishes only when one of them
-  changes, never per transcript delta. `VoiceCallLiveActivity` runs updates one
-  at a time and coalesces to the newest state, and its end waits for the update
-  in flight.
+  finished line) and publishes only when one of them changes, never per
+  transcript delta. `VoiceCallLiveActivity` bounds the title and line in UTF-8
+  bytes to stay inside ActivityKit's 4 KB payload, runs updates one at a time
+  and coalesces to the newest state. Teardown starts ending the activity at
+  once, after the update in flight, rather than after the gateway stop.
 - `RemoteCoderVoiceCallWidget` renders that activity. The Lock Screen and the
   expanded island show the title, phase, timer, caption and Mute and End
   buttons; compact shows the glyph and a phase symbol, limited width and
@@ -2065,7 +2066,10 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   the call through `VoiceCallControls`, which `VoiceCallCenter` implements and
   the app delegate registers with `AppDependencyManager`. They act only on the
   exact live call id and go through the same LiveCommunicationKit actions as
-  the system and in-app controls.
+  the system and in-app controls. Mute follows the in-app rule: only while the
+  call is listening or speaking, when the system conversation exists. The
+  title and line are `privacySensitive`, so the Lock Screen access setting
+  can redact them.
 - `RemoteCoderLiveActivitiesBundle` registers the active-tasks and voice-call
   Live Activities. App Intents provide New Chat and Voice Mode quick actions.
 - The app's generated Info.plist sets `NSSupportsLiveActivities=YES`.
