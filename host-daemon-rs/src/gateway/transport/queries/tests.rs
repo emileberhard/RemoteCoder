@@ -125,8 +125,15 @@ async fn dictation_declarations_are_applied_in_socket_order_without_command_capa
     connection
         .send(json!({"id":1,"method":"dictation/host/declare","params":{"serving":false}}))
         .await;
+    connection
+        .send(json!({"id":2,"method":"dictation/host/declare","params":{"serving":true}}))
+        .await;
     let ClientCommand::Text(withdrawal) =
         connection.responses.try_recv().expect("inline withdrawal")
+    else {
+        panic!("text response")
+    };
+    let ClientCommand::Text(enable) = connection.responses.try_recv().expect("inline enable")
     else {
         panic!("text response")
     };
@@ -134,13 +141,6 @@ async fn dictation_declarations_are_applied_in_socket_order_without_command_capa
         serde_json::from_str::<Value>(&withdrawal).unwrap(),
         json!({"id":1,"result":{}})
     );
-    connection
-        .send(json!({"id":2,"method":"dictation/host/declare","params":{"serving":true}}))
-        .await;
-    let ClientCommand::Text(enable) = connection.responses.try_recv().expect("inline enable")
-    else {
-        panic!("text response")
-    };
     assert_eq!(
         serde_json::from_str::<Value>(&enable).unwrap(),
         json!({"id":2,"result":{}})
