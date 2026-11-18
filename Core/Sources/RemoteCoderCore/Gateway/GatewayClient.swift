@@ -122,7 +122,6 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
     private let deviceTools: DeviceToolConnection?
     private let browserDictation: BrowserDictationConnection?
     private var browserDeclarationRevision = 0
-    private var browserDeclaredServing: Bool?
     private var browserLastSentServing: Bool?
     private var browserMayHaveDeclared = false
     private var browserDictationActive: String?
@@ -795,7 +794,6 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
         browserDeclaration = nil
         browserAdmission?.task.cancel()
         browserAdmission = nil
-        browserDeclaredServing = nil
         browserLastSentServing = nil
         browserMayHaveDeclared = false
         browserDictationActive = nil
@@ -1392,18 +1390,17 @@ actor GatewayClient: CodexHistoryGateway, ConversationContentSubscriptions {
             let serving = await browserDictation.enabled()
             guard generation == connectionGeneration, webSocket != nil else { return }
             if revision != browserDeclarationRevision { attempts = 0; continue }
-            if !serving && !browserMayHaveDeclared && browserDeclaredServing != true { return }
+            if !serving && !browserMayHaveDeclared { return }
             do {
                 _ = try await callConnected(method: "dictation/host/declare", params: .object(["serving": .bool(serving)]), timeout: .seconds(2))
                 guard generation == connectionGeneration, webSocket != nil else { return }
-                browserDeclaredServing = serving
                 if !serving { browserMayHaveDeclared = false }
                 attempts = 0
             } catch {
                 guard generation == connectionGeneration, webSocket != nil, !Task.isCancelled else { return }
                 logger.notice("Browser dictation declaration failed: \(error.localizedDescription)")
                 if let failure = error as? ClientError, case .serverError(_, let code) = failure, code == -32601 {
-                    if serving && browserDeclaredServing != true { browserMayHaveDeclared = false }
+                    if serving { browserMayHaveDeclared = false }
                     return
                 }
                 if revision != browserDeclarationRevision { attempts = 0; continue }
