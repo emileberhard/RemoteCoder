@@ -106,8 +106,18 @@ private struct AppContentSurfaceModifier<S: InsettableShape>: ViewModifier {
 
 private extension AppTheme {
     func glass(_ role: GlassRole, colorScheme: ColorScheme, interactive: Bool) -> Glass {
-        let material = Glass.regular.tint(glassTint(for: role, colorScheme: colorScheme))
+        let material = Glass.regular.tint(materialTint(for: role, colorScheme: colorScheme))
         return interactive ? material.interactive() : material
+    }
+
+    private func materialTint(for role: GlassRole, colorScheme: ColorScheme) -> Color {
+        #if os(iOS)
+        if id == .caribbeanSunset && colorScheme == .dark && role == .standard {
+            return colors.accentTint.mix(with: .black, by: 0.70)
+                .opacity(glassTintOpacity(for: role, colorScheme: colorScheme))
+        }
+        #endif
+        return glassTint(for: role, colorScheme: colorScheme)
     }
 
     func controlGlassTint(for colorScheme: ColorScheme) -> Color {
