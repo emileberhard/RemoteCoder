@@ -1,7 +1,7 @@
 use super::live_activity::{FinishedTurn, FinishedTurns};
 use super::{
-    ActiveTasksLiveActivitySnapshot, AlertKind, ApnsSend, DurableTurnState, Gateway, GatewayCoreState,
-    native_mutations,
+    ActiveTasksLiveActivitySnapshot, AlertKind, ApnsSend, DurableTurnState, Gateway,
+    GatewayCoreState, native_mutations,
 };
 use crate::time::unix_seconds;
 use crate::turns::{
