@@ -380,7 +380,7 @@ impl ClaudeStateBackup {
                 )
             })?)?;
         ensure!(
-            [9, 15, OWNERS.len()]
+            [9, 15, 17, OWNERS.len()]
                 .into_iter()
                 .any(|owners| manifest.state_owners == OWNERS[..owners]),
             "Claude migration backup has unexpected state owners: {}",
@@ -696,6 +696,26 @@ mod tests {
                 assert!(!paths.state("codex-restart-recovery.json").exists());
             }
         }
+    }
+
+    #[test]
+    fn a_previous_builds_backup_without_the_newest_marks_owner_still_restores() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = HostPaths::from_home(home.path().to_owned()).unwrap();
+        let backup = ClaudeStateBackup::new(&paths);
+        std::fs::write(paths.state("account-enrollments.json"), b"original").unwrap();
+        capture(&backup, &home.path().join(".claude"), BTreeSet::new()).unwrap();
+        let manifest_path = backup.backup.join("manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["stateOwners"] = serde_json::json!(OWNERS[..17]);
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        std::fs::write(paths.state("account-enrollments.json"), b"changed").unwrap();
+        backup.restore().unwrap();
+        assert_eq!(
+            std::fs::read(paths.state("account-enrollments.json")).unwrap(),
+            b"original"
+        );
     }
 
     #[test]

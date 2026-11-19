@@ -378,3 +378,40 @@ test("saved named and nameless pins survive a schema 5 read and dispatch unchang
   expect(store.restoreWarning).toBeUndefined();
   store.dispose();
 });
+
+test("a refresh requested while a send fails re-reads, drops mutes an older gateway rejects and sends the rest", async () => {
+  const disk = storage();
+  disk.data.set(
+    `remotecoder.web.marks.v1:${targetKey({ hostId: "mini" })}`,
+    JSON.stringify({ acknowledged: { ...snapshot(), schemaVersion: 6 }, pending: [] }),
+  );
+  const sent: unknown[] = [];
+  const firstSend = deferred<void>();
+  const store = new ConversationMarksStore(
+    { hostId: "mini" },
+    rpc(async (method, params) => {
+      if (method.endsWith("/read")) return { ...snapshot(), schemaVersion: 5 };
+      const { changes } = params as { changes: { op: string }[] };
+      if (changes.some((change) => change.op === "mute")) {
+        await firstSend.promise;
+        throw new Error("unknown variant mute");
+      }
+      sent.push(params);
+      return { delta: null };
+    }),
+    disk.value,
+    () => {},
+  );
+  store.recordChanges([
+    { op: "mute", threadId: "t" },
+    { op: "markUnread", threadId: "t" },
+  ]);
+  await tick();
+  const refreshed = store.sync();
+  firstSend.resolve();
+  await refreshed.catch(() => {});
+  for (let attempt = 0; attempt < 20 && store.pendingCount; attempt++) await tick();
+  expect(sent).toEqual([{ changes: [{ op: "markUnread", threadId: "t" }] }]);
+  expect(store.pendingCount).toBe(0);
+  store.dispose();
+});

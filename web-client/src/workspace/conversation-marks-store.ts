@@ -290,8 +290,7 @@ export class ConversationMarksStore {
       if (
         !this.controller.signal.aborted &&
         !this.unavailable &&
-        this.state === "ready" &&
-        (this.readRequested || this.replica.pending.length)
+        (this.readRequested || (this.state === "ready" && this.replica.pending.length))
       )
         await this.start();
     }

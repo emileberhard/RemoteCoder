@@ -12,16 +12,15 @@ impl Gateway {
             }
             let thread_id = apns.payload["sessionID"].as_str();
             let event_id = apns.payload["eventID"].as_str();
-            if self.is_conversation_muted(thread_id, event_id).await {
-                self.record_user_alert_suppression(thread_id, "alert", event_id, "muted");
-                continue;
-            }
-
             if self
                 .check_user_alert_ownership(thread_id, "alert", event_id)
                 .await
                 .is_err()
             {
+                continue;
+            }
+            if self.is_conversation_muted(thread_id, event_id).await {
+                self.record_user_alert_suppression(thread_id, "alert", event_id, "muted");
                 continue;
             }
             self.apns

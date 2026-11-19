@@ -974,7 +974,9 @@ web and already installed native builds.
   only user alerts; completion evidence and parent callbacks remain intact.
 - Mute: a conversation's `muted` mark silences its automatic alerts, the turn
   completions and Codex questions that `apns_completion_loop` delivers. The loop
-  reads the mark before the ancestry gate and journals `reason: "muted"`.
+  reads the mark after the ancestry gate, right before broker submission, so a
+  mute acknowledged during that wait still applies, and journals
+  `reason: "muted"`. Each read parses the marks document under its lock.
   `notify_user` and the gateway's failure alerts (`send_user_alert`: a Claude
   task that was not resumed, a paused queued message) and agent-result attention
   bypass it: an agent decides for itself when to notify, and a dead or paused
