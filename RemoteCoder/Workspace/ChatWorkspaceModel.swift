@@ -1258,6 +1258,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         for model in models { model.conversationList.markAllRead() }
     }
 
+    func mute(_ address: ConversationAddress) {
+        model(for: address.hostID)?.conversationList.mute(threadID: address.threadID)
+    }
+
+    func unmute(_ address: ConversationAddress) {
+        model(for: address.hostID)?.conversationList.unmute(threadID: address.threadID)
+    }
+
     func settle(_ addresses: [ConversationAddress]) -> [ExecutionTarget: [ConversationSettlementEdit]] {
         var settled: [ExecutionTarget: [ConversationSettlementEdit]] = [:]
         for (target, threadIDs) in grouped(addresses) {

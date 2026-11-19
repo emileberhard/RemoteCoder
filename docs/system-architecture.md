@@ -3083,15 +3083,19 @@ the turn seen. Rows also offer Mark as Read and Mark as Unread, a selection mode
 marks or settles many at once, and Mark All as Read moves the read baseline
 to the time it was chosen, even when the change reaches the gateway later.
 
-Pins, read state, purposes, settlement, done suggestions and changes views are conversation marks, owned by
-each gateway in `conversation-marks.v5.json` beside its turn state and shared by
+Pins, read state, purposes, settlement, done suggestions, changes views and mutes are conversation marks, owned by
+each gateway in `conversation-marks.v6.json` beside its turn state and shared by
 every device. `conversation/marks/read` returns the whole document;
 `conversation/marks/update` applies up to 500 changes and returns a revisioned
 delta, which the gateway also broadcasts as `conversation/marks/changed`. Both
 carry `schemaVersion`; a missing value means 1. The
 document's read baseline is set when it is first created, so existing history
-starts read. Schema 5 imports v4, v3 or v2 on first load, or v1 through the
-settlement conversion, leaving every older file untouched for rollback. A legacy
+starts read. Schema 6 adds `muted` and imports v5, v4, v3 or v2 on first load, or v1 through the
+settlement conversion, leaving every older file untouched for rollback. Rows
+offer Mute and Unmute from schema 6, and a muted row shows a bell with a slash;
+pending mute changes are dropped when a gateway reports an older schema. A
+muted conversation gets no automatic pushes, while `notify_user` and failure
+alerts still arrive (`host-daemon-rs/AGENTS.md`, *Push notifications*). A legacy
 pin name becomes a pin and a pending rename; the control-owned drain skips a
 name equal to the thread's current name, or for an untitled thread a name found
 in its raw preview or existing prompt summary after trimming whitespace and a trailing ellipsis. It retains

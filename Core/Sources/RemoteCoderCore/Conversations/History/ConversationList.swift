@@ -277,6 +277,16 @@ final class ConversationList {
         recordMark(.unpin(threadID: threadID))
     }
 
+    func mute(threadID: String) {
+        guard marks.offersMute else { return }
+        recordMark(.mute(threadID: threadID))
+    }
+
+    func unmute(threadID: String) {
+        guard marks.offersMute else { return }
+        recordMark(.unmute(threadID: threadID))
+    }
+
     func changesView(of threadID: String) -> ChangesView? {
         marks.changesView(of: threadID)
     }

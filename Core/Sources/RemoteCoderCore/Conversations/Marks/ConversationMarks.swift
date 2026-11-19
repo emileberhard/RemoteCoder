@@ -47,10 +47,11 @@ struct ThreadMarks: Codable, Equatable, Sendable {
     var settlement: ConversationSettlement?
     var doneThrough: Int64?
     var changesView: ChangesView?
+    var muted: Bool
 
     init(revision: UInt64 = 0, seenThrough: Int64? = nil, markedUnread: Bool = false, pinName: String? = nil, pinned: Bool = false,
          purpose: ConversationPurpose? = nil, settlement: ConversationSettlement? = nil, doneThrough: Int64? = nil,
-         changesView: ChangesView? = nil) {
+         changesView: ChangesView? = nil, muted: Bool = false) {
         self.revision = revision
         self.seenThrough = seenThrough
         self.markedUnread = markedUnread
@@ -60,6 +61,7 @@ struct ThreadMarks: Codable, Equatable, Sendable {
         self.settlement = settlement
         self.doneThrough = doneThrough
         self.changesView = changesView
+        self.muted = muted
     }
 
     init(from decoder: Decoder) throws {
@@ -73,13 +75,14 @@ struct ThreadMarks: Codable, Equatable, Sendable {
         settlement = try container.decodeIfPresent(ConversationSettlement.self, forKey: .settlement)
         doneThrough = try container.decodeIfPresent(Int64.self, forKey: .doneThrough)
         changesView = try container.decodeIfPresent(ChangesView.self, forKey: .changesView)
+        muted = try container.decodeIfPresent(Bool.self, forKey: .muted) ?? false
     }
 
     var isPinned: Bool { pinned || pinName != nil }
 
     var isEmpty: Bool {
         seenThrough == nil && !markedUnread && !isPinned && purpose == nil && settlement == nil && doneThrough == nil
-            && changesView == nil
+            && changesView == nil && !muted
     }
 }
 
@@ -117,6 +120,8 @@ enum ConversationMarkChange: Codable, Equatable, Sendable {
     case settle(threadID: String, through: Int64)
     case unsettle(threadID: String, through: Int64)
     case setChangesView(threadID: String, view: ChangesView?)
+    case mute(threadID: String)
+    case unmute(threadID: String)
 
     private enum CodingKeys: String, CodingKey { case op, threadId, scopeId, through, name, purpose, view }
 
@@ -142,6 +147,8 @@ enum ConversationMarkChange: Codable, Equatable, Sendable {
         case "unsettle": self = .unsettle(threadID: try thread(), through: try container.decode(Int64.self, forKey: .through))
         case "setChangesView":
             self = .setChangesView(threadID: try thread(), view: try container.decodeIfPresent(ChangesView.self, forKey: .view))
+        case "mute": self = .mute(threadID: try thread())
+        case "unmute": self = .unmute(threadID: try thread())
         case let op:
             throw DecodingError.dataCorruptedError(forKey: .op, in: container, debugDescription: "unknown mark change \(op)")
         }
@@ -190,6 +197,12 @@ enum ConversationMarkChange: Codable, Equatable, Sendable {
             try container.encode("setChangesView", forKey: .op)
             try container.encode(threadID, forKey: .threadId)
             try container.encodeIfPresent(view, forKey: .view)
+        case let .mute(threadID):
+            try container.encode("mute", forKey: .op)
+            try container.encode(threadID, forKey: .threadId)
+        case let .unmute(threadID):
+            try container.encode("unmute", forKey: .op)
+            try container.encode(threadID, forKey: .threadId)
         }
     }
 }
@@ -205,6 +218,7 @@ struct ConversationMarks: Codable, Equatable, Sendable {
     static let settlementSchemaVersion = 2
     static let changesViewSchemaVersion = 4
     static let pinFlagSchemaVersion = 5
+    static let muteSchemaVersion = 6
 
     var schemaVersion: Int
     var revision: UInt64
@@ -219,6 +233,10 @@ struct ConversationMarks: Codable, Equatable, Sendable {
     var offersSettlement: Bool { schemaVersion >= Self.settlementSchemaVersion }
 
     var offersChangesViews: Bool { schemaVersion >= Self.changesViewSchemaVersion }
+
+    var offersMute: Bool { schemaVersion >= Self.muteSchemaVersion }
+
+    func isMuted(_ threadID: String) -> Bool { threads[threadID]?.muted == true }
 
     func changesView(of threadID: String) -> ChangesView? {
         offersChangesViews ? threads[threadID]?.changesView ?? .standard : nil
@@ -346,6 +364,10 @@ struct ConversationMarks: Codable, Equatable, Sendable {
             }
         case let .setChangesView(threadID, view):
             update(threadID) { $0.changesView = view == .standard ? nil : view }
+        case let .mute(threadID):
+            update(threadID) { $0.muted = true }
+        case let .unmute(threadID):
+            update(threadID) { $0.muted = false }
         }
         return next
     }
@@ -513,6 +535,7 @@ struct ConversationMarksReplica: Codable, Equatable, Sendable {
             switch entry.change {
             case .settle, .unsettle: !marks.offersSettlement
             case .setChangesView: !marks.offersChangesViews
+            case .mute, .unmute: !marks.offersMute
             case .pinFlag: !marks.usesPinFlag
             default: false
             }

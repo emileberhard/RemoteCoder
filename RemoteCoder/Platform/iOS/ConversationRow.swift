@@ -137,6 +137,12 @@ struct ConversationRow: View, Equatable {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Pinned")
             }
+            if row.isMuted {
+                Image(systemName: "bell.slash")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Muted")
+            }
             if let count = row.questionCount, count > 0 {
                 HStack(spacing: 2) {
                     Image(systemName: "questionmark.bubble")

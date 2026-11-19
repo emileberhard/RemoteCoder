@@ -13,6 +13,8 @@ struct ConversationHistoryActions {
     let moveUnder: (ConversationAddress) -> Void
     let markRead: ([ConversationAddress]) -> Void
     let markUnread: (ConversationAddress) -> Void
+    let mute: (ConversationAddress) -> Void
+    let unmute: (ConversationAddress) -> Void
     let settle: ([ConversationAddress]) -> Void
     let unsettle: ([ConversationAddress]) -> Void
     let openDraft: (UnsentDraftAddress) -> Void
@@ -36,6 +38,7 @@ struct ConversationHistoryActions {
         }
         items.append(ContextMenuItem(title: "Move under…", systemImage: "person.2") { moveUnder(row.address) })
         items.append(readToggle(for: row))
+        if let toggle = muteToggle(for: row) { items.append(toggle) }
         items.append(ContextMenuItem(title: "Fork", systemImage: "arrow.triangle.branch") { fork(row.address) })
         if let toggle = settlementToggle(for: row) { items.append(toggle) }
         if let link = row.address.codexDesktopLink {
@@ -54,6 +57,14 @@ struct ConversationHistoryActions {
             ContextMenuItem(title: "Settle", systemImage: ConversationSettlementSymbol.settle) { settle([row.address]) }
         } else {
             nil
+        }
+    }
+
+    func muteToggle(for row: ConversationSidebarRow) -> ContextMenuItem? {
+        switch row.notifications {
+        case .unavailable: nil
+        case .enabled: ContextMenuItem(title: "Mute", systemImage: "bell.slash") { mute(row.address) }
+        case .muted: ContextMenuItem(title: "Unmute", systemImage: "bell") { unmute(row.address) }
         }
     }
 

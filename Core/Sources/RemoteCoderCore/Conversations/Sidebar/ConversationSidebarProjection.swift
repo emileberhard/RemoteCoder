@@ -28,6 +28,7 @@ struct ConversationSidebarRow: Identifiable, Equatable, Sendable {
     var settlement: Settlement = .unavailable
     var isProbablyDone = false
     var needsInput = false
+    var notifications: Notifications = .unavailable
 
     enum Settlement: Equatable, Sendable {
         case unavailable
@@ -35,7 +36,14 @@ struct ConversationSidebarRow: Identifiable, Equatable, Sendable {
         case settled
     }
 
+    enum Notifications: Equatable, Sendable {
+        case unavailable
+        case enabled
+        case muted
+    }
+
     var isSettled: Bool { settlement == .settled }
+    var isMuted: Bool { notifications == .muted }
     var canSettle: Bool { settlement == .unsettled && activity != .working }
 }
 
@@ -319,7 +327,8 @@ enum ConversationSidebarProjection {
                     questionCount: questionCount,
                     settlement: !host.marks.offersSettlement ? .unavailable : isSettled ? .settled : .unsettled,
                     isProbablyDone: !live.isLive && !isSettled && host.marks.isProbablyDone(thread),
-                    needsInput: live.tier == .needsYou
+                    needsInput: live.tier == .needsYou,
+                    notifications: !host.marks.offersMute ? .unavailable : host.marks.isMuted(thread.id) ? .muted : .enabled
                 )
                 slots.append(Slot(
                     row: row,

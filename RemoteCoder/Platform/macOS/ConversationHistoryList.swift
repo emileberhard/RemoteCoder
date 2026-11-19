@@ -418,6 +418,10 @@ struct ConversationSourceRow: View, Equatable {
                     Image(systemName: "clock.arrow.circlepath")
                         .accessibilityLabel("Automation")
                 }
+                if row.isMuted {
+                    Image(systemName: "bell.slash")
+                        .accessibilityLabel("Muted")
+                }
                 Text(folderName)
                     .truncationMode(.middle)
                 if let hostName {

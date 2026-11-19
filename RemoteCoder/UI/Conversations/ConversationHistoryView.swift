@@ -198,6 +198,14 @@ struct ConversationHistoryView: View {
                 workspace.markUnread(address)
                 HapticService.shared.play(.toggleOn)
             },
+            mute: { address in
+                workspace.mute(address)
+                HapticService.shared.play(.toggleOff)
+            },
+            unmute: { address in
+                workspace.unmute(address)
+                HapticService.shared.play(.toggleOn)
+            },
             settle: settle,
             unsettle: unsettle,
             openDraft: onOpenDraft,

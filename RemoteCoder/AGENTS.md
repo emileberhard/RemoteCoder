@@ -1539,8 +1539,9 @@ entrypoint linked above.
   listed. Pull-to-refresh (iOS) requests up to 200 through cursor pagination, then
   merges and persists them.
 - Rows have a context menu to pin, rename, unpin, regenerate a row's
-  name through `conversation/title/regenerate`, mark as read or unread, fork,
-  settle (not while it is running) or unsettle, and copy a reference. On iOS a
+  name through `conversation/title/regenerate`, mark as read or unread, mute or
+  unmute (marks schema 6; a muted row shows `bell.slash`), fork, settle (not
+  while it is running) or unsettle, and copy a reference. On iOS a
   leading swipe toggles read state and a trailing swipe settles or unsettles.
   A settle from the drawer or sidebar offers Undo for five seconds, which
   restores the prior pin and unread state. Settle Conversation (⇧⌘S, in the

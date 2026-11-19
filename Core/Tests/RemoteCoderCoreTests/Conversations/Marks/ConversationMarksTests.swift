@@ -139,6 +139,25 @@ struct ConversationMarksTests {
         #expect(decoded.changesView(of: "t") == .lastTurn)
     }
 
+    @Test func muteIsOfferedFromSchemaSixAndIsAMarkOfItsOwn() throws {
+        let current = ConversationMarks(schemaVersion: 6, revision: 1, readBaseline: 0, threads: [:])
+        let muted = current.applying(.mute(threadID: "t"))
+        #expect(muted.offersMute && muted.isMuted("t") && muted.marks(for: "t") != nil)
+        #expect(!muted.applying(.unmute(threadID: "t")).isMuted("t"))
+        #expect(muted.applying(.settle(threadID: "t", through: 5)).isMuted("t"))
+
+        let change = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ConversationMarkChange.mute(threadID: "t"))) as? NSDictionary
+        #expect(change == ["op": "mute", "threadId": "t"])
+        #expect(try JSONDecoder().decode(ConversationMarkChange.self, from: Data(#"{"op":"unmute","threadId":"t"}"#.utf8)) == .unmute(threadID: "t"))
+        let decoded = try JSONDecoder().decode(ConversationMarks.self, from: Data(#"{"schemaVersion":6,"revision":2,"readBaseline":0,"threads":{"t":{"revision":2,"muted":true}}}"#.utf8))
+        #expect(decoded.isMuted("t"))
+
+        var replica = ConversationMarksReplica(acknowledged: current)
+        replica.record(.mute(threadID: "t"))
+        replica.replaceAcknowledged(ConversationMarks(schemaVersion: 5, revision: 1, readBaseline: 0, threads: [:]))
+        #expect(replica.pending.isEmpty && !replica.effective.offersMute)
+    }
+
     @Test func restoringStoredCommandsPreservesGlobalMarksOrderIdentityAndLimit() {
         let storedMark = ConversationMarksReplica.Pending(id: UUID(), change: .markAllRead(through: 300))
         let admitted = ConversationMarksReplica.Pending(id: UUID(), change: .pin(threadID: "t", name: "New"))
