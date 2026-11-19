@@ -1,6 +1,8 @@
 use super::{ApnsSend, Gateway};
+use crate::time::unix_seconds;
 use serde_json::json;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 impl Gateway {
     pub(super) async fn apns_completion_loop(&self, mut rx: mpsc::Receiver<ApnsSend>) {
@@ -8,13 +10,15 @@ impl Gateway {
             if self.apns.check_alert_registration("alert").await.is_err() {
                 continue;
             }
+            let thread_id = apns.payload["sessionID"].as_str();
+            let event_id = apns.payload["eventID"].as_str();
+            if self.is_conversation_muted(thread_id, event_id).await {
+                self.record_user_alert_suppression(thread_id, "alert", event_id, "muted");
+                continue;
+            }
 
             if self
-                .check_user_alert_ownership(
-                    apns.payload["sessionID"].as_str(),
-                    "alert",
-                    apns.payload["eventID"].as_str(),
-                )
+                .check_user_alert_ownership(thread_id, "alert", event_id)
                 .await
                 .is_err()
             {
@@ -78,6 +82,26 @@ impl Gateway {
         };
         self.record_user_alert_suppression(thread_id, event, event_id, reason);
         Err(reason)
+    }
+
+    async fn is_conversation_muted(&self, thread_id: Option<&str>, event_id: Option<&str>) -> bool {
+        let Some(thread_id) = thread_id.filter(|id| !id.trim().is_empty()) else {
+            return false;
+        };
+        match self
+            .marks
+            .is_muted(thread_id.to_owned(), unix_seconds() as i64)
+            .await
+        {
+            Ok(muted) => muted,
+            Err(error) => {
+                warn!(
+                    thread_id,
+                    event_id, "conversation mute state unreadable; delivering: {error:#}"
+                );
+                false
+            }
+        }
     }
 
     pub(crate) fn record_user_alert_suppression(

@@ -816,6 +816,133 @@ async fn user_alert_gate_preserves_roots_and_silences_all_child_events() {
 }
 
 #[tokio::test]
+async fn muted_conversations_get_no_automatic_alerts_but_keep_explicit_ones() {
+    const MUTED: &str = "3f1e6d2a-8b4c-4d5e-9f60-718293a4b5c6";
+    const LOUD: &str = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+    let claude_test = crate::providers::claude::settings::ClaudeSettings::isolated_for_test();
+    use axum::{Json, Router, extract::State, routing::post};
+    let directory = tempfile::tempdir().unwrap();
+    let journal = Journal::disabled();
+    let (broker_tx, mut broker_rx) = mpsc::channel::<Value>(32);
+    let app = Router::new()
+        .route(
+            "/v1/internal/alert",
+            post(
+                |State(tx): State<mpsc::Sender<Value>>, Json(body): Json<Value>| async move {
+                    tx.send(body).await.unwrap();
+                    Json(json!({"apns_id":"fixture"}))
+                },
+            ),
+        )
+        .with_state(broker_tx);
+    let (address, server) = crate::test_support::serve(app).await;
+    let notifier = Arc::new(
+        crate::push::PushService::fixture_broker(
+            format!("http://{address}"),
+            journal.clone(),
+            None,
+        )
+        .await,
+    );
+    let home = directory.path().join("codex-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let gateway = Gateway::construct_with_apns(
+        GatewayConstruction {
+            user_name: None,
+            codex: Arc::new(CodexAppServer::new_for_test_socket(home)),
+            claude_settings: claude_test.settings.clone(),
+            journal,
+            session_catalog: super::super::sessions::CatalogConfig::fixture(
+                directory.path().join("catalog-fixture"),
+            ),
+            turn_state_path: Some(directory.path().join("state/turn-state.json")),
+            recovery_path: None,
+            call_delivery: None,
+            external_auth: None,
+            external_providers: None,
+            conversation_search_provider: None,
+        },
+        notifier,
+    );
+    gateway.jobs.initialize().await.unwrap();
+    let mut control_rx = crate::test_support::FakeControl::attach(&gateway, 8)
+        .await
+        .requests;
+    let responder_owner = Arc::clone(&gateway);
+    let responder = tokio::spawn(async move {
+        while let Some(raw) = control_rx.recv().await {
+            let request: Value = serde_json::from_str(&raw).unwrap();
+            let thread = request["params"]["threadId"].clone();
+            responder_owner
+                .control_requests
+                .lock()
+                .unwrap()
+                .remove(request["id"].as_str().unwrap())
+                .unwrap()
+                .send(Ok(json!({"thread":{"id":thread,"source":"appServer"}})))
+                .unwrap();
+        }
+    });
+    let completions = |round: &str| {
+        let (tx, rx) = mpsc::channel(4);
+        for thread in [MUTED, LOUD] {
+            let event = format!("{thread}:{round}");
+            tx.try_send(ApnsSend {
+                collapse_id: event.clone(),
+                title: "Fixture".into(),
+                subtitle: String::new(),
+                body: "Fixture".into(),
+                payload: json!({"eventID":event,"sessionID":thread,"source":"codex","outcome":"success"}),
+            })
+            .unwrap();
+        }
+        rx
+    };
+    let mut delivered = || -> HashSet<String> {
+        std::iter::from_fn(|| broker_rx.try_recv().ok())
+            .map(|body| body["collapse_id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    use crate::conversation_marks::Change;
+    let muted = MUTED.to_string();
+    gateway
+        .marks
+        .update(
+            vec![Change::Mute {
+                thread_id: muted.clone(),
+            }],
+            100,
+        )
+        .await
+        .unwrap();
+    gateway.apns_completion_loop(completions("muted")).await;
+    gateway
+        .send_user_alert("Fixture", "Fixture", Some(MUTED))
+        .await
+        .unwrap();
+    assert_eq!(
+        delivered(),
+        HashSet::from([format!("{LOUD}:muted"), format!("agent-notify:{MUTED}")])
+    );
+
+    gateway
+        .marks
+        .update(vec![Change::Unmute { thread_id: muted }], 100)
+        .await
+        .unwrap();
+    gateway.apns_completion_loop(completions("unmuted")).await;
+    assert_eq!(
+        delivered(),
+        HashSet::from([format!("{MUTED}:unmuted"), format!("{LOUD}:unmuted")])
+    );
+    responder.abort();
+    let _ = responder.await;
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn unavailable_push_registration_never_starts_ancestry_work() {
     let gateway = gateway();
     let mut control_rx = crate::test_support::FakeControl::attach(&gateway, 1)

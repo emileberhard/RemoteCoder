@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
-const OWNERS: [&str; 17] = [
+const OWNERS: [&str; 18] = [
     "account-enrollments.json",
     "conversation-handoffs.json",
     "claude-restart-recovery.json",
@@ -23,6 +23,7 @@ const OWNERS: [&str; 17] = [
     "live-activity-finished-turns.json",
     "conversation-marks.v3.json",
     "conversation-marks.v4.json",
+    "conversation-marks.v5.json",
     crate::conversation_marks::FILE_NAME,
 ];
 const PROFILE_OWNERS: [&str; 5] = [

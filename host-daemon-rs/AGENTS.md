@@ -658,13 +658,13 @@ blocks startup or provider journal retirement.
   revisioned per-slot state with explicit coverage
   (`docs/async-questions.md`).
 - Conversation marks (`src/conversation_marks.rs`) are the host's pins, read
-  state, purposes, settlements, done suggestions and changes views, in
-  `conversation-marks.v5.json` beside the turn state (schema version 5, at most 8 MiB, unknown fields rejected). One
+  state, purposes, settlements, done suggestions, changes views and mutes, in
+  `conversation-marks.v6.json` beside the turn state (schema version 6, at most 8 MiB, unknown fields rejected). One
   owner serializes every read-modify-write. `conversation/marks/read` returns
   `{schemaVersion, revision, readBaseline, threads, supportsRetiredScopeRead: true}`, creating the document
   with a read baseline of now; `conversation/marks/update` (`{changes}`, at
   most 500 of `markRead`, `markUnread`, `markAllRead`, `markRetiredScopeRead`, `pin`, `unpin`,
-  `setPurpose`, `settle`, `unsettle`, `setChangesView`) validates every change first
+  `setPurpose`, `settle`, `unsettle`, `setChangesView`, `mute`, `unmute`) validates every change first
   (`-32602`), then returns `{delta}`, `null` when nothing changed, and
   broadcasts the same delta, which also carries `schemaVersion`, as
   `conversation/marks/changed`. Only a full read carries the retirement support
@@ -713,10 +713,14 @@ blocks startup or provider journal retirement.
   a write. Codex uses the native turn completion time; Claude uses the transcript
   header completion time, matching the drawer's sources. Suggestions never
   change settlement, read state or pins.
+- A thread's `muted` Boolean (`mute`/`unmute`, `{threadId}`) is independent of
+  every other mark; settlement and unpinning leave it, and forgetting a deleted
+  thread clears it.
 - Marks migration (`src/conversation_marks/migration.rs`): every marks context,
-  the host and each account state directory, imports schema 4, 3 or 2 in newest-first
-  order on the first load without a v5 file, preserving marks and pending native
-  unarchives. Frozen prior types map each pin name to a pin flag and a durable
+  the host and each account state directory, imports schema 5, 4, 3 or 2 in newest-first
+  order on the first load without a v6 file, preserving marks and pending native
+  unarchives. Schema 5 differs only by lacking `muted`, so it loads through the
+  current document and keeps its pins, manual names and pending renames. Frozen prior types map each pin name to a pin flag and a durable
   `pendingRenames` entry. The control-owned drain runs on readiness and new
   entries through the per-thread rename serial owner. It skips the current
   name, or an untitled pin whose name without a trailing ellipsis appears in the
@@ -968,6 +972,15 @@ web and already installed native builds.
   preflight. Display caches, parent routability and message text never establish
   root eligibility. Each lookup journals coverage and duration. This gate changes
   only user alerts; completion evidence and parent callbacks remain intact.
+- Mute: a conversation's `muted` mark silences its automatic alerts, the turn
+  completions and Codex questions that `apns_completion_loop` delivers. The loop
+  reads the mark before the ancestry gate and journals `reason: "muted"`.
+  `notify_user` and the gateway's failure alerts (`send_user_alert`: a Claude
+  task that was not resumed, a paused queued message) and agent-result attention
+  bypass it: an agent decides for itself when to notify, and a dead or paused
+  agent cannot. Unreadable marks deliver, as before mute existed. The gateway
+  owns the mark because it alone decides to push, so one toggle covers every
+  device and survives app reinstalls; clients only show and change it.
   Native Claude children share the root runtime's MCP
   identity, so a runtime-owned `PreToolUse` hook supplies their provider-generated
   `agent_id` before MCP dispatch. Only `mcp__remotecoder__notify_user` matches.

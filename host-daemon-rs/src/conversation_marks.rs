@@ -9,9 +9,10 @@ use tokio::sync::Semaphore;
 
 mod migration;
 
-pub(crate) const SCHEMA_VERSION: u32 = 5;
-pub(crate) const FILE_NAME: &str = "conversation-marks.v5.json";
-pub(crate) const PRIOR_FILE_NAMES: [&str; 4] = [
+pub(crate) const SCHEMA_VERSION: u32 = 6;
+pub(crate) const FILE_NAME: &str = "conversation-marks.v6.json";
+pub(crate) const PRIOR_FILE_NAMES: [&str; 5] = [
+    "conversation-marks.v5.json",
     "conversation-marks.v4.json",
     "conversation-marks.v3.json",
     "conversation-marks.v2.json",
@@ -97,6 +98,8 @@ pub(crate) struct ThreadMarks {
     pub done_through: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes_view: Option<ChangesView>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
 }
 
 impl ThreadMarks {
@@ -109,6 +112,7 @@ impl ThreadMarks {
             && self.settlement.is_none()
             && self.done_through.is_none()
             && self.changes_view.is_none()
+            && !self.muted
     }
 
     fn mark_read_through(&mut self, through: i64) {
@@ -160,6 +164,12 @@ pub(crate) enum Change {
         thread_id: String,
         view: Option<ChangesView>,
     },
+    Mute {
+        thread_id: String,
+    },
+    Unmute {
+        thread_id: String,
+    },
 }
 
 impl Change {
@@ -172,7 +182,9 @@ impl Change {
             | Self::SetPurpose { thread_id, .. }
             | Self::Settle { thread_id, .. }
             | Self::Unsettle { thread_id, .. }
-            | Self::SetChangesView { thread_id, .. } => Some(thread_id),
+            | Self::SetChangesView { thread_id, .. }
+            | Self::Mute { thread_id }
+            | Self::Unmute { thread_id } => Some(thread_id),
             Self::MarkAllRead { .. } | Self::MarkRetiredScopeRead { .. } => None,
         }
     }
@@ -450,6 +462,8 @@ impl<'a> Transition<'a> {
             Change::SetChangesView { thread_id, view } => {
                 self.update(&thread_id, |marks| marks.changes_view = view)
             }
+            Change::Mute { thread_id } => self.update(&thread_id, |marks| marks.muted = true),
+            Change::Unmute { thread_id } => self.update(&thread_id, |marks| marks.muted = false),
         }
         Ok(())
     }
@@ -593,6 +607,22 @@ impl ConversationMarksStore {
                     manual_name: marks.is_some_and(|mark| mark.manual_name),
                     pending_rename: document.pending_renames.contains_key(&thread_id),
                 },
+                created,
+            ))
+        })
+        .await
+    }
+
+    pub(crate) async fn is_muted(&self, thread_id: String, now: i64) -> Result<bool> {
+        if self.location.is_none() {
+            return Ok(false);
+        }
+        self.transaction(now, move |document, created| {
+            Ok((
+                document
+                    .threads
+                    .get(&thread_id)
+                    .is_some_and(|marks| marks.muted),
                 created,
             ))
         })
@@ -979,6 +1009,49 @@ mod tests {
             serde_json::from_value::<Change>(serde_json::json!({"op": "setChangesView",
                 "threadId": "a", "view": {"kind": "lastTurn", "turnId": "t"}}))
             .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn muting_survives_settlement_and_is_the_only_mark_a_thread_can_hold() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = store(&directory);
+        store.read(100).await.unwrap();
+        let muted = store
+            .update(
+                vec![change(serde_json::json!({"op":"mute","threadId":"a"}))],
+                200,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(muted.threads["a"].muted);
+        assert!(store.is_muted("a".into(), 200).await.unwrap());
+        assert!(!store.is_muted("b".into(), 200).await.unwrap());
+        store
+            .update(
+                vec![Change::Settle {
+                    thread_id: "a".into(),
+                    through: 150,
+                }],
+                300,
+            )
+            .await
+            .unwrap();
+        assert!(store.is_muted("a".into(), 300).await.unwrap());
+        store
+            .update(
+                vec![change(serde_json::json!({"op":"unmute","threadId":"a"}))],
+                400,
+            )
+            .await
+            .unwrap();
+        assert!(!store.is_muted("a".into(), 400).await.unwrap());
+        assert!(
+            !ConversationMarksStore::new(None)
+                .is_muted("a".into(), 400)
+                .await
+                .unwrap()
         );
     }
 

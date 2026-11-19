@@ -87,6 +87,18 @@ struct RecordedThread {
 }
 
 pub(super) fn import(location: &Location) -> Result<Option<Document>> {
+    if let Some(mut previous) = super::read_json::<Document>(
+        &location.directory.join("conversation-marks.v5.json"),
+        "version 5 conversation marks",
+    )? {
+        ensure!(
+            previous.schema_version == 5,
+            "unsupported conversation marks version"
+        );
+        previous.schema_version = SCHEMA_VERSION;
+        previous.validate()?;
+        return Ok(Some(previous));
+    }
     for (version, name) in [
         (4, "conversation-marks.v4.json"),
         (3, "conversation-marks.v3.json"),
@@ -136,6 +148,7 @@ pub(super) fn import(location: &Location) -> Result<Option<Document>> {
                         settlement: marks.settlement,
                         done_through: marks.done_through,
                         changes_view: marks.changes_view,
+                        muted: false,
                     },
                 )
             })
@@ -235,6 +248,7 @@ fn migrate(legacy: LegacyDocument, handoff_owned: &HashSet<String>) -> Document 
                 }),
                 done_through: None,
                 changes_view: None,
+                muted: false,
             };
             (!migrated.is_empty()).then_some((id, migrated))
         })
@@ -254,6 +268,38 @@ mod tests {
     use super::*;
     use crate::conversation_marks::{ConversationMarksStore, FILE_NAME};
     use std::fs;
+
+    #[tokio::test]
+    async fn version_five_wins_over_older_files_and_is_left_for_rollback() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("conversation-marks.v5.json");
+        let original = serde_json::json!({"schemaVersion":5,"revision":7,"readBaseline":10,
+            "threads":{"a":{"revision":6,"pinned":true,"manualName":true,"seenThrough":50}},
+            "pendingNativeUnarchive":["b"],
+            "pendingRenames":{"a":{"name":"Kept","revision":7}}})
+        .to_string();
+        fs::write(&path, &original).unwrap();
+        fs::write(
+            directory.path().join("conversation-marks.v4.json"),
+            serde_json::json!({"schemaVersion":4,"revision":1,"readBaseline":10,"threads":{}})
+                .to_string(),
+        )
+        .unwrap();
+        let store = ConversationMarksStore::new(Some(Location {
+            directory: directory.path().into(),
+            handoff_records: directory.path().join("handoffs"),
+        }));
+
+        let marks = store.read(100).await.unwrap();
+        assert_eq!((marks.schema_version, marks.revision), (SCHEMA_VERSION, 7));
+        let a = &marks.threads["a"];
+        assert!(a.pinned && a.manual_name && !a.muted);
+        assert_eq!(a.seen_through, Some(50));
+        assert_eq!(store.pending_renames(100).await.unwrap()["a"].name, "Kept");
+        assert_eq!(store.pending_native_unarchives(100).await.unwrap(), ["b"]);
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
+        assert!(directory.path().join(FILE_NAME).exists());
+    }
 
     #[tokio::test]
     async fn version_four_pins_become_flags_and_durable_pending_names() {
