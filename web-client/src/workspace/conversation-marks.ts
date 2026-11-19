@@ -16,6 +16,7 @@ export type ThreadMarks = {
   settlement?: ConversationSettlement;
   doneThrough?: number;
   changesView?: ChangesView;
+  muted?: boolean;
 };
 export type ConversationMarks = {
   schemaVersion: number;
@@ -31,7 +32,7 @@ export type MarkedConversation = {
 };
 export type ConversationMarkChange =
   | { op: "markRead" | "settle" | "unsettle"; threadId: string; through: number }
-  | { op: "markUnread" | "unpin"; threadId: string }
+  | { op: "markUnread" | "unpin" | "mute" | "unmute"; threadId: string }
   | { op: "pin"; threadId: string; name?: string }
   | { op: "setPurpose"; threadId: string; purpose: ConversationPurpose }
   | { op: "setChangesView"; threadId: string; view: ChangesView | null }
@@ -89,6 +90,8 @@ export function decodeMarkChange(value: unknown): ConversationMarkChange {
       return { op: entry.op, threadId, through: integer(entry.through, "through") };
     case "markUnread":
     case "unpin":
+    case "mute":
+    case "unmute":
       return { op: entry.op, threadId };
     case "pin":
       return entry.name === undefined
@@ -123,6 +126,10 @@ export function decodeConversationMarks(value: unknown): ConversationMarks {
       marks.pinned = row.pinned;
     }
     if (row.changesView != null) marks.changesView = decodeChangesView(row.changesView);
+    if (row.muted != null) {
+      if (typeof row.muted !== "boolean") throw new Error("Invalid muted mark");
+      marks.muted = row.muted;
+    }
     if (row.purpose != null) marks.purpose = purpose(row.purpose);
     if (row.settlement != null) {
       const settlement = object(row.settlement);
@@ -210,6 +217,10 @@ export function applyMarkChange(base: ConversationMarks, change: ConversationMar
       marks.settlement = { state: "active", through: change.through };
       marks.doneThrough = undefined;
       break;
+    case "mute":
+    case "unmute":
+      marks.muted = change.op === "mute";
+      break;
   }
   if (marks.seenThrough !== undefined && marks.seenThrough <= base.readBaseline)
     marks.seenThrough = undefined;
@@ -234,6 +245,9 @@ export function isUnseenQuestion(marks: ConversationMarks, askedAtMs: number, th
 export function isPinned(marks: ConversationMarks, threadId: string): boolean {
   const row = marks.threads[threadId];
   return marks.schemaVersion >= 5 ? row?.pinned === true : row?.pinName !== undefined;
+}
+export function isMuted(marks: ConversationMarks, threadId: string): boolean {
+  return marks.threads[threadId]?.muted === true;
 }
 export function isProbablyDone(marks: ConversationMarks, thread: MarkedConversation): boolean {
   const row = marks.threads[thread.id];

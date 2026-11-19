@@ -3,6 +3,7 @@ import {
   applyMarkChange,
   coversRequest,
   decodeConversationMarks,
+  isMuted,
   isProbablyDone,
   isSettled,
   isUnread,
@@ -93,4 +94,19 @@ test("schema 5 pin protects against settlement and done without a pin name", () 
   const unpinned = applyMarkChange(marks, { op: "unpin", threadId: "t" });
   expect(isSettled(unpinned, thread, false, 999999)).toBe(true);
   expect(isProbablyDone(unpinned, thread)).toBe(true);
+});
+
+test("a mute survives settlement, decodes from the host and clears on unmute", () => {
+  const marks = decodeConversationMarks({
+    schemaVersion: 6,
+    revision: 2,
+    readBaseline: 100,
+    threads: { t: { revision: 2, muted: true } },
+  });
+  expect(isMuted(marks, "t")).toBe(true);
+  expect(isMuted(applyMarkChange(marks, { op: "settle", threadId: "t", through: 120 }), "t")).toBe(true);
+  expect(isMuted(applyMarkChange(marks, { op: "unmute", threadId: "t" }), "t")).toBe(false);
+  expect(() => decodeConversationMarks({ ...marks, threads: { t: { revision: 2, muted: "yes" } } })).toThrow(
+    "Invalid muted mark",
+  );
 });

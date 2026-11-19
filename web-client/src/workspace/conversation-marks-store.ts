@@ -27,6 +27,7 @@ const threadValues = (marks: ThreadMarks | undefined) =>
     marks?.settlement?.through,
     marks?.doneThrough,
     marks?.changesView,
+    marks?.muted ?? false,
   ]);
 
 export class ConversationMarksStore {
@@ -146,6 +147,11 @@ export class ConversationMarksStore {
       (this.replica.acknowledged?.schemaVersion ?? 0) < 2
     )
       throw new Error("Settlement is unavailable until a compatible marks snapshot is read");
+    if (
+      validated.some((change) => change.op === "mute" || change.op === "unmute") &&
+      (this.replica.acknowledged?.schemaVersion ?? 0) < 6
+    )
+      throw new Error("Muting requires a compatible marks snapshot from the host.");
     if (this.replica.pending.length + validated.length > pendingLimit)
       throw new Error(
         "Two thousand conversation changes await synchronization; sync them before adding more",
@@ -193,10 +199,16 @@ export class ConversationMarksStore {
     if (this.controller.signal.aborted) throw new Error("The conversation marks context was retired");
   }
   private commit(next: Replica) {
-    if (next.acknowledged && next.acknowledged.schemaVersion < 2)
+    const schema = next.acknowledged?.schemaVersion;
+    if (schema !== undefined && schema < 6)
       next = {
         ...next,
-        pending: next.pending.filter(({ change }) => change.op !== "settle" && change.op !== "unsettle"),
+        pending: next.pending.filter(
+          ({ change }) =>
+            change.op !== "mute" &&
+            change.op !== "unmute" &&
+            (schema >= 2 || (change.op !== "settle" && change.op !== "unsettle")),
+        ),
       };
     const serialized = JSON.stringify(next);
     if (serialized.length > storageLimit)

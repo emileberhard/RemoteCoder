@@ -1,4 +1,5 @@
 import {
+  BellOff,
   Check,
   CircleCheck,
   CircleHelp,
@@ -76,6 +77,7 @@ export function ConversationRow({
           <span className="history-status">
             {row.isAutomation && <History size={11} aria-label="Automation" />}
             {row.isPinned && <Pin size={11} className="pin-mark" aria-label="Pinned" />}
+            {row.notifications === "muted" && <BellOff size={11} aria-label="Muted" />}
             {questions > 0 && (
               <span
                 className="question-badge"

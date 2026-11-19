@@ -845,6 +845,12 @@ export class Workspace {
   unpinConversation(address: Address) {
     this.sidebar.record(address, [{ op: "unpin", threadId: address.threadId }]);
   }
+  muteConversation(address: Address) {
+    this.sidebar.record(address, [{ op: "mute", threadId: address.threadId }]);
+  }
+  unmuteConversation(address: Address) {
+    this.sidebar.record(address, [{ op: "unmute", threadId: address.threadId }]);
+  }
   markConversationRead(address: Address) {
     this.sidebar.record(address, [
       {

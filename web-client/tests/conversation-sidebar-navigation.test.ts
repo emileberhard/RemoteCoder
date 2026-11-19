@@ -30,6 +30,7 @@ function row(threadId: string, changes: Partial<ConversationSidebarRow> = {}): C
     canSettle: true,
     canRename: true,
     canRegenerateName: true,
+    notifications: "enabled",
     ...changes,
   };
 }

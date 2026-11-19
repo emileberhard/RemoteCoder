@@ -7,6 +7,7 @@ import { type ConversationHeader, isDelegatedAgent, latestActivityAt } from "./c
 import {
   type ConversationMarks,
   coversRequest,
+  isMuted,
   isPinned,
   isProbablyDone,
   isSettled,
@@ -57,6 +58,7 @@ export type ConversationSidebarRow = Readonly<{
   canSettle: boolean;
   canRename: boolean;
   canRegenerateName: boolean;
+  notifications: "unavailable" | "enabled" | "muted";
 }>;
 export type ConversationSectionSummary = Readonly<{
   fold: "expanded" | "folded" | "searching";
@@ -108,7 +110,14 @@ type RankInput = Pick<
 >;
 export type ConversationRowMarkState = Pick<
   ConversationSidebarRow,
-  "title" | "isPinned" | "isUnread" | "settlement" | "canSettle" | "canRename" | "canRegenerateName"
+  | "title"
+  | "isPinned"
+  | "isUnread"
+  | "settlement"
+  | "canSettle"
+  | "canRename"
+  | "canRegenerateName"
+  | "notifications"
 >;
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const marked = (thread: ConversationHeader) => ({
@@ -148,6 +157,7 @@ function rank(thread: ConversationHeader, host: RankInput, now: number): Rank {
 }
 function rowMarkState(
   marks: ConversationMarks | undefined,
+  threadId: string,
   pin: boolean,
   settled: boolean,
   unread: boolean | null,
@@ -168,6 +178,8 @@ function rowMarkState(
     isUnread: unread,
     settlement,
     canSettle: settlement === "unsettled" && activity !== "working",
+    notifications:
+      !marks || marks.schemaVersion < 6 ? "unavailable" : isMuted(marks, threadId) ? "muted" : "enabled",
   };
 }
 function conversationTitle(thread: ConversationHeader, pinName: string | undefined) {
@@ -189,6 +201,7 @@ export function conversationRowMarkState(
     ),
     ...rowMarkState(
       host.marks,
+      thread.id,
       pin,
       !pin && held.isSettled,
       live.isUnread,
@@ -297,7 +310,7 @@ export function projectConversationSidebar(
         continue;
       const asks = host.questionAskTimes.get(thread.id);
       const activity = host.activity.get(thread.id) ?? "unknown";
-      const markState = rowMarkState(marks, pin, settled, live.isUnread, activity);
+      const markState = rowMarkState(marks, thread.id, pin, settled, live.isUnread, activity);
       const row: ConversationSidebarRow = {
         id,
         address,

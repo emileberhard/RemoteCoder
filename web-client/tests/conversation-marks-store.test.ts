@@ -318,6 +318,7 @@ test("older gateway schema drops unsupported pending settlements and still synch
         { id: "unsettle", change: { op: "unsettle", threadId: "u", through: 100 } },
         { id: "unread", change: { op: "markUnread", threadId: "t" } },
         { id: "pin", change: { op: "pin", threadId: "t", name: "Pinned" } },
+        { id: "mute", change: { op: "mute", threadId: "t" } },
       ],
     }),
   );

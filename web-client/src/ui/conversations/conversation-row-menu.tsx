@@ -1,4 +1,6 @@
 import {
+  Bell,
+  BellOff,
   CircleCheck,
   Copy,
   Link,
@@ -83,6 +85,20 @@ export function ConversationRowMenu({
         >
           Mark as Unread
         </MenuItem>
+      )}
+      {row.notifications === "muted" ? (
+        <MenuItem icon={<Bell size={16} />} onSelect={() => run(() => workspace.unmuteConversation(address))}>
+          Unmute
+        </MenuItem>
+      ) : (
+        row.notifications === "enabled" && (
+          <MenuItem
+            icon={<BellOff size={16} />}
+            onSelect={() => run(() => workspace.muteConversation(address))}
+          >
+            Mute
+          </MenuItem>
+        )
       )}
       <MenuItem icon={<ForkIcon size={16} />} onSelect={() => run(() => workspace.fork(address))}>
         Fork
