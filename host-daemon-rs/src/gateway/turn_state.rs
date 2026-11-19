@@ -1,6 +1,6 @@
 use super::live_activity::{FinishedTurn, FinishedTurns};
 use super::{
-    ActiveTasksLiveActivitySnapshot, ApnsSend, DurableTurnState, Gateway, GatewayCoreState,
+    ActiveTasksLiveActivitySnapshot, AlertKind, ApnsSend, DurableTurnState, Gateway, GatewayCoreState,
     native_mutations,
 };
 use crate::time::unix_seconds;
@@ -518,6 +518,7 @@ fn note_turn_completed(
     Some((
         key,
         Some(ApnsSend {
+            kind: AlertKind::TurnCompletion,
             collapse_id: thread_id.clone(),
             title,
             subtitle,

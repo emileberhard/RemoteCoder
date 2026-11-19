@@ -1,6 +1,6 @@
 use super::*;
 use crate::agents::Capabilities;
-use crate::gateway::{ApnsSend, GatewayConstruction};
+use crate::gateway::{AlertKind, ApnsSend, GatewayConstruction};
 use crate::observability::journal::Journal;
 use crate::providers::codex::daemon::CodexAppServer;
 use std::collections::HashSet;
@@ -708,6 +708,7 @@ async fn user_alert_gate_preserves_roots_and_silences_all_child_events() {
         for outcome in [Some("success"), Some("failure"), Some("interrupted"), None] {
             let event = format!("{thread}:{}", outcome.unwrap_or("question"));
             tx.send(ApnsSend {
+                kind:if outcome.is_none() {AlertKind::Question} else {AlertKind::TurnCompletion},
                 collapse_id:event.clone(),title:"Fixture".into(),subtitle:String::new(),body:"Fixture".into(),
                 payload:json!({"eventID":event,"sessionID":thread,"source":if thread.starts_with("claude_") {"claude"} else {"codex"},"outcome":outcome,"questionItemID":if outcome.is_none() {Some("q")} else {None}})
             }).await.unwrap();
@@ -883,16 +884,21 @@ async fn muted_conversations_get_no_automatic_alerts_but_keep_explicit_ones() {
                 .unwrap();
         }
     });
-    let completions = |round: &str| {
+    let alerts = |round: &str| {
         let (tx, rx) = mpsc::channel(4);
-        for thread in [MUTED, LOUD] {
-            let event = format!("{thread}:{round}");
+        let question = format!("question:{MUTED}:{round}");
+        for (kind, thread, event) in [
+            (AlertKind::TurnCompletion, MUTED, format!("{MUTED}:{round}")),
+            (AlertKind::TurnCompletion, LOUD, format!("{LOUD}:{round}")),
+            (AlertKind::Question, MUTED, question),
+        ] {
             tx.try_send(ApnsSend {
+                kind,
                 collapse_id: event.clone(),
                 title: "Fixture".into(),
                 subtitle: String::new(),
                 body: "Fixture".into(),
-                payload: json!({"eventID":event,"sessionID":thread,"source":"codex","outcome":"success"}),
+                payload: json!({"eventID":event,"sessionID":thread,"source":"codex"}),
             })
             .unwrap();
         }
@@ -916,14 +922,18 @@ async fn muted_conversations_get_no_automatic_alerts_but_keep_explicit_ones() {
         )
         .await
         .unwrap();
-    gateway.apns_completion_loop(completions("muted")).await;
+    gateway.apns_completion_loop(alerts("muted")).await;
     gateway
         .send_user_alert("Fixture", "Fixture", Some(MUTED))
         .await
         .unwrap();
     assert_eq!(
         delivered(),
-        HashSet::from([format!("{LOUD}:muted"), format!("agent-notify:{MUTED}")])
+        HashSet::from([
+            format!("{LOUD}:muted"),
+            format!("question:{MUTED}:muted"),
+            format!("agent-notify:{MUTED}"),
+        ])
     );
 
     gateway
@@ -931,10 +941,14 @@ async fn muted_conversations_get_no_automatic_alerts_but_keep_explicit_ones() {
         .update(vec![Change::Unmute { thread_id: muted }], 100)
         .await
         .unwrap();
-    gateway.apns_completion_loop(completions("unmuted")).await;
+    gateway.apns_completion_loop(alerts("unmuted")).await;
     assert_eq!(
         delivered(),
-        HashSet::from([format!("{MUTED}:unmuted"), format!("{LOUD}:unmuted")])
+        HashSet::from([
+            format!("{MUTED}:unmuted"),
+            format!("{LOUD}:unmuted"),
+            format!("question:{MUTED}:unmuted"),
+        ])
     );
     responder.abort();
     let _ = responder.await;
@@ -950,6 +964,7 @@ async fn unavailable_push_registration_never_starts_ancestry_work() {
         .requests;
     let (tx, rx) = mpsc::channel(1);
     tx.send(ApnsSend {
+        kind: AlertKind::TurnCompletion,
         collapse_id: "disabled".into(),
         title: String::new(),
         subtitle: String::new(),

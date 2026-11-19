@@ -957,7 +957,7 @@ web and already installed native builds.
 
 ## Push notifications
 
-- `Gateway::check_user_alert_ownership` is the single eligibility gate for
+- `Gateway::check_user_alert_ownership` is the one ancestry gate for
   completion/question queue deliveries, `notify_user`, and restart-failure
   alerts. It reuses the Agents owner's `is_agent_thread`
   projection with its two-second bound. Verified children are silent for every
@@ -972,17 +972,6 @@ web and already installed native builds.
   preflight. Display caches, parent routability and message text never establish
   root eligibility. Each lookup journals coverage and duration. This gate changes
   only user alerts; completion evidence and parent callbacks remain intact.
-- Mute: a conversation's `muted` mark silences its automatic alerts, the turn
-  completions and Codex questions that `apns_completion_loop` delivers. The loop
-  reads the mark after the ancestry gate, right before broker submission, so a
-  mute acknowledged during that wait still applies, and journals
-  `reason: "muted"`. Each read parses the marks document under its lock.
-  `notify_user` and the gateway's failure alerts (`send_user_alert`: a Claude
-  task that was not resumed, a paused queued message) and agent-result attention
-  bypass it: an agent decides for itself when to notify, and a dead or paused
-  agent cannot. Unreadable marks deliver, as before mute existed. The gateway
-  owns the mark because it alone decides to push, so one toggle covers every
-  device and survives app reinstalls; clients only show and change it.
   Native Claude children share the root runtime's MCP
   identity, so a runtime-owned `PreToolUse` hook supplies their provider-generated
   `agent_id` before MCP dispatch. Only `mcp__remotecoder__notify_user` matches.
@@ -1020,6 +1009,18 @@ web and already installed native builds.
   and frozen schema-v2 codes, rerun the installed-CLI root/child/timeout/disabled-hook
   probes on both Macs, and verify exact-subject coverage and lookup latency with
   the matching configs checkout. Never convert unsupported coverage to root.
+- Mute: a conversation's `muted` mark silences its turn-completion alerts
+  (`AlertKind::TurnCompletion`). `apns_completion_loop` reads the mark after the
+  ancestry gate, right before broker submission, so a mute acknowledged during
+  that wait still applies, and journals `reason: "muted"`. Each read parses the
+  marks document under its lock. Codex questions (`AlertKind::Question`),
+  `notify_user`, the gateway's failure alerts (`send_user_alert`: a Claude task
+  that was not resumed, a paused queued message) and agent-result attention
+  bypass it: an agent decides for itself when to notify, and an agent that is
+  waiting on an answer, dead or paused cannot. A Claude question ends its turn
+  and is muted like any completion. Unreadable marks deliver, as before mute existed. The gateway
+  owns the mark because it alone decides to push, so one toggle covers every
+  device and survives app reinstalls; clients only show and change it.
 - Task-completion alerts go through the configured push broker on
   `turn/completed`, best effort. A connected originating client, or its
   temporary disconnect observer, supplies the authoritative completion.

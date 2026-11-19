@@ -203,8 +203,15 @@ struct GatewayCoreState {
     finished_turns: live_activity::FinishedTurns,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlertKind {
+    TurnCompletion,
+    Question,
+}
+
 #[derive(Debug, Clone)]
 struct ApnsSend {
+    kind: AlertKind,
     collapse_id: String,
     title: String,
     subtitle: String,

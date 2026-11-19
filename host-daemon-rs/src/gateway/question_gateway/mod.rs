@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use super::{ApnsSend, ClientTx, Gateway};
+use super::{AlertKind, ApnsSend, ClientTx, Gateway};
 use crate::notifications::notification_thread_id;
 use crate::observability::journal::Source;
 use crate::questions::{
@@ -819,6 +819,7 @@ impl Gateway {
             let dropped = match sender {
                 Some(sender) => sender
                     .try_send(ApnsSend {
+                        kind: AlertKind::Question,
                         collapse_id: format!("question:{thread}:{}", record.item_id),
                         title: "Codex has a question".into(),
                         subtitle: "".into(),

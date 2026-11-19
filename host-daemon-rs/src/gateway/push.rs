@@ -1,4 +1,4 @@
-use super::{ApnsSend, Gateway};
+use super::{AlertKind, ApnsSend, Gateway};
 use crate::time::unix_seconds;
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -19,7 +19,9 @@ impl Gateway {
             {
                 continue;
             }
-            if self.is_conversation_muted(thread_id, event_id).await {
+            if apns.kind == AlertKind::TurnCompletion
+                && self.is_conversation_muted(thread_id, event_id).await
+            {
                 self.record_user_alert_suppression(thread_id, "alert", event_id, "muted");
                 continue;
             }

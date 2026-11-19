@@ -703,6 +703,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let paths = HostPaths::from_home(home.path().to_owned()).unwrap();
         let backup = ClaudeStateBackup::new(&paths);
+        private_state::ensure_private_directory(&paths.state("")).unwrap();
         std::fs::write(paths.state("account-enrollments.json"), b"original").unwrap();
         capture(&backup, &home.path().join(".claude"), BTreeSet::new()).unwrap();
         let manifest_path = backup.backup.join("manifest.json");
