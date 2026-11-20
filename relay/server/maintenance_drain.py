@@ -206,21 +206,24 @@ def listener_queues(ports):
 
 
 def haproxy_command(request, deadline=None):
-    with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(5 if deadline is None else remaining_time(deadline))
-        connection.connect(str(MASTER_SOCKET))
-        connection.sendall((request + "\n").encode())
-        connection.shutdown(socket.SHUT_WR)
-        result = bytearray()
-        while True:
-            if deadline is not None:
-                connection.settimeout(remaining_time(deadline))
-            part = connection.recv(65536)
-            if not part:
-                break
-            result.extend(part)
-            if len(result) > 1024 * 1024:
-                raise RuntimeError("HAProxy status is too large")
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.settimeout(5 if deadline is None else remaining_time(deadline))
+            connection.connect(str(MASTER_SOCKET))
+            connection.sendall((request + "\n").encode())
+            connection.shutdown(socket.SHUT_WR)
+            result = bytearray()
+            while True:
+                if deadline is not None:
+                    connection.settimeout(remaining_time(deadline))
+                part = connection.recv(65536)
+                if not part:
+                    break
+                result.extend(part)
+                if len(result) > 1024 * 1024:
+                    raise RuntimeError("HAProxy status is too large")
+    except TimeoutError as error:
+        raise TimeoutError(f"HAProxy status socket: {error}") from error
     return result.decode()
 
 

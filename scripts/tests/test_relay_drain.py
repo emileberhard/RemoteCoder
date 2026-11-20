@@ -255,6 +255,35 @@ class RelayDrainTests(unittest.TestCase):
             ):
                 check(phase, error)
 
+    def test_haproxy_socket_timeout_names_its_inspection(self):
+        clock = [0.0]
+        calls = [0]
+
+        def snapshot(_identity, deadline):
+            calls[0] += 1
+            if calls[0] == 1:
+                return "tracked connections on port 443"
+            return drain.haproxy_command("show proc", deadline)
+
+        with (
+            patch.object(drain.time, "monotonic", side_effect=lambda: clock[0]),
+            patch.object(
+                drain.time,
+                "sleep",
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+            patch.object(drain, "candidate_snapshot", side_effect=snapshot),
+            patch.object(drain.socket, "socket") as socket_factory,
+            self.assertRaisesRegex(
+                TimeoutError,
+                "idle candidate timed out; last busy observation: tracked connections on port 443; cause: HAProxy status socket: timed out",
+            ),
+        ):
+            socket_factory.return_value.__enter__.return_value.connect.side_effect = (
+                TimeoutError("timed out")
+            )
+            drain.wait_for_candidate({}, 10)
+
     def test_two_clean_passes_follow_grace_and_a_busy_pass_resets_progress(self):
         clock = [0.0]
         passes = []
