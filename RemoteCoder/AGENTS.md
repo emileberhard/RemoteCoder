@@ -2033,7 +2033,12 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   capable host in that pass. Each foreground pass rereads the coordinator; when that fails it ends the activity and moves
   to another capable host. Removing the coordinator from the configured hosts ends it.
   Launch keeps one live activity whose coordinator is configured and ends every
-  other, including per-host activities from earlier builds. Without a capable
+  other, including per-host activities from earlier builds, at its first pass
+  outside the background. The service takes its first scene from the
+  application state, so a background launch, such as the Voice Mode intent's,
+  adopts the live activity but neither rereads, starts nor ends one: an
+  activity the system ended stays on the Lock Screen for hours and the intent
+  relies on it (see below). Without a capable
   gateway, no activity starts. The Mac arm is a no-op with the same API.
   Voice-call activities keep their own owner.
 - `RemoteCoderActiveTasksAttributes` carries `startedAt` and `coordinatorID`
@@ -2057,8 +2062,11 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   unavailable symbol. Content is always visible, never `privacySensitive`. The glyph is
   `Assets.xcassets/LiveActivityAppGlyph.imageset`.
 - Every call requests its `VoiceCallLiveActivity`: the Voice Mode intent
-  requires one (see below); in-app starts and answered agent calls request it
-  best effort, since ActivityKit refuses a request from the background.
+  requires a Live Activity (see below); in-app starts and answered agent calls
+  request it best effort, since ActivityKit refuses a request from the
+  background. A live call that never got one requests it when the app becomes
+  active (`VoiceCall.requestMissingLiveActivity`, from the workspace's
+  scene-active pass); one the person dismissed is not requested again.
   `VoiceCall` owns its content state (phase, mute, title and the agent's last
   finished line) and publishes only when one of them changes, never per
   transcript delta. `VoiceCallLiveActivity` bounds the host label, title and line in
@@ -2101,14 +2109,24 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
     it a background start fails with CallKit `invalidAction`. `perform()`
     starts the call itself through `ChatWorkspaceModel.startFreshVoiceCall`,
     so Siri and the Action Button start it on a locked device. AppIntents
-    traps an `AudioRecordingIntent` whose `perform()` leaves an active audio
-    session without a Live Activity, and only a `LiveActivityIntent` may
-    request one from the background, so the intent adopts both.
+    traps an `AudioRecordingIntent` whose `perform()` returns with an active
+    audio session while the app shows no Live Activity, and only a
+    `LiveActivityIntent` may request one from the background, so the intent
+    adopts both.
     `VoiceCall.startWithLiveActivity` requests the call's
     `VoiceCallLiveActivity` under the call's own id in the same main-actor
     step that reserves the call, before any audio, and also when the intent
-    rejoins a live call without one; it fails the intent when Live Activities
-    are off.
+    rejoins a live call without one. Siri allows that background request only
+    while the app shows no Live Activity: with the active-tasks activity
+    showing, including one the system ended that is still on the Lock Screen,
+    the request fails with "Target is not foreground", while the Shortcuts app
+    and the Action Button allow it regardless. The call then starts without its
+    own activity when `FleetLiveActivityService.isShowing` confirms the
+    active-tasks one: AppIntents accepts any Live Activity of the app, and
+    callservicesd accepts the start (test iPhone, iOS 27, 2026-11-20;
+    [tracker #1152](https://github.com/emileberhard/tracker/issues/1152)). It
+    fails the intent only when the app shows no Live Activity at all, such as
+    when Live Activities are off.
     That call's teardown ends only its own activity, and `VoiceCall` ends any
     a crashed process left behind before its first intent start. On an unlocked
     device it then enqueues `.presentVoiceCall` with that call's id and

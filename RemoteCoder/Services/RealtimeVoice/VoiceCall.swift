@@ -233,6 +233,11 @@ final class VoiceCall {
         }
     }
 
+    func requestMissingLiveActivity() {
+        guard liveActivity == nil, incomingCall?.answered != false, let callID = liveCallID, let model else { return }
+        requestLiveActivity(callID: callID, hostName: model.hostDisplayName)
+    }
+
     private func refreshCallTitle() {
         guard let model, let conversationThreadID else { return }
         let title = model.voiceCallTitle(threadID: conversationThreadID)
@@ -412,7 +417,12 @@ final class VoiceCall {
         guard model.acceptsWork else { throw VoiceCallUnavailable(message: "This host is no longer available.") }
         let callID = lifecycle.callID ?? UUID()
         if liveActivity?.isOngoing != true {
-            liveActivity = try .request(callID: callID, hostName: model.hostDisplayName, state: liveActivityState)
+            do {
+                liveActivity = try .request(callID: callID, hostName: model.hostDisplayName, state: liveActivityState)
+            } catch {
+                guard FleetLiveActivityService.isShowing else { throw error }
+                diagnostic("live activity refused, continuing under the active-tasks activity call=\(callID) error=\(error.localizedDescription)")
+            }
         }
         guard lifecycle.start(callID: callID) else { return }
         await begin(callID, using: model, resuming: nil)

@@ -1,5 +1,6 @@
 @preconcurrency import ActivityKit
 import Foundation
+import UIKit
 
 @MainActor
 final class FleetLiveActivityService {
@@ -20,16 +21,21 @@ final class FleetLiveActivityService {
     private let hosts: @MainActor () -> [Host]
     private let configured: @MainActor () -> [UUID]
     private let preferred: @MainActor () -> UUID?
-    private var scene = Scene.active
+    private var scene: Scene
     private var activity: Activity<Attributes>?
     private var token: String?
     private var coordinatorID: UUID?
     private var hasRestored = false
+    private var restoredLeftovers: [String] = []
     private var dismissed: ActiveTasksLiveActivityContent?
     private var observers: [Task<Void, Never>] = []
     private var pass: Task<Void, Never>?
     private var passRequested = false
     private var isRetired = false
+
+    static var isShowing: Bool {
+        Activity<Attributes>.activities.contains { [.active, .stale, .ended].contains($0.activityState) }
+    }
 
     init(
         hosts: @escaping @MainActor () -> [Host],
@@ -39,6 +45,7 @@ final class FleetLiveActivityService {
         self.hosts = hosts
         self.configured = configured
         self.preferred = preferred
+        scene = UIApplication.shared.applicationState == .background ? .background : .active
     }
 
     func sceneChanged(_ next: Scene) {
@@ -170,26 +177,29 @@ final class FleetLiveActivityService {
     }
 
     private func restoreIfNeeded() async {
-        guard !hasRestored else { return }
-        hasRestored = true
-        let activities = Activity<Attributes>.activities
-        let restoration = FleetLiveActivityPlan.restore(
-            activities.map {
-                .init(id: $0.id, coordinatorID: $0.attributes.coordinatorID,
-                      isLive: [.active, .stale].contains($0.activityState))
-            },
-            configured: Set(configured())
-        )
-        for activity in activities where restoration.ended.contains(activity.id) {
+        if !hasRestored {
+            hasRestored = true
+            let activities = Activity<Attributes>.activities
+            let restoration = FleetLiveActivityPlan.restore(
+                activities.map {
+                    .init(id: $0.id, coordinatorID: $0.attributes.coordinatorID,
+                          isLive: [.active, .stale].contains($0.activityState))
+                },
+                configured: Set(configured())
+            )
+            restoredLeftovers = restoration.ended
+            if let adopted = activities.first(where: { $0.id == restoration.adopted }) {
+                coordinatorID = adopted.attributes.coordinatorID
+                adopt(adopted)
+            }
+        }
+        guard scene != .background, !restoredLeftovers.isEmpty else { return }
+        let leftovers = restoredLeftovers
+        restoredLeftovers = []
+        for activity in Activity<Attributes>.activities where leftovers.contains(activity.id) {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
-        if !restoration.ended.isEmpty {
-            logger.notice("retired \(restoration.ended.count) earlier active-tasks activities")
-        }
-        if let adopted = activities.first(where: { $0.id == restoration.adopted }) {
-            coordinatorID = adopted.attributes.coordinatorID
-            adopt(adopted)
-        }
+        logger.notice("retired \(leftovers.count) earlier active-tasks activities")
     }
 
     private func adopt(_ activity: Activity<Attributes>) {

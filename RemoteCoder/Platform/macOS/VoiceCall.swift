@@ -23,6 +23,8 @@ final class VoiceCall {
 
     func startWithLiveActivity(using model: any VoiceCallHost) async throws {}
 
+    func requestMissingLiveActivity() {}
+
     func applyConversationSettings(_ settings: ConversationSettingsUpdate, hostID: UUID) {}
 
     func incomingSettingsRevision(for context: RealtimeVoiceConversationContext, hostID: UUID) -> UInt64? { nil }
