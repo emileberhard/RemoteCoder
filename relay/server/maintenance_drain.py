@@ -32,7 +32,7 @@ TCP_STATES = {
 def remaining_time(deadline):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise TimeoutError("relay drain timed out")
+        raise TimeoutError("inspection deadline expired")
     return min(5, remaining)
 
 
@@ -202,7 +202,7 @@ def listener_queues(ports):
             found[key] = int(fields[4].split(":", 1)[1], 16)
     if set(found) != required:
         raise RuntimeError("expected relay listeners are missing")
-    return any(found.values())
+    return next((port for (_, port), queued in found.items() if queued), None)
 
 
 def haproxy_command(request, deadline=None):
@@ -279,8 +279,8 @@ def _live_work(expected_identity, deadline):
     port = active_conntrack(ports, deadline)
     if port:
         busy = f"tracked connections on port {port}"
-    elif listener_queues(ports):
-        busy = "listener queues"
+    elif queue_port := listener_queues(ports):
+        busy = f"listener queue on port {queue_port}"
     elif haproxy_busy(deadline):
         busy = "HAProxy connections or sessions"
     else:
@@ -306,20 +306,22 @@ def wait_for_candidate(expected_identity, timeout_seconds):
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("relay candidate timeout must be positive")
     deadline = time.monotonic() + timeout_seconds
-    busy = None
+    last_busy = None
     try:
         while True:
             remaining_time(deadline)
             busy = candidate_snapshot(expected_identity, deadline)
+            if busy:
+                last_busy = busy
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError
+                raise TimeoutError("deadline expired")
             if not busy:
                 return
             time.sleep(min(1, remaining))
-    except TimeoutError as error:
+    except (TimeoutError, subprocess.TimeoutExpired) as error:
         raise TimeoutError(
-            f"relay idle candidate timed out; last observation: {busy or 'no completed busy observation'}"
+            f"relay idle candidate timed out; last busy observation: {last_busy or 'none'}; cause: {error}"
         ) from error
 
 
@@ -328,27 +330,29 @@ def wait_for_drain(expected_identity, timeout_seconds):
         raise ValueError("relay drain timeout must exceed two seconds")
     deadline = time.monotonic() + timeout_seconds
     clean_passes = 0
-    busy = None
+    last_busy = None
     try:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError
+                raise TimeoutError("deadline expired")
             time.sleep(min(1, remaining))
             if time.monotonic() >= deadline:
-                raise TimeoutError
+                raise TimeoutError("deadline expired")
             busy = snapshot(expected_identity, deadline)
+            if busy:
+                last_busy = busy
             if time.monotonic() >= deadline:
-                raise TimeoutError
+                raise TimeoutError("deadline expired")
             if busy:
                 clean_passes = 0
             else:
                 clean_passes += 1
                 if clean_passes == 2:
                     return
-    except TimeoutError as error:
+    except (TimeoutError, subprocess.TimeoutExpired) as error:
         raise TimeoutError(
-            f"relay drain timed out; last observation: {busy or 'no completed busy observation'}"
+            f"relay drain timed out; last busy observation: {last_busy or 'none'}; cause: {error}"
         ) from error
 
 

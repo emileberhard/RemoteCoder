@@ -1,4 +1,5 @@
 import importlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -133,7 +134,7 @@ class RelayDrainTests(unittest.TestCase):
             ),
             self.assertRaisesRegex(
                 TimeoutError,
-                "idle candidate timed out; last observation: tracked connections on port 20001",
+                "idle candidate timed out; last busy observation: tracked connections on port 20001",
             ),
         ):
             drain.wait_for_candidate({}, 3)
@@ -149,7 +150,7 @@ class RelayDrainTests(unittest.TestCase):
         ):
             for values, expected in (
                 ((20001, False, False), "tracked connections on port 20001"),
-                ((False, True, False), "listener queues"),
+                ((False, 8888, False), "listener queue on port 8888"),
                 ((False, False, True), "HAProxy connections or sessions"),
                 ((False, False, False), None),
             ):
@@ -167,12 +168,92 @@ class RelayDrainTests(unittest.TestCase):
                 "sleep",
                 side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
             ),
-            patch.object(drain, "snapshot", return_value="listener queues"),
+            patch.object(drain, "snapshot", return_value="listener queue on port 8888"),
             self.assertRaisesRegex(
-                TimeoutError, "relay drain timed out; last observation: listener queues"
+                TimeoutError,
+                "relay drain timed out; last busy observation: listener queue on port 8888",
             ),
         ):
             drain.wait_for_drain({}, 3)
+
+    def test_timeout_keeps_busy_signal_after_clean_poll(self):
+        def check(phase):
+            clock = [0.0]
+            observations = iter(("tracked connections on port 443", None))
+
+            def sleep(seconds):
+                clock[0] += seconds
+
+            def snapshot(_identity, _deadline):
+                result = next(observations)
+                if phase == "candidate" and result is None:
+                    clock[0] = 3
+                return result
+
+            with (
+                self.subTest(phase=phase),
+                patch.object(drain.time, "monotonic", side_effect=lambda: clock[0]),
+                patch.object(drain.time, "sleep", side_effect=sleep),
+                patch.object(
+                    drain,
+                    "candidate_snapshot" if phase == "candidate" else "snapshot",
+                    side_effect=snapshot,
+                ),
+                self.assertRaisesRegex(
+                    TimeoutError,
+                    "last busy observation: tracked connections on port 443; cause: deadline expired",
+                ),
+            ):
+                (
+                    drain.wait_for_candidate
+                    if phase == "candidate"
+                    else drain.wait_for_drain
+                )({}, 3)
+
+        for phase in ("candidate", "drain"):
+            check(phase)
+
+    def test_inspection_timeout_reports_phase_last_busy_and_cause(self):
+        def check(phase, error):
+            clock = [0.0]
+
+            def sleep(seconds):
+                clock[0] += seconds
+
+            with (
+                self.subTest(phase=phase, error=type(error).__name__),
+                patch.object(drain.time, "monotonic", side_effect=lambda: clock[0]),
+                patch.object(drain.time, "sleep", side_effect=sleep),
+                patch.object(
+                    drain,
+                    "candidate_snapshot" if phase == "candidate" else "snapshot",
+                    side_effect=["tracked connections on port 443", error],
+                ),
+                self.assertRaises(TimeoutError) as raised,
+            ):
+                (
+                    drain.wait_for_candidate
+                    if phase == "candidate"
+                    else drain.wait_for_drain
+                )({}, 10)
+            message = str(raised.exception)
+            self.assertIn(
+                "idle candidate timed out"
+                if phase == "candidate"
+                else "relay drain timed out",
+                message,
+            )
+            self.assertIn(
+                "last busy observation: tracked connections on port 443", message
+            )
+            self.assertIn(str(error), message)
+
+        for phase in ("candidate", "drain"):
+            for error in (
+                TimeoutError("socket stalled"),
+                subprocess.TimeoutExpired("conntrack", 5),
+            ):
+                check(phase, error)
 
     def test_two_clean_passes_follow_grace_and_a_busy_pass_resets_progress(self):
         clock = [0.0]
