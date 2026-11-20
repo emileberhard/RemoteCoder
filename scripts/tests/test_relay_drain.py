@@ -117,6 +117,63 @@ class RelayDrainTests(unittest.TestCase):
         ):
             drain.wait_for_candidate({}, 3)
 
+    def test_candidate_timeout_reports_last_busy_signal_and_phase(self):
+        clock = [0.0]
+        with (
+            patch.object(drain.time, "monotonic", side_effect=lambda: clock[0]),
+            patch.object(
+                drain.time,
+                "sleep",
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+            patch.object(
+                drain,
+                "candidate_snapshot",
+                return_value="tracked connections on port 20001",
+            ),
+            self.assertRaisesRegex(
+                TimeoutError,
+                "idle candidate timed out; last observation: tracked connections on port 20001",
+            ),
+        ):
+            drain.wait_for_candidate({}, 3)
+
+    def test_live_work_identifies_the_first_busy_signal(self):
+        identity = {"worker": 7}
+        with (
+            patch.object(drain, "tracked_ports", return_value={443}),
+            patch.object(drain, "haproxy_identity", return_value=identity),
+            patch.object(drain, "active_conntrack") as conntrack,
+            patch.object(drain, "listener_queues") as queues,
+            patch.object(drain, "haproxy_busy") as haproxy,
+        ):
+            for values, expected in (
+                ((20001, False, False), "tracked connections on port 20001"),
+                ((False, True, False), "listener queues"),
+                ((False, False, True), "HAProxy connections or sessions"),
+                ((False, False, False), None),
+            ):
+                conntrack.return_value, queues.return_value, haproxy.return_value = (
+                    values
+                )
+                self.assertEqual(drain._live_work(identity, 10), expected)
+
+    def test_fenced_drain_timeout_reports_last_busy_signal(self):
+        clock = [0.0]
+        with (
+            patch.object(drain.time, "monotonic", side_effect=lambda: clock[0]),
+            patch.object(
+                drain.time,
+                "sleep",
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+            patch.object(drain, "snapshot", return_value="listener queues"),
+            self.assertRaisesRegex(
+                TimeoutError, "relay drain timed out; last observation: listener queues"
+            ),
+        ):
+            drain.wait_for_drain({}, 3)
+
     def test_two_clean_passes_follow_grace_and_a_busy_pass_resets_progress(self):
         clock = [0.0]
         passes = []

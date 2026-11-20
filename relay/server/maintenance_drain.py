@@ -173,8 +173,8 @@ def active_conntrack(ports, deadline=None):
                 if len(fields) < 4 or fields[0] != "tcp" or fields[3] not in TCP_STATES:
                     raise RuntimeError("unknown conntrack TCP entry")
                 if fields[3] not in TERMINAL_STATES:
-                    return True
-    return False
+                    return port
+    return None
 
 
 def listener_queues(ports):
@@ -276,11 +276,15 @@ def _live_work(expected_identity, deadline):
     ports = tracked_ports()
     if haproxy_identity(deadline) != expected_identity:
         raise RuntimeError("HAProxy generation changed")
-    busy = (
-        active_conntrack(ports, deadline)
-        or listener_queues(ports)
-        or haproxy_busy(deadline)
-    )
+    port = active_conntrack(ports, deadline)
+    if port:
+        busy = f"tracked connections on port {port}"
+    elif listener_queues(ports):
+        busy = "listener queues"
+    elif haproxy_busy(deadline):
+        busy = "HAProxy connections or sessions"
+    else:
+        busy = None
     if haproxy_identity(deadline) != expected_identity:
         raise RuntimeError("HAProxy generation changed")
     return busy
@@ -302,15 +306,21 @@ def wait_for_candidate(expected_identity, timeout_seconds):
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("relay candidate timeout must be positive")
     deadline = time.monotonic() + timeout_seconds
-    while True:
-        remaining_time(deadline)
-        busy = candidate_snapshot(expected_identity, deadline)
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("relay idle candidate timed out")
-        if not busy:
-            return
-        time.sleep(min(1, remaining))
+    busy = None
+    try:
+        while True:
+            remaining_time(deadline)
+            busy = candidate_snapshot(expected_identity, deadline)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            if not busy:
+                return
+            time.sleep(min(1, remaining))
+    except TimeoutError as error:
+        raise TimeoutError(
+            f"relay idle candidate timed out; last observation: {busy or 'no completed busy observation'}"
+        ) from error
 
 
 def wait_for_drain(expected_identity, timeout_seconds):
@@ -318,22 +328,28 @@ def wait_for_drain(expected_identity, timeout_seconds):
         raise ValueError("relay drain timeout must exceed two seconds")
     deadline = time.monotonic() + timeout_seconds
     clean_passes = 0
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("relay drain timed out")
-        time.sleep(min(1, remaining))
-        if time.monotonic() >= deadline:
-            raise TimeoutError("relay drain timed out")
-        busy = snapshot(expected_identity, deadline)
-        if time.monotonic() >= deadline:
-            raise TimeoutError("relay drain timed out")
-        if busy:
-            clean_passes = 0
-        else:
-            clean_passes += 1
-            if clean_passes == 2:
-                return
+    busy = None
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            time.sleep(min(1, remaining))
+            if time.monotonic() >= deadline:
+                raise TimeoutError
+            busy = snapshot(expected_identity, deadline)
+            if time.monotonic() >= deadline:
+                raise TimeoutError
+            if busy:
+                clean_passes = 0
+            else:
+                clean_passes += 1
+                if clean_passes == 2:
+                    return
+    except TimeoutError as error:
+        raise TimeoutError(
+            f"relay drain timed out; last observation: {busy or 'no completed busy observation'}"
+        ) from error
 
 
 def verify_local_boot_prerequisites(timeout_seconds):
