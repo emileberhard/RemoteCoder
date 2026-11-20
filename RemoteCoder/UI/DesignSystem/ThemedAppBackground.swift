@@ -24,6 +24,7 @@ struct DrawerBackground: View {
 }
 
 struct DrawerBottomBarBackground: View {
+    private let fadeHeight: CGFloat = 28
     @Environment(AppThemeStore.self) private var themeStore
     @Environment(\.colorScheme) private var colorScheme
 
@@ -31,9 +32,10 @@ struct DrawerBottomBarBackground: View {
         let color = DrawerBackground.color(accent: themeStore.theme.colors.accentTint, colorScheme: colorScheme)
         VStack(spacing: 0) {
             LinearGradient(colors: [color.opacity(0), color], startPoint: .top, endPoint: .bottom)
-                .frame(height: 28)
+                .frame(height: fadeHeight)
             color
         }
+        .padding(.top, -fadeHeight)
         .ignoresSafeArea(edges: .bottom)
         .allowsHitTesting(false)
     }

@@ -42,7 +42,12 @@ struct AppTheme: Identifiable {
 extension AppTheme {
     func surfaceTint(for colorScheme: ColorScheme) -> Color {
         let isLight = colorScheme == .light
-        return colors.accentTint.mix(with: isLight ? .white : .black, by: isLight ? 0.60 : 0.70)
+        let accent: Color = switch (id, colorScheme) {
+        case (.night, .light): .black
+        case (.paperLight, .dark): .white
+        default: colors.accentTint
+        }
+        return accent.mix(with: isLight ? .white : .black, by: isLight ? 0.60 : 0.70)
             .opacity(isLight ? 0.66 : 0.70)
     }
 

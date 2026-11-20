@@ -35,7 +35,7 @@ struct UsageMark {
     let style: AnyShapeStyle
 
     static func provider(_ provider: AgentProvider) -> UsageMark {
-        UsageMark(image: provider.markImage, style: AnyShapeStyle(.secondary))
+        UsageMark(image: provider.markImage, style: provider.markStyle)
     }
 
     static let copilot = UsageMark(image: "CopilotMark", style: AnyShapeStyle(.primary))

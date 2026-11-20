@@ -102,7 +102,7 @@ struct ConversationSpeedControl: View {
         return JetstreamBolt(
             phase: ultrafast ? 1 : 0, side: symbolHeight,
             boltColor: speed?.isAccelerated == true && available ? colors.accentTint : .secondary,
-            jetstreamColor: colors.accentTint)
+            jetstreamColor: colors.accentTint.mix(with: .white, by: 0.35))
             .animation(animation, value: ultrafast)
             .overlay(alignment: .topTrailing) {
                 if available, speed == nil {

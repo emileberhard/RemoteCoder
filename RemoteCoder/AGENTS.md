@@ -1044,9 +1044,9 @@ entrypoint linked above.
 - User and assistant bubbles render Markdown blocks. Block gaps, heading
   margins and list spacing read `interfaceScale` in the rendering views; zoom
   changes layout without reparsing Markdown or changing block versions.
-  User bubbles use a system
-  surface with only a subtle theme tint, so contrast stays native in light and
-  dark mode.
+  User bubbles draw the same theme tint and opacity as Liquid Glass as a plain
+  fill. The Neutral and Paper tints adapt to the opposite appearance to keep
+  the fill visible against the transcript background.
   - On the Mac, `TranscriptInteractions` adds the desktop affordances: message
     text is selectable, the bubble menu offers Copy (plain text from the
     rendered blocks), Copy as Markdown, Share and Fork from Here, a code block's
@@ -1360,8 +1360,8 @@ entrypoint linked above.
   suspension. The coordinator gateway authors every later update from
   `daemon/liveActivity/fleet` content, including both providers, and ends it
   once every declared host is current and empty.
-- Settings include an appearance theme picker (`AppThemeStore`) for subtle
-  glass, message, sheet and status tinting.
+- Settings include an appearance theme picker (`AppThemeStore`) for glass,
+  message and status tinting.
 
 ## Conversation drawer (`UI/Conversations/`)
 
@@ -1401,9 +1401,9 @@ entrypoint linked above.
 - `ConversationHistoryView` owns the snapshot observation, the captured layout
   (held by `ChatScreen` as `drawerLayout`, so window commands can walk the
   displayed order). The `ConversationHistoryList` seam
-  presents it: the iOS arm uses opaque content-surface rows under subheadline
-  semibold section headers whose trailing chevron folds Pinned, each project, Automations and
-  Settled into content-surface shelf cards, and the
+  presents it: the iOS arm uses inset dividers between rows and a filled
+  selection. Trailing chevrons on section headers fold Pinned, each project,
+  Automations and Settled. The
   Mac arm is a `List(selection:)` source list with a Pinned
   `Section(isExpanded:)`, an Automations `Section(isExpanded:)`, a Chats
   `Section` below them, and, in Projects, one `Section(isExpanded:)` per
@@ -1678,8 +1678,9 @@ entrypoint linked above.
     banners the same Regular glass, theme tint and hairline on both platforms.
     An active drawer filter uses an accent badge over the shared glass.
   - Drawer rows use inset dividers between adjacent items and a fill for
-    selection. The drawer background and host labels take a little of the
-    theme accent. `.appContentSurface` fills persistent chips and cells, and
+    selection. The drawer background is black in dark mode and lightly tinted
+    in light mode. Host labels use a muted accent.
+    `.appContentSurface` fills persistent chips and cells, and
     `.themedSurface` fills transcript content. The user-message bubble uses
     the same `AppTheme.surfaceTint` color and opacity as glass, drawn as a
     regular shape fill.

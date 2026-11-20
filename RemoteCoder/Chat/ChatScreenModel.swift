@@ -1314,9 +1314,9 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
                 await target.metadataService.sync()
             }
             let header = await ConversationHeader.prepare(response.thread)
-            await target.conversationList.record(header)
             feedback(.success)
             resumeConversation(header)
+            await target.conversationList.record(header)
         } catch {
             present(.conversation(error.localizedDescription))
             if !(error is CancellationError) { feedback(.error) }

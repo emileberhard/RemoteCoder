@@ -77,7 +77,7 @@ private struct AvailabilityChatFixture: View {
 
     var body: some View {
         ZStack {
-            DrawerBackground()
+            ThemedAppBackground()
             VStack(alignment: .leading, spacing: 16) {
                 HostAvailabilityLineList(lines: presentation.chat, detail: { nil }, retry: {})
                 ForEach(Array(AvailabilityFixture.messages.enumerated()), id: \.offset) { index, text in

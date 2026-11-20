@@ -1963,7 +1963,9 @@ not written before. Either way the conversation gains its history window. A fork
 `forkedFromId` on the `thread/read` the app already makes when it opens a
 conversation (and on fork responses); list rows never carry it, so the header
 cache retains a known origin across list refreshes and an absent one stays
-unknown. Browsing does not resume a
+unknown. History rows with a known origin offer **Open Parent Chat**. An unsent
+fork draft offers the same source above the composer until it is sent.
+Browsing does not resume a
 thread. Both providers page history with the same app-server v2
 `thread/turns/list` and `thread/items/list`; the gateway answers them for
 Claude threads with Codex's wire shape, cursor semantics and error codes. Token

@@ -88,7 +88,7 @@ struct ConversationRow: View, Equatable {
             .contentTransition(.identity)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .glassTapTarget(cornerRadius: 16)
+            .glassTapTarget(cornerRadius: DrawerListMetrics.cardCornerRadius)
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: selection == nil && row.isSelected ? .buttonPress : nil,
                                           pressedScale: 0.985, pressedOpacity: 0.94))
@@ -98,7 +98,7 @@ struct ConversationRow: View, Equatable {
                 Button(item.title, systemImage: item.systemImage, action: item.perform)
             }
         }
-        .background(isHighlighted ? Color.appSelectedFill : .clear, in: .rect(cornerRadius: 12))
+        .background(isHighlighted ? Color.appSelectedFill : .clear, in: .rect(cornerRadius: DrawerListMetrics.cardCornerRadius))
         .overlay(alignment: .leading) {
             if row.activity == .working {
                 Capsule()
@@ -116,7 +116,7 @@ struct ConversationRow: View, Equatable {
                 preview: ControlPeekPreview(symbol: "text.bubble", title: row.title,
                                             subtitle: row.hostName + " · " + row.workingDirectory,
                                             detail: row.preview),
-                cornerRadius: 16
+                cornerRadius: DrawerListMetrics.cardCornerRadius
             )
         )
     }

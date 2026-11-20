@@ -607,8 +607,23 @@ private struct ChatScreen: View {
     }
 
     private var chatComposerInset: some View {
-        Group {
+        VStack(spacing: 6) {
             if screen.acceptsConversationInput {
+                if let source = screen.shownDraftForkSource {
+                    Button {
+                        selectConversation(source)
+                    } label: {
+                        Label("Fork draft", systemImage: "arrow.triangle.branch")
+                            .scaledFont(.footnote.weight(.medium))
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 30)
+                            .contentShape(.capsule)
+                    }
+                    .buttonStyle(ResponsiveButtonStyle(feedback: .iconPress, pressedScale: 0.96, pressedOpacity: 0.9))
+                    .appGlass(in: .capsule)
+                    .tooltip("Open the original conversation")
+                    .accessibilityHint("Opens the original conversation")
+                }
                 ChatComposerView(
                     screen: screen,
                     focus: $inputFocused,

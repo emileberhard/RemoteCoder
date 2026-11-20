@@ -62,13 +62,13 @@ struct UnsentDraftRowView: View, Equatable {
             .contentTransition(.identity)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .glassTapTarget(cornerRadius: 16)
+            .glassTapTarget(cornerRadius: DrawerListMetrics.cardCornerRadius)
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: row.isSelected ? .buttonPress : nil, pressedScale: 0.985, pressedOpacity: 0.94))
         .accessibilityAddTraits(row.isSelected ? .isSelected : [])
         .accessibilityActions {
             Button("Discard Draft", systemImage: "trash", action: discard)
         }
-        .background(row.isSelected ? Color.appSelectedFill : .clear, in: .rect(cornerRadius: 12))
+        .background(row.isSelected ? Color.appSelectedFill : .clear, in: .rect(cornerRadius: DrawerListMetrics.cardCornerRadius))
     }
 }
