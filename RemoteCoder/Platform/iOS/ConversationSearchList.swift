@@ -9,7 +9,7 @@ struct ConversationSearchList: View {
     var body: some View {
         let results = search.results
         ScrollView {
-            LazyVStack(spacing: 10) {
+            LazyVStack(spacing: DrawerListMetrics.rowSpacing) {
                 section(results.titles, title: "Titles", systemImage: "textformat", isFirst: true)
                 section(results.messages, title: "Messages", systemImage: "text.bubble",
                         isFirst: results.titles.rows.isEmpty)
@@ -46,13 +46,15 @@ struct ConversationSearchList: View {
                          isFirst: Bool) -> some View {
         if !section.rows.isEmpty {
             DrawerSectionHeader(title: title, systemImage: systemImage, isFirst: isFirst)
-            ForEach(section.visibleRows) { row in
+            let rows = section.visibleRows
+            ForEach(rows.enumerated(), id: \.element.id) { index, row in
                 ConversationSearchCard(row: row) {
                     search.recordOpening(row)
                     _ = open(row)
                 }
                 .equatable()
                 .accessibilityIdentifier("search-result-\(row.id)")
+                .drawerRowDivider(when: index + 1 < rows.count)
             }
             if section.hiddenRowCount > 0 {
                 DrawerMoreButton(title: "Show \(section.hiddenRowCount) more") {
@@ -92,7 +94,7 @@ private struct ConversationSearchCard: View, Equatable {
                         .resizable()
                         .scaledToFit()
                         .frame(width: markSize, height: markSize)
-                        .foregroundStyle(row.provider.markStyle)
+                        .foregroundStyle(.secondary)
                         .accessibilityLabel("\(row.provider.displayName) conversation")
                     if let folder = row.folder {
                         Text(folder)
@@ -101,7 +103,7 @@ private struct ConversationSearchCard: View, Equatable {
                     if let hostName = row.hostName {
                         Text(hostName)
                             .fontWeight(.semibold)
-                            .foregroundStyle(themeStore.theme.colors.accentTint)
+                            .foregroundStyle(themeStore.theme.drawerHostForeground)
                             .layoutPriority(1)
                     }
                     Spacer(minLength: 6)
@@ -117,7 +119,7 @@ private struct ConversationSearchCard: View, Equatable {
                 if let excerpt = row.excerpt {
                     Text(excerpt)
                         .font(.footnote)
-                        .foregroundStyle(row.section == .meaning ? AnyShapeStyle(themeStore.theme.colors.accentTint) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(.secondary)
                         .lineLimit(2, reservesSpace: true)
                         .multilineTextAlignment(.leading)
                 }
@@ -130,7 +132,6 @@ private struct ConversationSearchCard: View, Equatable {
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: nil, pressedScale: 0.985, pressedOpacity: 0.94))
         .accessibilityElement(children: .combine)
-        .appContentSurface(.standard, in: .rect(cornerRadius: 16))
     }
 
     @ViewBuilder

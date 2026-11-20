@@ -11,7 +11,7 @@ struct QuickEntryView: View {
         content
             .padding(14)
             .frame(width: 620)
-            .appGlass(.standard, in: .rect(cornerRadius: 24, style: .continuous))
+            .appGlass(in: .rect(cornerRadius: 24, style: .continuous))
             .onExitCommand(perform: close)
     }
 

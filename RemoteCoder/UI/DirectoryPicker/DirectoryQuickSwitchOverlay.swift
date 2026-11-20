@@ -98,7 +98,7 @@ private struct DirectoryQuickSwitchMorph: View, Animatable {
             .frame(width: width, height: height, alignment: .top)
             .clipShape(shape)
             .containerShape(shape)
-            .appGlass(.standard, in: shape)
+            .appGlass(in: shape)
             .position(x: source.midX + (target.midX - source.midX) * amount - origin.x,
                       y: source.midY + (target.midY - source.midY) * amount - origin.y)
             .opacity(reduceMotion ? progress : 1)
@@ -112,7 +112,6 @@ private struct DirectoryQuickSwitchPanel: View {
     @State private var scrollPosition = ScrollPosition(y: 0)
     @Namespace private var highlight
     @Environment(AppThemeStore.self) private var themeStore
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -136,7 +135,7 @@ private struct DirectoryQuickSwitchPanel: View {
     private var heading: some View {
         HStack(spacing: 6) {
             Image(systemName: "star.fill")
-                .foregroundStyle(themeStore.theme.colors.accentTint)
+                .foregroundStyle(.secondary)
             Text("Favorites")
             Spacer(minLength: 0)
         }
@@ -207,8 +206,8 @@ private struct DirectoryQuickSwitchPanel: View {
                     .lineLimit(1).truncationMode(.middle)
                 if favorite.showsHostLabel {
                     Text(favorite.hostName)
-                        .scaledFont(.caption2.weight(.semibold))
-                        .foregroundStyle(themeStore.theme.colors.accentTint)
+                        .scaledFont(.caption2)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
@@ -233,7 +232,7 @@ private struct DirectoryQuickSwitchPanel: View {
     @ViewBuilder private func selectionBackground(for action: DirectoryQuickSwitchPresentation.Action) -> some View {
         if session.hovered == action {
             ConcentricRectangle(corners: .concentric(minimum: .fixed(10)), isUniform: true)
-                .fill(themeStore.theme.selectedOptionTint(for: colorScheme))
+                .fill(Color.appSelectedFill)
                 .matchedGeometryEffect(id: "hover", in: highlight)
                 .transition(.opacity)
         }

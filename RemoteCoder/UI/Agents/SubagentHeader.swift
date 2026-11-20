@@ -22,7 +22,7 @@ struct SubagentHeader: View {
         }
         .padding(.horizontal, 18)
         .frame(minHeight: 44)
-        .appGlass(.standard, in: .capsule)
+        .appGlass(in: .capsule)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("subagent-header")
     }
@@ -56,6 +56,6 @@ struct SubagentControls: View {
         .buttonStyle(.borderless)
         .padding(.horizontal, 16)
         .frame(minHeight: 44)
-        .appGlass(.standard, in: .capsule)
+        .appGlass(in: .capsule)
     }
 }

@@ -127,7 +127,7 @@ struct TranscriptFindBar: View {
         .background(.bar, ignoresSafeAreaEdges: [])
         .overlay(alignment: .bottom) { Divider() }
         #else
-        .appGlass(.standard, in: .capsule)
+        .appGlass(in: .capsule)
         #endif
         .onChange(of: find.focusRequest, initial: true) { isFieldFocused = find.focusRequest != nil }
         .task(id: SearchKey(query: find.query, screen: ObjectIdentifier(screen), transcript: screen.transcriptIdentity, location: find.locatedRequestID)) {

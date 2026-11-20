@@ -29,7 +29,7 @@ struct ConversationRow: View, Equatable {
                             Text(row.hostName)
                                 .font(.caption2)
                                 .fontWeight(.semibold)
-                                .foregroundStyle(row.availabilityLabel == nil ? themeStore.theme.colors.accentTint : .secondary)
+                                .foregroundStyle(row.availabilityLabel == nil ? themeStore.theme.drawerHostForeground : .secondary)
                                 .lineLimit(1)
                                 .accessibilityLabel("On \(row.hostName)")
 
@@ -92,15 +92,13 @@ struct ConversationRow: View, Equatable {
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: selection == nil && row.isSelected ? .buttonPress : nil,
                                           pressedScale: 0.985, pressedOpacity: 0.94))
-        // Selection is carried by the row's accent surface and stroke; the trait
-        // gives VoiceOver the same fact without a glyph.
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])
         .accessibilityActions {
             ForEach(menuItems) { item in
                 Button(item.title, systemImage: item.systemImage, action: item.perform)
             }
         }
-        .appContentSurface(isHighlighted ? .selected : .standard, in: .rect(cornerRadius: 16))
+        .background(isHighlighted ? Color.appSelectedFill : .clear, in: .rect(cornerRadius: 12))
         .overlay(alignment: .leading) {
             if row.activity == .working {
                 Capsule()
@@ -130,6 +128,12 @@ struct ConversationRow: View, Equatable {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Automation")
+            }
+            if row.forkSource != nil {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Forked conversation")
             }
             if row.isPinned {
                 Image(systemName: "pin.fill")
@@ -176,7 +180,7 @@ struct ConversationRow: View, Equatable {
                 .resizable()
                 .scaledToFit()
                 .frame(width: markSize, height: markSize)
-                .foregroundStyle(provider.markStyle)
+                .foregroundStyle(.secondary)
                 .accessibilityLabel("\(provider.displayName) conversation")
         }
         .lineLimit(1)

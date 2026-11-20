@@ -24,6 +24,7 @@ struct ConversationSidebarRow: Identifiable, Equatable, Sendable {
     var canRename = false
     var canRegenerateName = true
     var isAutomation = false
+    var forkSource: ConversationAddress? = nil
     var questionCount: Int? = nil
     var settlement: Settlement = .unavailable
     var isProbablyDone = false
@@ -324,6 +325,7 @@ enum ConversationSidebarProjection {
                     canRename: nameActions.canRename,
                     canRegenerateName: nameActions.canRegenerateName,
                     isAutomation: isAutomation,
+                    forkSource: thread.forkedFromThreadID.map { ConversationAddress(hostID: host.hostID, threadID: $0) },
                     questionCount: questionCount,
                     settlement: !host.marks.offersSettlement ? .unavailable : isSettled ? .settled : .unsettled,
                     isProbablyDone: !live.isLive && !isSettled && host.marks.isProbablyDone(thread),

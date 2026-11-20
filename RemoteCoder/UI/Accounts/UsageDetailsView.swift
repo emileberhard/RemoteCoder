@@ -35,7 +35,7 @@ struct UsageMark {
     let style: AnyShapeStyle
 
     static func provider(_ provider: AgentProvider) -> UsageMark {
-        UsageMark(image: provider.markImage, style: provider.markStyle)
+        UsageMark(image: provider.markImage, style: AnyShapeStyle(.secondary))
     }
 
     static let copilot = UsageMark(image: "CopilotMark", style: AnyShapeStyle(.primary))
@@ -49,7 +49,7 @@ struct UsageRingsControl: View {
             ClaudeUsageRingButton(workspace: workspace, diameter: 36)
             UsageRingButton(workspace: workspace, diameter: 36)
         }
-            .appGlass(.standard, in: .capsule, interactive: true)
+            .appGlass(in: .capsule, interactive: true)
     }
 }
 

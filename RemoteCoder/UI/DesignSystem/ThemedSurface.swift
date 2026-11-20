@@ -1,11 +1,10 @@
 import SwiftUI
 
 enum ThemedSurfaceFill {
-    case attachment
-    case userBubble
-    case tint
-    case base
-    case selectedOption
+    case elevated
+    case tinted
+    case subtle
+    case selected
 }
 
 enum ThemedSurfaceStroke {
@@ -23,39 +22,32 @@ private struct ThemedSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        let layers = fillLayers
         content
-            .background {
-                ZStack {
-                    ForEach(layers.indices, id: \.self) { shape.fill(layers[$0]) }
-                }
-            }
+            .background { shape.fill(fillColor) }
             .overlay {
                 switch stroke {
                 case .none:
                     EmptyView()
                 case .standard:
-                    shape.strokeBorder(themeStore.theme.tintedSurfaceStroke(for: colorScheme), lineWidth: 0.5)
+                    shape.strokeBorder(Color.appHairline, lineWidth: 0.5)
                 case .accent(let lineWidth):
                     shape.strokeBorder(themeStore.theme.colors.accentTint, lineWidth: lineWidth)
                 }
             }
     }
 
-    private var fillLayers: [Color] {
-        let theme = themeStore.theme
+    private var fillColor: Color {
         switch fill {
-        case .attachment: return [theme.tintedSurfaceBase(for: colorScheme), theme.messageAttachmentTint(for: colorScheme)]
-        case .userBubble: return [theme.userBubbleBase, theme.userBubbleTint(for: colorScheme)]
-        case .tint: return [theme.messageAttachmentTint(for: colorScheme)]
-        case .base: return [theme.tintedSurfaceBase(for: colorScheme)]
-        case .selectedOption: return [theme.selectedOptionTint(for: colorScheme)]
+        case .elevated: .appSecondarySystemBackground
+        case .tinted: themeStore.theme.surfaceTint(for: colorScheme)
+        case .subtle: .appSubtleFill
+        case .selected: .appSelectedFill
         }
     }
 }
 
 extension View {
-    func themedSurface(cornerRadius: CGFloat, fill: ThemedSurfaceFill = .attachment,
+    func themedSurface(cornerRadius: CGFloat, fill: ThemedSurfaceFill = .elevated,
                        stroke: ThemedSurfaceStroke = .standard) -> some View {
         modifier(ThemedSurface(cornerRadius: cornerRadius, fill: fill, stroke: stroke))
     }

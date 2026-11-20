@@ -60,7 +60,7 @@ struct StatusPill<Label: View>: View {
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .appGlass(.standard, in: .capsule)
+                .appGlass(in: .capsule)
                 .padding(.vertical, StatusPillShape.hitMargin)
                 .contentShape(.rect)
         }

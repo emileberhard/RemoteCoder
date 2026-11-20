@@ -8,7 +8,7 @@ from swift_sources import code_only, source_files
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW_GLASS = re.compile(r"\.glassEffect\s*\(|\.buttonStyle\s*\(\s*\.glass(?:Prominent)?\b")
-OWNER = re.compile(r"\bstruct\s+AppGlassButtonStyle\b")
+OWNER = re.compile(r"\bstruct\s+AppGlassModifier\b")
 
 
 def violations(path: Path, source: str) -> list[str]:

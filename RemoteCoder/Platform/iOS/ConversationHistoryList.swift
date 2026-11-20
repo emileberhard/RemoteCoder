@@ -26,7 +26,7 @@ struct ConversationHistoryList: View, Equatable {
 
     var body: some View {
         ZStack {
-            ThemedSheetBackground()
+            DrawerBackground()
             ZStack {
                 if selection == nil, window.search.isActive {
                     ConversationSearchList(search: window.search, open: actions.openSearch, ask: actions.askSearch)
@@ -39,7 +39,7 @@ struct ConversationHistoryList: View, Equatable {
             }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 bottomBar
-                    .background { ThemedSheetBottomBarBackground() }
+                    .background { DrawerBottomBarBackground() }
             }
             .scrollEdgeEffectHidden(true, for: .bottom)
         }
@@ -82,7 +82,7 @@ struct ConversationHistoryList: View, Equatable {
                 } else if items.isEmpty, snapshot != nil {
                     emptyState
                 } else {
-                    ForEach(items) { item in
+                    ForEach(items.enumerated(), id: \.element.id) { index, item in
                         switch item {
                         case let .pinnedHeader(summary):
                             sectionHeader(summary, identifier: "drawer-pinned",
@@ -127,7 +127,13 @@ struct ConversationHistoryList: View, Equatable {
                                 withAnimation(reduceMotion ? nil : .snappy) { window.revealMoreSettled() }
                             }
                         case let .row(row):
+                            let separatesNextRow = if index + 1 < items.count, case .row = items[index + 1] {
+                                true
+                            } else {
+                                false
+                            }
                             rowView(row)
+                                .drawerRowDivider(when: separatesNextRow)
                                 .zIndex(risingRowIDs.contains(row.id) ? 1 : 0)
                                 .transition(.opacity)
                         }
@@ -204,7 +210,7 @@ struct ConversationHistoryList: View, Equatable {
     @ViewBuilder
     private func draftsSection(_ drafts: [UnsentDraftRow], above firstItem: ConversationSidebarItem?) -> some View {
         DrawerSectionHeader(title: "Drafts", systemImage: "square.and.pencil", isFirst: true)
-        ForEach(drafts) { draft in
+        ForEach(drafts.enumerated(), id: \.element.id) { index, draft in
             UnsentDraftRowView(row: draft, open: { actions.openDraft(draft.address) },
                                discard: { actions.discardDraft(draft.address) })
                 .equatable()
@@ -216,6 +222,7 @@ struct ConversationHistoryList: View, Equatable {
                 } onPresentationChanged: { shown in
                     swipeChanged("draft-\(draft.address.draftID)|trailing", shown: shown)
                 }
+                .drawerRowDivider(when: index + 1 < drafts.count)
                 .transition(.opacity)
         }
         if let hidden = snapshot?.hiddenDraftCount, hidden > 0 {
@@ -274,13 +281,8 @@ struct ConversationHistoryList: View, Equatable {
             .glassTapTarget(cornerRadius: DrawerListMetrics.cardCornerRadius)
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: .disclosure, pressedScale: 0.985, pressedOpacity: 0.9))
-        .background {
-            Color.clear
-                .appContentSurface(.standard, in: .rect(cornerRadius: DrawerListMetrics.cardCornerRadius))
-                .opacity(isFolded ? 1 : 0)
-        }
         .padding(.top, isFirst ? (isFolded ? 0 : -6) : (isFolded ? 4 : 2))
-        .padding(.bottom, isFolded ? 0 : -10)
+        .padding(.bottom, isFolded ? 0 : -DrawerListMetrics.rowSpacing)
         .accessibilityAddTraits(.isHeader)
         .accessibilityValue(foldValue(summary, isFolded: isFolded))
         .accessibilityIdentifier(identifier)
@@ -313,7 +315,7 @@ struct ConversationHistoryList: View, Equatable {
                 if let hostName = header.hostName {
                     Text(hostName)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(themeStore.theme.colors.accentTint)
+                        .foregroundStyle(themeStore.theme.drawerHostForeground)
                         .lineLimit(1)
                 }
             }
@@ -376,7 +378,7 @@ struct ConversationHistoryList: View, Equatable {
         .buttonStyle(ResponsiveButtonStyle(feedback: .buttonPress, pressedScale: 0.97, pressedOpacity: 0.9))
         .padding(.horizontal, 18)
         .frame(height: 50)
-        .appGlass(.standard, in: .capsule, interactive: true)
+        .appGlass(in: .capsule, interactive: true)
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
     }
@@ -424,7 +426,7 @@ struct ConversationHistoryList: View, Equatable {
             }
             .padding(.horizontal, 18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .appGlass(.standard, in: .rect(cornerRadius: 25))
+            .appGlass(in: .rect(cornerRadius: 25))
             .scrollItemMenuObstruction(rowMenu)
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
@@ -528,7 +530,7 @@ extension ConversationHistoryList {
                     .padding(.horizontal, 16)
                     .frame(height: 44)
                     .buttonStyle(ResponsiveButtonStyle(feedback: .buttonPress, pressedScale: 0.96, pressedOpacity: 0.9))
-                    .appGlass(.standard, in: .capsule, interactive: true)
+                    .appGlass(in: .capsule, interactive: true)
                 } else {
                     newConversationControl
                 }
@@ -537,9 +539,4 @@ extension ConversationHistoryList {
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
     }
-}
-
-private enum DrawerListMetrics {
-    static let rowSpacing: CGFloat = 10
-    static let cardCornerRadius: CGFloat = 16
 }

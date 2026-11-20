@@ -1024,8 +1024,10 @@ private struct ScrollToBottomButton: View {
                         .foregroundStyle(Color.appLabel)
                         .scaledFont(TypeMetrics.symbol(20, weight: .semibold))
                         .scaledFrame(width: ControlMetrics.minimumTarget, height: ControlMetrics.minimumTarget + 6)
+                        .contentShape(.capsule)
                 }
-                .buttonStyle(.appGlassActionFeedback)
+                .buttonStyle(.plain)
+                .appGlass(in: .capsule, interactive: true)
                 .accessibilityLabel("Scroll to latest message")
                 .transcriptPerfFeature("tooltips") { $0.tooltip("Scroll to latest message") }
                 .accessibilityIdentifier("transcript-jump-to-latest")

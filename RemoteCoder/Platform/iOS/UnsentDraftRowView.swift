@@ -17,7 +17,7 @@ struct UnsentDraftRowView: View, Equatable {
                         Text(row.hostName)
                             .font(.caption2)
                             .fontWeight(.semibold)
-                            .foregroundStyle(themeStore.theme.colors.accentTint)
+                            .foregroundStyle(themeStore.theme.drawerHostForeground)
                             .lineLimit(1)
                             .accessibilityLabel("On \(row.hostName)")
                         if !row.workingDirectory.isEmpty {
@@ -37,7 +37,7 @@ struct UnsentDraftRowView: View, Equatable {
                             .resizable()
                             .scaledToFit()
                             .frame(width: markSize, height: markSize)
-                            .foregroundStyle(provider.markStyle)
+                            .foregroundStyle(.secondary)
                             .accessibilityLabel("\(provider.displayName) draft")
                     }
                 }
@@ -69,6 +69,6 @@ struct UnsentDraftRowView: View, Equatable {
         .accessibilityActions {
             Button("Discard Draft", systemImage: "trash", action: discard)
         }
-        .appContentSurface(row.isSelected ? .selected : .standard, in: .rect(cornerRadius: 16))
+        .background(row.isSelected ? Color.appSelectedFill : .clear, in: .rect(cornerRadius: 12))
     }
 }

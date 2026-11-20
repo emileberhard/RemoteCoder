@@ -76,7 +76,7 @@ struct VoiceCallSettingsBar: View {
         .id(bound?.threadId)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)
-        .appGlass(.standard, in: .rect(cornerRadius: 28))
+        .appGlass(in: .rect(cornerRadius: 28))
         .disabled(bound == nil)
         .accessibilityIdentifier("voice-conversation-settings")
         .task(id: bound?.threadId) { screen.refreshReasoningVisibility() }

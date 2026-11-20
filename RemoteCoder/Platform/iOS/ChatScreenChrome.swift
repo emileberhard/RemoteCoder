@@ -4,7 +4,6 @@ struct ChatScreenChrome: ViewModifier {
     let workspace: ChatWorkspaceModel
     let screen: ChatScreenModel
     let onReturnToParent: () -> Void
-    let onOpenConversation: (ConversationAddress) -> Void
     let onOpenConversations: (() -> Void)?
     let onChooseFolder: () -> Void
     let onNewChatInHome: () -> Void
@@ -21,7 +20,6 @@ struct ChatScreenChrome: ViewModifier {
                     workspace: workspace,
                     screen: screen,
                     onReturnToParent: onReturnToParent,
-                    onOpenConversation: onOpenConversation,
                     onOpenConversations: onOpenConversations,
                     onChooseFolder: onChooseFolder,
                     onNewChatInHome: onNewChatInHome

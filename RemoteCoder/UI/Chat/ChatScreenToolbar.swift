@@ -5,7 +5,6 @@ struct ChatScreenToolbar: View {
     let workspace: ChatWorkspaceModel
     let screen: ChatScreenModel
     let onReturnToParent: () -> Void
-    let onOpenConversation: (ConversationAddress) -> Void
     let onOpenConversations: (() -> Void)?
     let onChooseFolder: () -> Void
     let onNewChatInHome: () -> Void
@@ -14,7 +13,6 @@ struct ChatScreenToolbar: View {
         VStack(spacing: 8) {
             header
             HostAvailabilityLines(target: screen.target, lines: \.chat)
-            ScreenForkOriginHeader(screen: screen, onOpen: onOpenConversation)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 6)

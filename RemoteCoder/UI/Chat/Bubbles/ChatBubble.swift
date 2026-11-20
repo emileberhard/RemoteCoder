@@ -65,7 +65,7 @@ private extension ChatBubble {
                 Spacer(minLength: 48)
                 messageContent
                     .padding(14)
-                    .themedSurface(cornerRadius: 18, fill: .userBubble)
+                    .themedSurface(cornerRadius: 18, fill: .tinted)
                     .contentShape(RoundedRectangle(cornerRadius: 18))
             }
             .padding(.vertical, Self.messageVerticalInset)

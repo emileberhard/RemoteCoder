@@ -992,11 +992,6 @@ entrypoint linked above.
   - Picking a different working directory immediately starts a fresh
     conversation, so a session never spans repositories. On an unsent draft
     it changes that draft's folder instead.
-  - A fork shows `ForkOriginHeader`, "Forked from" its source's sidebar title
-    ("another conversation" while that header is not cached), below the header
-    on iOS and below the Mac window toolbar. A tap opens the source by exact
-    address through the ordinary conversation switch. Only a known
-    `forkedFromId` shows it; a subagent that is also a fork shows both headers.
 - **Mac window toolbar.** `ChatScreenChrome` is the platform seam for the
   header: the iOS arm keeps `ChatScreenToolbar` as a top inset, and the Mac arm
   puts the chat into the detail column's window toolbar instead.
@@ -1482,8 +1477,8 @@ entrypoint linked above.
   hides the bottom scroll edge effect. The bar extends that blurred edge under
   the field, which costs about four offscreen passes per frame whenever the
   drawer is on screen (`DrawerMovement` on the test iPhone: 32.9 without it,
-  37.2 with the automatic or the hard style). `ThemedSheetBottomBarBackground`
-  draws the fade under the bar as plain gradients in the sheet's colors, which
+  37.2 with the automatic or the hard style). `DrawerBottomBarBackground`
+  draws the fade under the bar as a plain gradient in the drawer background color, which
   measures the same as no fade. Keep the system effect hidden unless a device
   trace shows the pass count unchanged.
   [System architecture](../docs/system-architecture.md#conversation-search)
@@ -1551,6 +1546,9 @@ entrypoint linked above.
   A Codex thread in the host's default context copies ChatGPT Desktop's
   `codex://threads/<id>` link, which that Mac's desktop app opens (upstream
   `/app` builds the same form). Claude threads copy the exact gateway thread ID. Neither names the host.
+  - A row with a known `forkedFromId` shows a branch symbol beside its other
+    status icons. "Open Parent Chat" switches to that immediate fork
+    source on the same host, including when its header is not cached.
   - On iOS, UIKit owns the menu. `ScrollItemContextMenu<ConversationAddress>` installs one
     `UIContextMenuInteraction` on the list's scroll view, per-row anchors mark
     each row's frame, and UIKit builds a menu once when it opens. Do not move
@@ -1569,7 +1567,8 @@ entrypoint linked above.
   through `thread/name/set` instead of teaching the app their prompt format.
   Below schema 5 the pin name remains the title,
   Rename edits that name, and Regenerate Name is available only when unpinned.
-- There is no close button: the scrim tap or a leftward drag closes the drawer.
+- Tapping the visible chat or dragging left closes the drawer. The dismissal
+  surface dims the shifted chat while the drawer keeps its normal colors.
 - `ConversationDrawer` is gesture-owned, not a scroll view.
   - One `DrawerPanGesture` (`UIGestureRecognizerRepresentable`) owns horizontal
     drags. Vertical-only scroll views wait for it to fail, and it waits for
@@ -1675,15 +1674,15 @@ entrypoint linked above.
     `docs/directory-quick-switch.md`. The Mac `TapHoldButton` is a plain click
     with no hold.
 - **Glass.** `UI/DesignSystem/AppGlass.swift` is the only Liquid Glass entry point.
-  - `.appGlass(role, in:, interactive:)` styles control-layer surfaces that
-    float over content, with the theme's translucent accent tint and a hairline
-    stroke. `.appContentSurface(role, in:)` styles content-layer
-    surfaces (rows, chips, cards) with an opaque premixed theme fill and stroke
-    on both platforms. Banners use `.appGlass`.
-    `GlassRole` is `standard` or `selected`, and the tint mix and opacities are
-    private to that file.
-  - `.buttonStyle(.appGlass)` is tinted glass on iOS and untinted system glass
-    on the Mac, where the accent belongs to primary actions.
+  - `.appGlass(in:, interactive:)` gives app-owned floating controls and
+    banners the same Regular glass, theme tint and hairline on both platforms.
+    An active drawer filter uses an accent badge over the shared glass.
+  - Drawer rows use inset dividers between adjacent items and a fill for
+    selection. The drawer background and host labels take a little of the
+    theme accent. `.appContentSurface` fills persistent chips and cells, and
+    `.themedSurface` fills transcript content. The user-message bubble uses
+    the same `AppTheme.surfaceTint` color and opacity as glass, drawn as a
+    regular shape fill.
   - `scripts/lint-glass` rejects raw `.glassEffect(` and
     `.buttonStyle(.glass/.glassProminent)`.
   - Reuse `GlassToolbarControl` for toolbar and menu capsules.

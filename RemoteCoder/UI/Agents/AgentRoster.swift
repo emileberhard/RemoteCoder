@@ -52,7 +52,7 @@ struct AgentRoster: View {
         .scrollBounceBehavior(.basedOnSize)
         .frame(maxHeight: maxHeight)
         .fixedSize(horizontal: false, vertical: true)
-        .appGlass(.standard, in: .rect(cornerRadius: 20, style: .continuous))
+        .appGlass(in: .rect(cornerRadius: 20, style: .continuous))
         .frame(maxWidth: maxWidth)
         .sheet(item: $placement) { address in
             AgentPlacementPicker(agent: address, workspace: workspace)

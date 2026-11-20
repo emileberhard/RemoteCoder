@@ -18,7 +18,7 @@ struct NewChatButton: View {
             .symbolEffectsRemoved(reduceMotion)
             .symbolEffect(.bounce, value: homeStarts)
             .frame(width: 44, height: 44)
-            .appGlass(.standard, in: .circle)
+            .appGlass(in: .circle)
             .scaleEffect(isPressed && !reduceMotion ? 0.96 : 1)
             .opacity(isPressed ? 0.9 : 1)
             .animation(reduceMotion ? nil : AppControlMotion.press(isPressed), value: isPressed)

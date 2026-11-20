@@ -13,7 +13,6 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
     @State private var dragInitiallyOpen = false
     @State private var hapticOwner = UUID()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.displayScale) private var displayScale
 
@@ -64,7 +63,7 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
             }
             #endif
         }
-        .background { ThemedSheetBackground() }
+        .background { DrawerBackground() }
         .onChange(of: presentation.isOpen) { _, open in
             guard open != committedOpen else { return }
             HapticService.shared.cancelInteraction(owner: hapticOwner)
@@ -84,7 +83,7 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
             presentation.isOpen = false
         } label: {
             Rectangle()
-                .fill(colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.16))
+                .fill(Color.black.opacity(0.12 * coverage))
                 .contentShape(.rect)
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: nil, pressedScale: 1, pressedOpacity: 1))
@@ -92,7 +91,6 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
         .accessibilityIdentifier("close-conversations")
         .accessibilityHidden(!presentation.isOpen)
         .allowsHitTesting(presentation.isOpen)
-        .opacity(coverage)
         .ignoresSafeArea()
     }
 

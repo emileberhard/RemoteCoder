@@ -205,8 +205,6 @@ private struct MarkdownTableView: View {
     let alignments: [TableAlignment]
     let rows: [[AttributedString]]
     let columnCharacterCounts: [Int]
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(AppThemeStore.self) private var themeStore
     #if os(macOS)
     @State private var idealWidth: CGFloat?
     #endif
@@ -276,11 +274,11 @@ private struct MarkdownTableView: View {
     }
 
     private var tableHeaderBackground: Color {
-        themeStore.theme.selectedOptionTint(for: colorScheme)
+        .appSelectedFill
     }
 
     private var tableAltRowBackground: Color {
-        themeStore.theme.messageAttachmentTint(for: colorScheme)
+        .appSubtleFill
     }
 
     private func alignment(for colIdx: Int) -> Alignment {

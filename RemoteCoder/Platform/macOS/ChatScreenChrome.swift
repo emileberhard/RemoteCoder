@@ -5,7 +5,6 @@ struct ChatScreenChrome: ViewModifier {
     let workspace: ChatWorkspaceModel
     let screen: ChatScreenModel
     let onReturnToParent: () -> Void
-    let onOpenConversation: (ConversationAddress) -> Void
     let onOpenConversations: (() -> Void)?
     let onChooseFolder: () -> Void
     let onNewChatInHome: () -> Void
@@ -18,12 +17,9 @@ struct ChatScreenChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 6) {
-                    HostAvailabilityLines(target: screen.target, lines: \.chat)
-                        .padding(.horizontal, 16)
-                    ScreenForkOriginHeader(screen: screen, onOpen: onOpenConversation)
-                }
-                .padding(.top, 8)
+                HostAvailabilityLines(target: screen.target, lines: \.chat)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
             }
             .navigationTitle(title)
             .navigationSubtitle(subtitle)

@@ -104,7 +104,7 @@ private struct AttentionPanel: View {
         }
         .padding(12)
         .frame(width: 300)
-        .appGlass(.standard, in: .rect(cornerRadius: 16, style: .continuous))
+        .appGlass(in: .rect(cornerRadius: 16, style: .continuous))
     }
 }
 

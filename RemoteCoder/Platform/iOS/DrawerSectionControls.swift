@@ -29,7 +29,6 @@ struct DrawerSectionHeader: View {
 struct DrawerMoreButton: View {
     let title: String
     let action: () -> Void
-    @Environment(AppThemeStore.self) private var themeStore
     @ScaledMetric(relativeTo: .subheadline) private var iconWidth: CGFloat = 18
 
     var body: some View {
@@ -42,12 +41,30 @@ struct DrawerMoreButton: View {
                 Text(title)
                     .font(.footnote.weight(.semibold))
             }
-            .foregroundStyle(themeStore.theme.colors.accentTint)
+            .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget, alignment: .leading)
             .contentShape(.rect)
         }
-        .padding(.vertical, -6)
         .buttonStyle(ResponsiveButtonStyle(feedback: .disclosure, pressedScale: 0.99, pressedOpacity: 0.8))
+    }
+}
+
+enum DrawerListMetrics {
+    static let rowSpacing: CGFloat = 4
+    static let cardCornerRadius: CGFloat = 16
+}
+
+extension View {
+    func drawerRowDivider(when visible: Bool) -> some View {
+        overlay(alignment: .bottom) {
+            if visible {
+                Divider()
+                    .padding(.horizontal, 12)
+                    .offset(y: DrawerListMetrics.rowSpacing / 2)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
     }
 }

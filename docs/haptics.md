@@ -28,11 +28,9 @@ Ordinary buttons use `.appButtonFeedback()` / `.appIconButtonFeedback()` or the
 existing semantic `ResponsiveButtonStyle`. Its `appPressFeedback` observes the rising
 press transition and calls the service directly; the measurement harness shares that modifier. UIKit-backed controls call `HapticService.play` from their existing contact callback, before preparing a held interaction. No additional recognizer is installed.
 
-Native glass buttons use `.buttonStyle(.appGlass)` and acknowledge activation
-while keeping system glass animation and tracking. When the action already owns
-its acknowledgement, use `.appGlassActionFeedback` explicitly: removal reports
-its accepted result, Scroll to latest reports disclosure, and neither also emits
-an extra activation pulse. This is an ownership choice, not a second glass look.
+Glass buttons use `.appGlass(in:, interactive:)` for their material. Buttons
+with an action-owned acknowledgement use a plain button style under the glass.
+Scroll to latest reports disclosure from its action.
 
 Native picker and settings-tab **input bindings** use
 `.nativeSelectionFeedback()`, which adds one selection acknowledgement only
@@ -89,7 +87,7 @@ is silent. Manual page changes and folder disclosures have their own quiet
 acknowledgement. The conversation drawer plays one system selection tick on a
 horizontal drag release only when the chosen destination differs from its initial
 side and the drawer is strictly between its endpoints. Cancelled drags, returns to the initial side, endpoint releases,
-touch-down, movement, settle, drawer-button and scrim taps, and programmatic
+touch-down, movement, settle, drawer-button and dismissal taps, and programmatic
 open/close are silent. Accepted conversation or draft selection retains its
 selection feedback without another closing tick.
 The drag prepares one view-attached selection generator at its start. Release

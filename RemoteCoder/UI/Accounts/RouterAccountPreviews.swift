@@ -119,7 +119,7 @@ private struct UsageRingsFixture: View {
             UsageRings(mark: .copilot, rows: directory.copilot?.usageRows(now: .now) ?? [], status: nil, diameter: 36)
                 .padding(4)
         }
-        .appGlass(.standard, in: .capsule, interactive: true)
+        .appGlass(in: .capsule, interactive: true)
         .padding()
     }
 }

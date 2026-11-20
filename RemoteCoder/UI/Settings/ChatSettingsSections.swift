@@ -4,11 +4,9 @@ struct ThemeSwatch: View {
     let theme: AppTheme
 
     var body: some View {
-        HStack(spacing: 3) {
-            Circle().fill(theme.colors.accentTint)
-            Circle().fill(theme.colors.highlightSecondary)
-        }
-        .frame(width: 27, height: 12)
+        Circle()
+            .fill(theme.colors.accentTint)
+            .frame(width: 12, height: 12)
         .accessibilityHidden(true)
     }
 }

@@ -63,7 +63,6 @@ struct DirectoryPickerView<HostSwitcher: View>: View {
 private struct DirectoryFolderList: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppThemeStore.self) private var themeStore
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var viewModel: DirectoryPickerViewModel
     @State private var isVisible = false
@@ -160,13 +159,13 @@ private struct DirectoryFolderList: View {
                             .scaledFont(.footnote.weight(.medium))
                             .foregroundStyle(.secondary)
                     }
-                    .listRowBackground(sheetListRowBackground)
+                    .listRowBackground(Color.clear)
                 case .loaded(let children) where children.isEmpty:
                     ContentUnavailableView(
                         "No subdirectories found",
                         systemImage: "folder.badge.questionmark"
                     )
-                    .listRowBackground(sheetListRowBackground)
+                    .listRowBackground(Color.clear)
                 case .loaded, .failed:
                     EmptyView()
                 }
@@ -238,7 +237,7 @@ private struct DirectoryFolderList: View {
             onToggleFavorite: { toggleFavorite(item) }
         )
         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-        .listRowBackground(selected ? themeStore.theme.colors.accentTint.opacity(0.10) : .clear)
+        .listRowBackground(selected ? Color.appSelectedFill : .clear)
     }
 
     private func favoriteButton(_ favorite: FavoriteFolder) -> some View {
@@ -246,7 +245,7 @@ private struct DirectoryFolderList: View {
         return Button { select(favorite) } label: {
             HStack(spacing: 8) {
                 Image(systemName: selected ? "folder.fill" : "folder")
-                    .foregroundStyle(selected ? AnyShapeStyle(themeStore.theme.colors.accentTint) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(favorite.title)
                         .scaledFont(.subheadline.weight(.medium))
@@ -254,8 +253,8 @@ private struct DirectoryFolderList: View {
                         .truncationMode(.middle)
                     if favorite.showsHostLabel {
                         Text(favorite.hostName)
-                            .scaledFont(.caption2.weight(.semibold))
-                            .foregroundStyle(themeStore.theme.colors.accentTint)
+                            .scaledFont(.caption2)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                 }
@@ -270,14 +269,7 @@ private struct DirectoryFolderList: View {
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget + 8, alignment: .leading)
             .foregroundStyle(.primary)
-            .background(selected ? themeStore.theme.colors.accentTint.opacity(0.14) : sheetListRowBackground,
-                        in: .rect(cornerRadius: 14))
-            .overlay {
-                if selected {
-                    RoundedRectangle(cornerRadius: 14)
-                        .strokeBorder(themeStore.theme.colors.accentTint.opacity(0.5), lineWidth: 1)
-                }
-            }
+            .appContentSurface(selected ? .selected : .standard, in: .rect(cornerRadius: 14))
             .contentShape(.rect(cornerRadius: 14))
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: selected ? .buttonPress : nil, pressedScale: 0.98, pressedOpacity: 0.9))
@@ -340,10 +332,6 @@ private struct DirectoryFolderList: View {
         return viewModel.selectedPath == item.path
     }
 
-    private var sheetListRowBackground: Color {
-        themeStore.theme.sheetListRowBackground(for: colorScheme)
-    }
-
 }
 
 private struct DirectoryRowEntry: Identifiable {
@@ -355,6 +343,7 @@ private struct DirectoryRowEntry: Identifiable {
 
 struct WorkspaceDirectoryPicker: View {
     let workspace: ChatWorkspaceModel
+    @Environment(AppThemeStore.self) private var themeStore
 
     var body: some View {
         if let screen = workspace.selectedScreen {
@@ -386,6 +375,7 @@ struct WorkspaceDirectoryPicker: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: selected ? "checkmark" : "server.rack")
+                                .foregroundStyle(selected ? AnyShapeStyle(themeStore.theme.colors.accentTint) : AnyShapeStyle(.secondary))
                             Text(host.name)
                         }
                         .scaledFont(.subheadline.weight(.semibold))

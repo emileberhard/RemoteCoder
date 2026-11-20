@@ -41,7 +41,7 @@ private struct AvailabilityDrawerFixture: View {
         let rows = AvailabilityFixture.rows(host: host, label: presentation.rowLabel)
         #if os(iOS)
         ZStack {
-            ThemedSheetBackground()
+            DrawerBackground()
             VStack(alignment: .leading, spacing: 0) {
                 HostAvailabilityLineList(lines: presentation.strip, detail: { nil }, retry: {}).padding(.horizontal)
                 ScrollView {
@@ -77,7 +77,7 @@ private struct AvailabilityChatFixture: View {
 
     var body: some View {
         ZStack {
-            ThemedSheetBackground()
+            DrawerBackground()
             VStack(alignment: .leading, spacing: 16) {
                 HostAvailabilityLineList(lines: presentation.chat, detail: { nil }, retry: {})
                 ForEach(Array(AvailabilityFixture.messages.enumerated()), id: \.offset) { index, text in

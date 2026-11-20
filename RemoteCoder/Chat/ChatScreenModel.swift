@@ -1228,7 +1228,9 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         AppPerformanceDiagnostics.shared.finishHistory(operationID: operation)
         await conversations.evictIdle(keeping: target.presentedConversationIDs)
         target.warmConversationsIfIdle()
-        if let refreshed { await adoptForkOrigin(of: refreshed) }
+        if let refreshed, let source = refreshed.forkedFromThreadID {
+            await target.conversationList.recordForkOrigin(threadID: refreshed.id, source: source)
+        }
         return failure.map(ResumeOutcome.failed) ?? .loaded
     }
 
@@ -1311,8 +1313,10 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             if AgentProvider.provider(forThreadID: response.thread.id) == .claude {
                 await target.metadataService.sync()
             }
+            let header = await ConversationHeader.prepare(response.thread)
+            await target.conversationList.record(header)
             feedback(.success)
-            resumeConversation(await ConversationHeader.prepare(response.thread))
+            resumeConversation(header)
         } catch {
             present(.conversation(error.localizedDescription))
             if !(error is CancellationError) { feedback(.error) }
@@ -1793,22 +1797,6 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
             parent: parent, parentTitle: parentTitle)
     }
 
-    var forkOrigin: ForkOrigin? {
-        guard let threadID = openThreadID else { return shownDraftForkSource.map(forkOrigin(of:)) }
-        let current = activeConversation?.id == threadID ? activeConversation : nil
-        guard let source = target.conversationList.header(id: threadID)?.forkedFromThreadID ?? current?.forkedFromThreadID
-        else { return nil }
-        return forkOrigin(of: ConversationAddress(hostID: hostID, threadID: source))
-    }
-
-    func forkOrigin(of source: ConversationAddress) -> ForkOrigin {
-        let list = target.conversationList
-        let title = source.hostID == hostID ? list.header(id: source.threadID).map {
-            ConversationSidebarProjection.title(for: $0, pinnedName: list.pinnedName(for: $0.id))
-        } : nil
-        return ForkOrigin(source: source, sourceTitle: title)
-    }
-
     var acceptsAttachments: Bool {
         target.acceptsWork && currentDraft != nil && acceptsConversationInput && currentConversationDispatchBlock != .otherClient
     }
@@ -1961,14 +1949,6 @@ final class ChatScreenModel: HistoryEdgeHost, RealtimeVoicePreparationHost {
         }
         if isCurrent() { refreshReasoningVisibility() }
         return refreshed
-    }
-
-    private func adoptForkOrigin(of refreshed: ConversationHeader) async {
-        guard let source = refreshed.forkedFromThreadID else { return }
-        if activeConversation?.id == refreshed.id, activeConversation?.forkedFromThreadID != source {
-            activeConversation?.forkedFromThreadID = source
-        }
-        await target.conversationList.recordForkOrigin(threadID: refreshed.id, source: source)
     }
 
     @discardableResult

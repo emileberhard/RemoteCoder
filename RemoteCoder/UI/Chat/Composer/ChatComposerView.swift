@@ -249,7 +249,7 @@ struct ChatComposerView: View {
         .padding(.top, 4)
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .appGlass(.standard, in: .rect(cornerRadius: surfaceCornerRadius))
+        .appGlass(in: .rect(cornerRadius: surfaceCornerRadius))
         .containerShape(.rect(cornerRadius: surfaceCornerRadius))
         .overlay { attachmentDropHighlight }
         .sheet(item: $presentations.editingAttachment) { editing in

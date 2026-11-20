@@ -48,7 +48,7 @@ struct SlideToConfirmButton<Face: View>: View {
                 .contentTransition(.identity)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .appGlass(.standard, in: .capsule)
+                .appGlass(in: .capsule)
                 .fixedSize()
 
             ZStack(alignment: .bottom) {
@@ -65,7 +65,7 @@ struct SlideToConfirmButton<Face: View>: View {
                     .offset(y: -thumbLift)
             }
             .frame(width: ControlMetrics.minimumTarget, height: ControlMetrics.minimumTarget + Self.travel)
-            .appGlass(.standard, in: .capsule)
+            .appGlass(in: .capsule)
         }
     }
 

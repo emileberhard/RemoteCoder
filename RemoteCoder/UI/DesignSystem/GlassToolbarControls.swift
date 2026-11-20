@@ -49,7 +49,7 @@ struct GlassToolbarControl<Content: View>: View {
             .frame(height: height)
             .padding(.horizontal, horizontalPadding)
             .contentShape(.capsule)
-            .appGlass(.standard, in: .capsule, interactive: true)
+            .appGlass(in: .capsule, interactive: true)
     }
 }
 
@@ -59,7 +59,6 @@ struct GlassCircleButton: View {
 
     let systemImage: String
     var symbolSize: CGFloat = 17
-    var role: AppTheme.GlassRole = .standard
     var feedback: HapticEvent? = .iconPress
     let action: () -> Void
 
@@ -74,7 +73,7 @@ struct GlassCircleButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: feedback, pressedScale: 0.96, pressedOpacity: 0.9))
-        .appGlass(role, in: .circle)
+        .appGlass(in: .circle)
         .accessibilityShowsLargeContentViewer()
     }
 }

@@ -34,7 +34,7 @@ struct QuestionOptionRow: View {
             }
             .padding(ControlMetrics.rowInsets)
             .frame(maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget, alignment: .leading)
-            .themedSurface(cornerRadius: 12, fill: isSelected ? .selectedOption : .tint,
+            .themedSurface(cornerRadius: 12, fill: isSelected ? .selected : .subtle,
                            stroke: isSelected ? .accent(lineWidth: contrast == .increased ? 1.5 : 1) : .standard)
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
@@ -56,6 +56,6 @@ struct QuestionOptionRow: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Capsule().fill(themeStore.theme.tintedSurfaceStroke(for: colorScheme)))
+            .background(Capsule().fill(Color.appHairline))
     }
 }

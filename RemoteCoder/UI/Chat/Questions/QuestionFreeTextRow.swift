@@ -23,7 +23,7 @@ struct QuestionFreeTextRow: View {
                 .focused(focus)
                 .padding(ControlMetrics.rowInsets)
                 .frame(maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget, alignment: .leading)
-                .themedSurface(cornerRadius: 12, fill: .base, stroke: focus.wrappedValue ? .accent(lineWidth: 1) : .standard)
+                .themedSurface(cornerRadius: 12, stroke: focus.wrappedValue ? .accent(lineWidth: 1) : .standard)
                 .accessibilityLabel("Your answer")
                 .accessibilityIdentifier(accessibilityIdentifier)
         } else {
@@ -40,7 +40,7 @@ struct QuestionFreeTextRow: View {
                 }
                 .padding(ControlMetrics.rowInsets)
                 .frame(maxWidth: .infinity, minHeight: ControlMetrics.minimumTarget, alignment: .leading)
-                .themedSurface(cornerRadius: 12, fill: .tint)
+                .themedSurface(cornerRadius: 12, fill: .subtle)
                 .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             .buttonStyle(ResponsiveButtonStyle(feedback: .buttonPress, pressedScale: 0.98))

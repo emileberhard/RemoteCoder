@@ -33,7 +33,7 @@ struct CompletionBanner: View {
                 content
             }
         }
-        .appGlass(.standard, in: .rect(cornerRadius: Self.cornerRadius))
+        .appGlass(in: .rect(cornerRadius: Self.cornerRadius))
     }
 
     private var content: some View {

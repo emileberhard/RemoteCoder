@@ -45,7 +45,7 @@ class HapticLintTests(unittest.TestCase):
         self.assertIn('NewFeature.swift:5:', errors[0])
 
     def test_glass_owner_follows_content_across_moves(self):
-        source = 'struct AppGlassButtonStyle {}\nlet style = view.buttonStyle(.glassProminent)'
+        source = 'struct AppGlassModifier {}\nlet style = view.buttonStyle(.glassProminent)'
         self.assertEqual([], GLASS_CHECK(Path("Moved/AppGlass.swift"), source))
         self.assertTrue(GLASS_CHECK(Path("RemoteCoder/UI/DesignSystem/AppGlass.swift"), 'let style = view.buttonStyle(.glassProminent)'))
 

@@ -112,7 +112,7 @@ struct CommandPalette: View {
             }
         }
         .frame(width: 560)
-        .appGlass(.standard, in: .rect(cornerRadius: 18))
+        .appGlass(in: .rect(cornerRadius: 18))
         .onAppear { isFieldFocused = true }
     }
 

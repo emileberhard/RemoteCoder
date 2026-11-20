@@ -422,6 +422,10 @@ struct ConversationSourceRow: View, Equatable {
                     Image(systemName: "bell.slash")
                         .accessibilityLabel("Muted")
                 }
+                if row.forkSource != nil {
+                    Image(systemName: "arrow.triangle.branch")
+                        .accessibilityLabel("Forked conversation")
+                }
                 Text(folderName)
                     .truncationMode(.middle)
                 if let hostName {

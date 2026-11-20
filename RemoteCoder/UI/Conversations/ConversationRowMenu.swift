@@ -40,6 +40,9 @@ struct ConversationHistoryActions {
         items.append(readToggle(for: row))
         if let toggle = muteToggle(for: row) { items.append(toggle) }
         items.append(ContextMenuItem(title: "Fork", systemImage: "arrow.triangle.branch") { fork(row.address) })
+        if let source = row.forkSource {
+            items.append(ContextMenuItem(title: "Open Parent Chat", systemImage: "arrow.turn.up.left") { _ = open(source) })
+        }
         if let toggle = settlementToggle(for: row) { items.append(toggle) }
         if let link = row.address.codexDesktopLink {
             items.append(ContextMenuItem(title: "Copy link", systemImage: "link") { HapticService.shared.copy(link) })

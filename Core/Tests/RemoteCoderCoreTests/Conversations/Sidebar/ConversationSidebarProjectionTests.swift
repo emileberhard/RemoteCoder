@@ -56,6 +56,19 @@ struct ConversationSidebarProjectionTests {
         #expect(miniRow.id != bookRow.id)
     }
 
+    @Test func aForkOpensItsImmediateSourceOnTheSameHost() throws {
+        var fork = try thread("fork", updatedAt: 2)
+        fork.forkedFromThreadID = "source"
+        let rows = sidebarRows(hosts: [
+            host(mini, name: "Mini", threads: [fork]),
+            host(book, name: "Book", threads: [try thread("source", updatedAt: 3), try thread("fork", updatedAt: 2)]),
+        ])
+
+        let forkRow = try #require(rows.first { $0.address == ConversationAddress(hostID: mini, threadID: "fork") })
+        #expect(forkRow.forkSource == ConversationAddress(hostID: mini, threadID: "source"))
+        #expect(rows.filter { $0.forkSource != nil }.count == 1)
+    }
+
     @Test func schemaFivePinsSortByConversationTitles() throws {
         let marks = ConversationMarks(schemaVersion: 5, revision: 1, readBaseline: 0,
             threads: ["a": ThreadMarks(pinned: true), "b": ThreadMarks(pinned: true)])

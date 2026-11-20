@@ -36,7 +36,7 @@ struct WorkingDirectoryHeader: View {
             .padding(.horizontal, 18)
             .frame(minHeight: 44)
             .contentShape(.capsule)
-            .appGlass(.standard, in: .capsule)
+            .appGlass(in: .capsule)
             .scaleEffect(isPressed && !reduceMotion ? 0.96 : 1)
             .opacity(isPressed ? 0.9 : 1)
             .animation(reduceMotion ? nil : AppControlMotion.press(isPressed), value: isPressed)

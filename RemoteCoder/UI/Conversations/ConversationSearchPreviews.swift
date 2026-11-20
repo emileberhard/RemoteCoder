@@ -40,7 +40,7 @@ private struct ConversationSearchFixture: View {
     var body: some View {
         #if os(iOS)
         ZStack {
-            ThemedSheetBackground()
+            DrawerBackground()
             ConversationSearchList(search: search, open: { _ in .changed }, ask: {})
                 .safeAreaBar(edge: .bottom, spacing: 0) {
                     DrawerSearchField(search: search)
@@ -73,7 +73,7 @@ private struct ConversationSearchFixture: View {
 
 #Preview("Located message") {
     ZStack {
-        ThemedSheetBackground()
+        DrawerBackground()
         VStack(alignment: .leading, spacing: 20) {
             Text("What caused the drawer to stutter?")
                 .scaledFont(.body)

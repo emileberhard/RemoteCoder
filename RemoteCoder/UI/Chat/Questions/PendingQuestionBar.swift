@@ -27,7 +27,7 @@ struct PendingQuestionBar: View {
             .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: .buttonPress, pressedScale: 0.99))
-        .themedSurface(cornerRadius: 20, fill: .tint, stroke: .none)
+        .themedSurface(cornerRadius: 20, fill: .subtle, stroke: .none)
         .accessibilityLabel("Codex has a question")
         .accessibilityValue(prompt.questions.first?.title ?? "")
         .accessibilityHint("Shows the question")

@@ -239,7 +239,6 @@ private struct TimelineMarker: View {
     @InterfaceScaledMetric(relativeTo: .caption) private var markerInset: CGFloat = 3
     @InterfaceScaledMetric(relativeTo: .caption) private var markerSize: CGFloat = 9
     @InterfaceScaledMetric(relativeTo: .caption) private var dotSize: CGFloat = 5
-    @Environment(AppThemeStore.self) private var themeStore
 
     private static let connectorGap: CGFloat = 1
 
@@ -267,7 +266,7 @@ private struct TimelineMarker: View {
         if isFailure {
             Image(systemName: "xmark.circle.fill")
                 .resizable()
-                .foregroundStyle(themeStore.theme.colors.danger)
+                .foregroundStyle(.red)
         } else {
             Circle()
                 .fill(.tertiary)

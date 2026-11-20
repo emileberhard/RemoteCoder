@@ -5,15 +5,26 @@ struct ConversationDrawerFilterButton: View {
     let window: ChatWindowModel
     let onSelect: () -> Void
     @State private var isPresented = false
+    @Environment(AppThemeStore.self) private var themeStore
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        GlassCircleButton(systemImage: "line.3.horizontal.decrease",
-                          role: workspace.drawerPreferences.unreadOnly ? .selected : .standard) {
+        let unreadOnly = workspace.drawerPreferences.unreadOnly
+        GlassCircleButton(systemImage: "line.3.horizontal.decrease") {
             isPresented = true
         }
+        .overlay(alignment: .topTrailing) {
+            if unreadOnly {
+                Circle()
+                    .fill(themeStore.theme.colors.accentTint)
+                    .frame(width: 7, height: 7)
+                    .padding(5)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .accessibilityLabel("View Options")
-        .accessibilityValue(workspace.drawerPreferences.unreadOnly ? "Unread only" : "")
+        .accessibilityValue(unreadOnly ? "Unread only" : "")
         .accessibilityIdentifier("drawer-view-options")
         .popover(isPresented: $isPresented, arrowEdge: .top) {
             ConversationDrawerMenu(workspace: workspace, window: window) {
@@ -91,7 +102,7 @@ struct ConversationDrawerMenu: View {
             .contentShape(.rect(cornerRadius: 14))
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: isSelected ? nil : .selection, pressedScale: 0.97, pressedOpacity: 0.9))
-        .appGlass(isSelected ? .selected : .standard, in: .rect(cornerRadius: 14), interactive: true)
+        .appContentSurface(isSelected ? .selected : .standard, in: .rect(cornerRadius: 14))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("drawer-mode-\(mode.rawValue)")
     }
