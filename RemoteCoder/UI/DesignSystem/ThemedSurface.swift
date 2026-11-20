@@ -38,7 +38,7 @@ private struct ThemedSurface: ViewModifier {
 
     private var fillColor: Color {
         switch fill {
-        case .elevated: .appSecondarySystemBackground
+        case .elevated: colorScheme == .light ? .appSecondarySystemBackground : .appTertiarySystemBackground
         case .tinted: themeStore.theme.surfaceTint(for: colorScheme)
         case .subtle: .appSubtleFill
         case .selected: .appSelectedFill

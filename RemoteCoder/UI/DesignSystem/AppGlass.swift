@@ -48,10 +48,19 @@ enum AppContentSurfaceRole {
 private struct AppContentSurfaceModifier<S: InsettableShape>: ViewModifier {
     let role: AppContentSurfaceRole
     let shape: S
+    @Environment(\.colorSchemeContrast) private var contrast
 
     func body(content: Content) -> some View {
         content.background {
             shape.fill(role == .selected ? Color.appSelectedFill : Color.appSubtleFill)
+                .overlay {
+                    if role == .selected {
+                        shape.strokeBorder(
+                            Color.primary.opacity(contrast == .increased ? 0.65 : 0.26),
+                            lineWidth: contrast == .increased ? 1.5 : 1
+                        )
+                    }
+                }
         }
     }
 }

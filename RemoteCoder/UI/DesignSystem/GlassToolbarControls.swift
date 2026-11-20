@@ -60,6 +60,7 @@ struct GlassCircleButton: View {
     let systemImage: String
     var symbolSize: CGFloat = 17
     var feedback: HapticEvent? = .iconPress
+    var badgeColor: Color?
     let action: () -> Void
 
     var body: some View {
@@ -70,6 +71,16 @@ struct GlassCircleButton: View {
                 .symbolRenderingMode(.monochrome)
                 .foregroundStyle(colorScheme == .dark ? Color.white : Color.primary)
                 .frame(width: 44, height: 44)
+                .overlay(alignment: .topTrailing) {
+                    if let badgeColor {
+                        Circle()
+                            .fill(badgeColor.mix(with: .primary, by: 0.5))
+                            .frame(width: 7, height: 7)
+                            .padding(8)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .contentShape(Circle())
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: feedback, pressedScale: 0.96, pressedOpacity: 0.9))

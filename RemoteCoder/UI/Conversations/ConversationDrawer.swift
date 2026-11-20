@@ -13,6 +13,7 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
     @State private var dragInitiallyOpen = false
     @State private var hapticOwner = UUID()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.displayScale) private var displayScale
 
@@ -45,7 +46,16 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
                     .accessibilityHidden(presentation.isOpen)
                     .overlay { dismissalSurface(coverage: progress) }
                     .animation(reduceMotion ? nil : .smooth(duration: 0.2)) { surface in
-                        surface.clipShape(DrawerSurfaceShape(cornerRadius: progress > 0 ? 32 : 0, safeArea: geometry.safeAreaInsets))
+                        let shape = DrawerSurfaceShape(cornerRadius: progress > 0 ? 32 : 0, safeArea: geometry.safeAreaInsets)
+                        surface.clipShape(shape)
+                            .overlay {
+                                if colorScheme == .dark {
+                                    shape.stroke(Color.appHairline, lineWidth: 1 / displayScale)
+                                        .opacity(progress)
+                                        .allowsHitTesting(false)
+                                        .accessibilityHidden(true)
+                                }
+                            }
                     }
                     .offset(x: pixelAligned(width * progress))
             }
@@ -83,7 +93,8 @@ struct ConversationDrawer<Content: View, Sidebar: View>: View {
             presentation.isOpen = false
         } label: {
             Rectangle()
-                .fill(Color.black.opacity(0.12 * coverage))
+                .fill(Color.black.opacity(0.12))
+                .opacity(coverage)
                 .contentShape(.rect)
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: nil, pressedScale: 1, pressedOpacity: 1))

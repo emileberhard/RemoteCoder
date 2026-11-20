@@ -10,18 +10,11 @@ struct ConversationDrawerFilterButton: View {
 
     var body: some View {
         let unreadOnly = workspace.drawerPreferences.unreadOnly
-        GlassCircleButton(systemImage: "line.3.horizontal.decrease") {
+        GlassCircleButton(
+            systemImage: "line.3.horizontal.decrease",
+            badgeColor: unreadOnly ? themeStore.theme.colors.accentTint : nil
+        ) {
             isPresented = true
-        }
-        .overlay(alignment: .topTrailing) {
-            if unreadOnly {
-                Circle()
-                    .fill(themeStore.theme.colors.accentTint)
-                    .frame(width: 7, height: 7)
-                    .padding(5)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
         }
         .accessibilityLabel("View Options")
         .accessibilityValue(unreadOnly ? "Unread only" : "")
