@@ -17,7 +17,9 @@ final class VoiceCallLiveActivity {
         shown = state
     }
 
-    static func request(callID: UUID, hostName: String, state: ContentState) throws -> VoiceCallLiveActivity {
+    static func request(
+        callID: UUID, startedAt: Date, hostName: String, state: ContentState
+    ) throws -> VoiceCallLiveActivity {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             throw VoiceCallUnavailable(
                 message: "Voice Mode from Siri or the Action button needs Live Activities. Turn them on for RemoteCoder in Settings."
@@ -26,7 +28,7 @@ final class VoiceCallLiveActivity {
         do {
             let activity = try Activity.request(
                 attributes: RemoteCoderVoiceCallAttributes(
-                    callID: callID, startedAt: .now, hostName: hostName.displayPrefix(utf8Bytes: 64)
+                    callID: callID, startedAt: startedAt, hostName: hostName.displayPrefix(utf8Bytes: 64)
                 ),
                 content: Self.content(state)
             )

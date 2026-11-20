@@ -63,6 +63,7 @@ final class VoiceCall {
     private var teardownTask: Task<Void, Never>?
     private let orphanedLiveActivityCleanup: Task<Void, Never>
     private var liveActivity: VoiceCallLiveActivity?
+    private var liveActivityStart: (callID: UUID, date: Date)?
     private var callTitle: String?
     private var caption: String?
     private var callEndWaiters: [CheckedContinuation<Void, Never>] = []
@@ -227,10 +228,19 @@ final class VoiceCall {
     private func requestLiveActivity(callID: UUID, hostName: String) {
         guard liveActivity?.isOngoing != true else { return }
         do {
-            liveActivity = try .request(callID: callID, hostName: hostName, state: liveActivityState)
+            liveActivity = try .request(
+                callID: callID, startedAt: liveActivityStart(of: callID), hostName: hostName, state: liveActivityState
+            )
         } catch {
             diagnostic("live activity unavailable call=\(callID) error=\(error.localizedDescription)")
         }
+    }
+
+    private func liveActivityStart(of callID: UUID) -> Date {
+        if let liveActivityStart, liveActivityStart.callID == callID { return liveActivityStart.date }
+        let date = Date.now
+        liveActivityStart = (callID, date)
+        return date
     }
 
     func requestMissingLiveActivity() {
@@ -418,7 +428,10 @@ final class VoiceCall {
         let callID = lifecycle.callID ?? UUID()
         if liveActivity?.isOngoing != true {
             do {
-                liveActivity = try .request(callID: callID, hostName: model.hostDisplayName, state: liveActivityState)
+                liveActivity = try .request(
+                    callID: callID, startedAt: liveActivityStart(of: callID), hostName: model.hostDisplayName,
+                    state: liveActivityState
+                )
             } catch {
                 guard FleetLiveActivityService.isShowing else { throw error }
                 diagnostic("live activity refused, continuing under the active-tasks activity call=\(callID) error=\(error.localizedDescription)")

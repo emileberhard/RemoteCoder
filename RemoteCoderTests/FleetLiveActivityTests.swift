@@ -34,12 +34,18 @@ struct FleetLiveActivityTests {
         }
     }
 
-    private func service(_ hosts: [FakeHost], preferred: UUID? = nil) -> FleetLiveActivityService {
+    private func backgroundService(_ hosts: [FakeHost], preferred: UUID? = nil) -> FleetLiveActivityService {
         FleetLiveActivityService(
             hosts: { hosts.map(\.host) },
             configured: { hosts.map(\.id) },
             preferred: { preferred }
         )
+    }
+
+    private func service(_ hosts: [FakeHost], preferred: UUID? = nil) -> FleetLiveActivityService {
+        let service = backgroundService(hosts, preferred: preferred)
+        service.sceneChanged(.active)
+        return service
     }
 
     private func liveActivities() -> [Activity<Attributes>] {
@@ -152,6 +158,37 @@ struct FleetLiveActivityTests {
             defer { service.retire() }
             await service.settle()
             #expect(liveActivities().allSatisfy { $0.id != legacy.id })
+        }
+    }
+
+    @Test func aBackgroundLaunchAdoptsTheLiveActivityAndKeepsLeftoversUntilActive() async throws {
+        try await withoutActivities {
+            let host = FakeHost()
+            let state = Attributes.ContentState(
+                activeTaskCount: 1, attention: nil, attentionCount: nil, unavailableHostIDs: nil, updatedAtUnixSeconds: 0
+            )
+            let legacy = try Activity<Attributes>.request(
+                attributes: Attributes(startedAt: .now, coordinatorID: nil),
+                content: ActivityContent(state: state, staleDate: nil)
+            )
+            let live = try Activity<Attributes>.request(
+                attributes: Attributes(startedAt: .now, coordinatorID: host.id),
+                content: ActivityContent(state: state, staleDate: nil)
+            )
+            let service = backgroundService([host])
+            defer { service.retire() }
+
+            await service.settle()
+            #expect(Set(liveActivities().map(\.id)) == [legacy.id, live.id])
+            #expect(FleetLiveActivityService.isShowing)
+
+            service.sceneChanged(.inactive)
+            await service.settle()
+            #expect(Set(liveActivities().map(\.id)) == [legacy.id, live.id])
+
+            service.sceneChanged(.active)
+            await service.settle()
+            #expect(liveActivities().map(\.id) == [live.id])
         }
     }
 

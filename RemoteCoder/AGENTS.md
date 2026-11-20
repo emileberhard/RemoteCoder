@@ -2033,12 +2033,13 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   capable host in that pass. Each foreground pass rereads the coordinator; when that fails it ends the activity and moves
   to another capable host. Removing the coordinator from the configured hosts ends it.
   Launch keeps one live activity whose coordinator is configured and ends every
-  other, including per-host activities from earlier builds, at its first pass
-  outside the background. The service takes its first scene from the
-  application state, so a background launch, such as the Voice Mode intent's,
-  adopts the live activity but neither rereads, starts nor ends one: an
-  activity the system ended stays on the Lock Screen for hours and the intent
-  relies on it (see below). Without a capable
+  other, including per-host activities from earlier builds, at its first active
+  pass. The service counts as in the background until a scene phase says
+  otherwise, so a background launch, such as the Voice Mode intent's, adopts
+  the live activity but neither rereads, starts nor retires leftovers, and the
+  inactive pass on the way forward retires none either: an activity the system
+  ended stays on the Lock Screen for hours and the intent relies on it until
+  it returns (see below). Without a capable
   gateway, no activity starts. The Mac arm is a no-op with the same API.
   Voice-call activities keep their own owner.
 - `RemoteCoderActiveTasksAttributes` carries `startedAt` and `coordinatorID`
@@ -2126,7 +2127,10 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
     callservicesd accepts the start (test iPhone, iOS 27, 2026-11-20;
     [tracker #1152](https://github.com/emileberhard/tracker/issues/1152)). It
     fails the intent only when the app shows no Live Activity at all, such as
-    when Live Activities are off.
+    when Live Activities are off. Until the call has its own activity, the
+    active-tasks one is all that satisfies that check, so nothing in the app
+    may end or retire it before the app is active, and the scene-active pass
+    requests the call's activity before the fleet pass can retire a leftover.
     That call's teardown ends only its own activity, and `VoiceCall` ends any
     a crashed process left behind before its first intent start. On an unlocked
     device it then enqueues `.presentVoiceCall` with that call's id and

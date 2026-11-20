@@ -1,6 +1,5 @@
 @preconcurrency import ActivityKit
 import Foundation
-import UIKit
 
 @MainActor
 final class FleetLiveActivityService {
@@ -21,7 +20,7 @@ final class FleetLiveActivityService {
     private let hosts: @MainActor () -> [Host]
     private let configured: @MainActor () -> [UUID]
     private let preferred: @MainActor () -> UUID?
-    private var scene: Scene
+    private var scene = Scene.background
     private var activity: Activity<Attributes>?
     private var token: String?
     private var coordinatorID: UUID?
@@ -34,7 +33,8 @@ final class FleetLiveActivityService {
     private var isRetired = false
 
     static var isShowing: Bool {
-        Activity<Attributes>.activities.contains { [.active, .stale, .ended].contains($0.activityState) }
+        ActivityAuthorizationInfo().areActivitiesEnabled
+            && Activity<Attributes>.activities.contains { [.active, .stale, .ended].contains($0.activityState) }
     }
 
     init(
@@ -45,7 +45,6 @@ final class FleetLiveActivityService {
         self.hosts = hosts
         self.configured = configured
         self.preferred = preferred
-        scene = UIApplication.shared.applicationState == .background ? .background : .active
     }
 
     func sceneChanged(_ next: Scene) {
@@ -127,7 +126,8 @@ final class FleetLiveActivityService {
             _ = try await coordinator.read(declared)
         } catch {
             guard self.activity?.id == activity.id, scene == .active,
-                  let replacement = await self.coordinator(in: hosts, excluding: [coordinatorID]) else { return }
+                  let replacement = await self.coordinator(in: hosts, excluding: [coordinatorID]),
+                  self.activity?.id == activity.id, scene == .active else { return }
             logger.notice("fleet coordinator \(coordinatorID.uuidString) unavailable; moving to \(replacement.id.uuidString)")
             await end(activity)
             self.coordinatorID = replacement.id
@@ -193,7 +193,7 @@ final class FleetLiveActivityService {
                 adopt(adopted)
             }
         }
-        guard scene != .background, !restoredLeftovers.isEmpty else { return }
+        guard scene == .active, !restoredLeftovers.isEmpty else { return }
         let leftovers = restoredLeftovers
         restoredLeftovers = []
         for activity in Activity<Attributes>.activities where leftovers.contains(activity.id) {

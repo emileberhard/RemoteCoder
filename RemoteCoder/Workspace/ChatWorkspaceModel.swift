@@ -855,8 +855,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     func handleScenePhaseActive() async {
         guard !isQuiescing else { return }
         let pass = beginScenePhasePass()
-        liveActivity.sceneChanged(.active)
         voiceCalls.call.requestMissingLiveActivity()
+        liveActivity.sceneChanged(.active)
         accountDirectory.startForeground()
         for model in connectedHostModels { model.directories.syncFavorites() }
         syncPreferences()
