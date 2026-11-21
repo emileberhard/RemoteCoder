@@ -1478,9 +1478,10 @@ entrypoint linked above.
   the field, which costs about four offscreen passes per frame whenever the
   drawer is on screen (`DrawerMovement` on the test iPhone: 32.9 without it,
   37.2 with the automatic or the hard style). `DrawerBottomBarBackground`
-  draws the fade under the bar as a plain gradient in the drawer background color, which
-  measures the same as no fade. Keep the system effect hidden unless a device
-  trace shows the pass count unchanged.
+  draws a plain gradient above the bar in the drawer background color, which
+  measures the same as no fade. Its solid area keeps rows from showing through
+  the shared `AppGlass` search capsule. Keep the system effect hidden unless
+  a device trace shows the pass count unchanged.
   [System architecture](../docs/system-architecture.md#conversation-search)
   owns the search, locate and Ask contracts.
 - Opening the drawer captures a `ConversationDrawerLayout`: every row's

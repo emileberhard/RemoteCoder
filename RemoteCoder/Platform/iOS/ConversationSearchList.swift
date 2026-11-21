@@ -196,7 +196,7 @@ struct DrawerSearchField: View {
         .padding(.leading, 16)
         .padding(.trailing, search.query.isEmpty ? 16 : 2)
         .frame(height: 48)
-        .appContentSurface(.standard, in: .capsule)
+        .appGlass(in: .capsule)
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
         .background {
