@@ -44,8 +44,10 @@ private struct ConversationSearchFixture: View {
             ConversationSearchList(search: search, open: { _ in .changed }, ask: {})
                 .safeAreaBar(edge: .bottom, spacing: 0) {
                     DrawerSearchField(search: search)
+                        .background { DrawerBottomBarBackground() }
                 }
         }
+        .scrollEdgeEffectHidden(true, for: .bottom)
         .environment(theme)
         #else
         ConversationSearchList(search: search, open: { _ in .changed }, ask: {})
