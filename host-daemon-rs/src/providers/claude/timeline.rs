@@ -187,13 +187,11 @@ pub(super) fn user_send_ids(record: &Value) -> Vec<&str> {
             };
             let mut ids = vec![primary];
             if let Some(merged) = record["mergedSendUuids"].as_array() {
-                let mut seen = std::collections::HashSet::from([primary]);
-                ids.extend(
-                    merged
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .filter(|id| seen.insert(*id)),
-                );
+                for id in merged.iter().filter_map(Value::as_str) {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
             }
             ids
         }

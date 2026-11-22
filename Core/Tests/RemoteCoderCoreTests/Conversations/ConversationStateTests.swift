@@ -522,7 +522,8 @@ struct ConversationStateTests: ConversationHistoryFixtures {
         let first = ChatMessage(id: ChatMessage.deterministicID(for: "first-steer"),
             role: .user, text: "First local steer", wasSteered: true, canonicalTurnID: "turn")
         let second = ChatMessage(id: ChatMessage.deterministicID(for: "second-steer"),
-            role: .user, text: "Second local steer", wasSteered: true, canonicalTurnID: "turn")
+            role: .user, text: "Second local steer", date: Date(timeIntervalSince1970: 123),
+            wasSteered: true, canonicalTurnID: "turn")
         for steer in [first, second] {
             state.submit(steer)
             state.accepted(steer.id, turnID: "turn")
@@ -563,14 +564,60 @@ struct ConversationStateTests: ConversationHistoryFixtures {
 
         #expect(state.submissions.isEmpty)
         #expect(state.contains(clientID: first.id))
-        #expect(state.turns[nextTurn]?.items[firstID] == nil)
         let messages = ConversationProjection.project(state).messages
         #expect(messages.count == 1)
         let message = try #require(messages.first)
         #expect(message.id == second.id)
         #expect(message.canonicalItemID == secondID)
         #expect(message.text == serverText)
+        #expect(message.date == second.date)
         #expect(message.delivery == .steered)
+
+        var restored = ConversationState(conversationID: state.conversationID, threadID: "thread")
+        restored.restore(state.checkpoint)
+        let restoredMessage = try #require(ConversationProjection.project(restored).messages.first)
+        #expect(restoredMessage.id == second.id)
+        #expect(restoredMessage.text == serverText)
+        #expect(restoredMessage.date == second.date)
+        #expect(restoredMessage.delivery == .steered)
+    }
+
+    @Test func olderLiveEchoesCannotSplitOrReplaceAMergedSteer() throws {
+        var state = ConversationState(conversationID: UUID(), threadID: "thread")
+        let firstID = ChatMessage.deterministicID(for: "standalone-first-echo").uuidString
+        let secondID = ChatMessage.deterministicID(for: "standalone-last-echo").uuidString
+        let combinedText = "First steer\nSecond steer"
+        let first = CodexAppServerV2.ThreadItem.userMessage(id: firstID,
+            content: [.text(text: "First steer", textElements: [])], clientId: firstID)
+        let second = CodexAppServerV2.ThreadItem.userMessage(id: secondID,
+            content: [.text(text: "Second steer", textElements: [])], clientId: secondID)
+        let merged = CodexAppServerV2.ThreadItem.userMessage(id: secondID,
+            content: [.text(text: combinedText, textElements: [])], clientId: secondID, mergedClientIds: [firstID])
+
+        state.apply(try itemEvent("item/completed", first, turnID: "turn", ordinal: 1))
+        #expect(ConversationProjection.project(state).messages.map(\.text) == ["First steer"])
+        state.apply(try itemEvent("item/completed", merged, turnID: "turn", ordinal: 2))
+        #expect(ConversationProjection.project(state).messages.map(\.text) == [combinedText])
+        state.apply(try itemEvent("item/completed", second, turnID: "turn", ordinal: 3))
+        #expect(ConversationProjection.project(state).messages.map(\.text) == [combinedText])
+
+        let header = history(items: []).header
+        let firstEcho = CodexAppServerV2.ThreadItemsListResponse.Entry(
+            turnId: "turn", item: first, startedAtOrdinal: 1, isComplete: true)
+        let lastEcho = CodexAppServerV2.ThreadItemsListResponse.Entry(
+            turnId: "turn", item: second, startedAtOrdinal: 3, isComplete: true)
+        let observerHistory = GatewayHistoryService.ObservationHistory(turns: [summary("turn")],
+            entries: [lastEcho], update: nil)
+        let emptyCheckpoint = CodexAppServerV2.ThreadObservationCheckpoint(turnsBackwardsCursor: nil,
+            itemsBackwardsCursor: nil, activeTurn: nil, historyUnavailable: false, liveItems: [])
+        state.mergeObservation(header: header, checkpoint: emptyCheckpoint, history: observerHistory)
+        #expect(ConversationProjection.project(state).messages.map(\.text) == [combinedText])
+
+        let liveCheckpoint = CodexAppServerV2.ThreadObservationCheckpoint(turnsBackwardsCursor: nil,
+            itemsBackwardsCursor: nil, activeTurn: nil, historyUnavailable: false, liveItems: [firstEcho, lastEcho])
+        state.mergeObservation(header: header, checkpoint: liveCheckpoint,
+            history: .init(turns: [], entries: [], update: nil))
+        #expect(ConversationProjection.project(state).messages.map(\.text) == [combinedText])
     }
 
     @Test func aSteerTheAgentNeverTookDoesNotReadAsSteered() throws {

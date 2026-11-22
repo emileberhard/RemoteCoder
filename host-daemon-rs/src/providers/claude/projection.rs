@@ -1083,7 +1083,6 @@ impl Projection {
             .as_ref()
             .and_then(|identity| identity.client_id.as_ref())
             && item.source.is_user_message()
-            && value.get("mergedClientIds").is_none()
         {
             value["clientId"] = json!(client_id);
         }

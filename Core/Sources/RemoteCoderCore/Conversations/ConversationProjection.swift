@@ -563,7 +563,7 @@ enum ConversationProjection {
         case .userMessage(_, let content, let clientId, _):
             role = .user
             clientID = clientId.flatMap(UUID.init(uuidString:))
-            if !record.value.carriesMergedSends, let local = record.localMessage, !local.text.isEmpty || !local.attachments.isEmpty {
+            if let local = record.localMessage, !local.text.isEmpty || !local.attachments.isEmpty {
                 text = local.text
                 let needsCanonicalImages = local.attachments.contains { if case .canonicalImage = $0.content { true } else { false } }
                 let canonical = needsCanonicalImages ? userContent(content, id: record.value.id, parsesVoice: false, cache: &userContents).attachments.filter {
@@ -578,7 +578,7 @@ enum ConversationProjection {
                 questionReplies = local.questionReplies
                 visualReplies = local.visualReplies
             } else {
-                let prepared = userContent(content, id: record.value.id, parsesVoice: record.localMessage == nil && clientId == nil && !record.value.carriesMergedSends,
+                let prepared = userContent(content, id: record.value.id, parsesVoice: record.localMessage == nil && clientId == nil,
                                            cache: &userContents)
                 text = prepared.text
                 attachments = prepared.attachments
@@ -602,7 +602,7 @@ enum ConversationProjection {
             for: "thread:\(threadID)|turn:\(GatewayNotificationRouting.normalizeTurnID(turnID))|item:\(record.value.id)|role:\(roleKey)")
         return ChatMessage(id: id, role: role, text: text, attachments: attachments, inlineContent: inline,
                            date: record.localMessage?.date ?? record.date ?? .distantPast,
-                           wasSteered: role == .user && (record.localMessage?.wasSteered ?? wasSteered),
+                           wasSteered: role == .user && (record.locallySteered ?? record.localMessage?.wasSteered ?? wasSteered),
                            canonicalTurnID: ConversationState.isLocalTurnID(turnID) ? nil : turnID,
                            canonicalItemID: record.completed ? record.value.id : nil,
                            questionReplies: questionReplies,

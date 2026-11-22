@@ -13,6 +13,7 @@ struct ConversationState: Sendable {
         var detailed: Bool
         var isLocal = false
         var localMessage: ChatMessage?
+        var locallySteered: Bool?
         var activity: JobTimelineEvent?
         var observedLive = false
         var encodedBytes = 0
@@ -20,7 +21,19 @@ struct ConversationState: Sendable {
 
         private enum CodingKeys: String, CodingKey {
             case value, position, placedAfter, date, completedAtMs, completed, detailed, isLocal, localMessage, activity
-            case observedLive, encodedBytes
+            case observedLive, encodedBytes, locallySteered
+        }
+
+        mutating func retainLocalPresentation(_ content: [CodexAppServerV2.UserInput]) {
+            if value.carriesMergedSends {
+                if let localMessage {
+                    date = localMessage.date
+                    locallySteered = localMessage.wasSteered
+                }
+                localMessage = nil
+            } else {
+                localMessage?.useCanonicalImages(content)
+            }
         }
 
         var isRetiredLocalNotice: Bool {
@@ -339,7 +352,7 @@ struct ConversationState: Sendable {
                     for id in covered { submissions[id] = submissions[id] ?? checkpoint.submissions[id] }
                     let position = turn.order.firstIndex(of: itemID)
                     let observedLive = item.observedLive
-                    reconcile(&item, in: &turn)
+                    guard reconcile(&item, in: &turn) else { continue }
                     item.observedLive = observedLive
                     turn.items[itemID] = item
                     if !turn.order.contains(itemID), let position { turn.order.insert(itemID, at: min(position, turn.order.count)) }
@@ -355,8 +368,8 @@ struct ConversationState: Sendable {
                 if var item = turn.items[itemID] {
                     if item.localMessage == nil, let message = savedItem.localMessage {
                         item.localMessage = message
-                        if !item.value.carriesMergedSends, case .userMessage(_, let content, _, _) = item.value {
-                            item.localMessage?.useCanonicalImages(content)
+                        if case .userMessage(_, let content, _, _) = item.value {
+                            item.retainLocalPresentation(content)
                         }
                         turn.items[itemID] = item
                     }
@@ -708,12 +721,7 @@ struct ConversationState: Sendable {
             let position = itemEvent.startedAtOrdinal
             let completedAt = complete ? itemEvent.completedAtMs : nil
             let previous = turn.items[value.id]
-            if replay && !value.carriesMergedSends, let clientID = value.userSendIDs.first,
-               turn.items.values.contains(where: { $0.value.carriesMergedSends && $0.value.userSendIDs.contains(clientID) }) {
-                return
-            }
-            let addsMergedSends = value.carriesMergedSends && previous?.value.carriesMergedSends == false
-            if complete, replay, previous?.completed == true, !addsMergedSends {
+            if complete, replay, previous?.completed == true {
                 guard let completedAt else { return }
                 if let previousCompletion = previous?.completedAtMs, completedAt <= previousCompletion { return }
             }
@@ -737,7 +745,7 @@ struct ConversationState: Sendable {
                 item.observedLive = true
                 item.hasStreamingPrefix = !complete && !replay
                 item.encodedBytes = itemEvent.encodedBytes
-                reconcile(&item, in: &turn)
+                guard reconcile(&item, in: &turn) else { return }
                 turn.items[value.id] = item
                 if !turn.order.contains(value.id) { turn.order.append(value.id) }
             }
@@ -833,7 +841,7 @@ struct ConversationState: Sendable {
                     completedAtMs: entry.completedAtMs, completed: entry.isComplete ?? true, detailed: true,
                     localMessage: turn.items[entry.item.id]?.localMessage)
                 item.encodedBytes = (try? JSONEncoder().encode(entry.item).count) ?? 0
-                reconcile(&item, in: &turn)
+                guard reconcile(&item, in: &turn) else { continue }
                 turn.items[entry.item.id] = item
                 if !turn.order.contains(entry.item.id) { turn.order.insert(entry.item.id, at: min(index, turn.order.count)) }
                 turns[turnID] = turn
@@ -924,7 +932,7 @@ struct ConversationState: Sendable {
                                 completed: complete, detailed: true, localMessage: previous?.localMessage)
                 item.observedLive = previous?.observedLive ?? false
                 item.hasStreamingPrefix = previous?.hasStreamingPrefix ?? false
-                reconcile(&item, in: &turn)
+                guard reconcile(&item, in: &turn) else { continue }
                 if item.observedLive {
                     if let previous, previous.observedLive, previous.value == value {
                         item.encodedBytes = previous.encodedBytes
@@ -986,7 +994,10 @@ struct ConversationState: Sendable {
             item.observedLive = true
             item.hasStreamingPrefix = !item.completed && isLive
             item.encodedBytes = (try? JSONEncoder().encode(entry.item).count) ?? 0
-            reconcile(&item, in: &turn)
+            guard reconcile(&item, in: &turn) else {
+                turns.storeIfChanged(turn)
+                continue
+            }
             turn.items[entry.item.id] = item
             if !turn.order.contains(entry.item.id) { turn.order.append(entry.item.id) }
             let positioned = turn.order.compactMap { id -> (id: String, position: Int64)? in
@@ -1000,10 +1011,20 @@ struct ConversationState: Sendable {
         trim()
     }
 
-    private mutating func reconcile(_ item: inout Item, in turn: inout Turn) {
-        guard case .userMessage(_, let content, let clientID, _) = item.value else { return }
+    private mutating func reconcile(_ item: inout Item, in turn: inout Turn) -> Bool {
+        guard case .userMessage(_, let content, let clientID, _) = item.value else { return true }
         let primaryID = clientID.flatMap(UUID.init(uuidString:))
         let isMerged = item.value.carriesMergedSends
+        let previous = turn.items[item.value.id]
+        if isMerged {
+            item.locallySteered = previous?.locallySteered
+            if previous?.locallySteered != nil { item.date = previous?.date }
+        } else {
+            if previous?.value.carriesMergedSends == true { return false }
+            if let primaryID, turn.items.values.contains(where: {
+                $0.value.carriesMergedSends && $0.value.userSendIDs.contains(primaryID)
+            }) { return false }
+        }
         for id in item.value.userSendIDs {
             let localID = id.uuidString
             if let pending = submissions.removeValue(forKey: id) {
@@ -1021,22 +1042,16 @@ struct ConversationState: Sendable {
                 turn.order.removeAll { $0 == localID }
                 if pending.turnID != turn.id { removeSubmissionItem(localID, from: pending.turnID) }
             }
-            if isMerged && id != primaryID {
-                if turn.items[localID]?.value.carriesMergedSends == false {
-                    turn.items.removeValue(forKey: localID)
-                    turn.order.removeAll { $0 == localID }
-                }
-                for otherTurnID in order where otherTurnID != turn.id {
-                    guard turns[otherTurnID]?.items[localID]?.value.carriesMergedSends == false else { continue }
-                    turns[otherTurnID]?.items.removeValue(forKey: localID)
-                    turns[otherTurnID]?.order.removeAll { $0 == localID }
-                }
+            if isMerged, id != primaryID, turn.items[localID]?.value.carriesMergedSends == false {
+                turn.items.removeValue(forKey: localID)
+                turn.order.removeAll { $0 == localID }
             }
         }
-        if !isMerged, let primaryID {
-            item.localMessage?.useCanonicalImages(content)
-            if submissions[primaryID]?.status == .confirmed { submissions[primaryID]?.message.useCanonicalImages(content) }
+        item.retainLocalPresentation(content)
+        if !isMerged, let primaryID, submissions[primaryID]?.status == .confirmed {
+            submissions[primaryID]?.message.useCanonicalImages(content)
         }
+        return true
     }
 
     private mutating func removeSubmissionItem(_ id: String, from turnID: String) {
