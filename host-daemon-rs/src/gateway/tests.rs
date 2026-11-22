@@ -5529,7 +5529,7 @@ fn tool_call_frame(namespace: &str, tool: &str, arguments: Value) -> String {
     .expect("json")
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_codex_tool_call_is_answered_on_control_and_never_broadcast() {
     let gateway = test_gateway();
     let (client_tx, mut client_rx) = mpsc::channel(4);
@@ -5553,12 +5553,7 @@ async fn a_codex_tool_call_is_answered_on_control_and_never_broadcast() {
         )
         .await;
 
-    // The tool runs the real drain, so the realtime stop goes out first.
-    let stop: Value =
-        serde_json::from_str(&out_rx.recv().await.expect("stop request")).expect("stop json");
-    assert_eq!(stop["method"], "thread/realtime/stop");
-    answer_internal_request(&gateway, &stop, json!({})).await;
-
+    // Reply to the tool while the farewell can still finish playing.
     let answer: Value =
         serde_json::from_str(&out_rx.recv().await.expect("tool answer")).expect("answer json");
     assert_eq!(answer["id"], "codex-call-1");
@@ -5566,8 +5561,15 @@ async fn a_codex_tool_call_is_answered_on_control_and_never_broadcast() {
     assert_eq!(answer["result"]["contentItems"][0]["type"], "inputText");
     assert_eq!(
         answer["result"]["contentItems"][0]["text"],
-        "Voice call ended."
+        "Voice call will end after the current speech."
     );
+    assert!(client_rx.try_recv().is_err());
+
+    let stop: Value =
+        serde_json::from_str(&out_rx.recv().await.expect("stop request")).expect("stop json");
+    assert_eq!(stop["method"], "thread/realtime/stop");
+    answer_internal_request(&gateway, &stop, json!({})).await;
+
     // Ending the call notifies clients it was on purpose; that is the
     // only thing they hear — the tool call itself is never broadcast.
     let ClientCommand::Text(notification) =
