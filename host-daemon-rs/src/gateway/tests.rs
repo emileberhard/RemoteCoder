@@ -3516,37 +3516,61 @@ async fn devices_register_and_unregister_round_trip_the_shared_fixture() {
     }
 }
 
-#[tokio::test]
-async fn agent_end_tombstones_the_call_and_notifies_clients_before_stopping() {
+#[tokio::test(start_paused = true)]
+async fn codex_agent_hangup_waits_for_speech_then_tombstones_before_stopping() {
+    use crate::voice::farewell::FAREWELL_QUIET;
     let gateway = test_gateway();
     let (client_tx, mut client_rx) = mpsc::channel(4);
     gateway.clients.insert(7, test_client(7, client_tx));
-    gateway.voice.seed(None, Some(external_voice_session()));
+    let session = VoiceSession {
+        conversation_thread_id: "realtime-1".to_string(),
+        uses_external_executor: false,
+        ..external_voice_session()
+    };
+    gateway.voice.seed(None, Some(session));
     let out_rx = crate::test_support::FakeControl::attach(&gateway, 4)
         .await
         .requests;
     let captured = spawn_control_responder(&gateway, out_rx);
 
-    assert!(
-        gateway
-            .end_voice_call_for_agent(&crate::agents::tools::Caller {
-                turn_id: None,
-                provider: crate::providers::Provider::Claude,
-                thread_id: Some("claude-session-1".to_string()),
-            })
-            .await
-    );
+    let response = gateway
+        .codex_tool_response(crate::agents::tools::CodexToolCall {
+            id: json!("end-call-tool"),
+            tool: "end_voice_call".to_string(),
+            arguments: json!({}),
+            thread_id: Some("realtime-1".to_string()),
+            turn_id: Some("turn-1".to_string()),
+            call_id: Some("exact-call-1".to_string()),
+        })
+        .await
+        .expect("Codex tool response");
+    let response: Value = serde_json::from_str(&response).expect("tool response JSON");
+    assert_eq!(response["result"]["success"], true);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    gateway
+        .handle_voice_control_notification(&frame(
+            "thread/realtime/transcript/delta",
+            json!({"threadId": "realtime-1", "role": "assistant", "delta": "Bye."}),
+        ))
+        .await;
+    let last_output = tokio::time::Instant::now();
+    assert!(client_rx.try_recv().is_err());
+    assert!(captured.lock().await.is_empty());
 
     let ClientCommand::Text(notification) =
         client_rx.recv().await.expect("agent-ended notification")
     else {
         panic!("expected a text notification");
     };
+    assert_eq!(last_output.elapsed(), FAREWELL_QUIET);
     let notification: Value = serde_json::from_str(&notification).expect("agent-ended json");
     assert_eq!(notification["method"], "voice/session/agentEnded");
     assert_eq!(notification["params"]["realtimeSessionId"], "session-1");
     assert_eq!(notification["params"]["realtimeThreadId"], "realtime-1");
     assert_eq!(gateway.voice.ended_call().as_deref(), Some("session-1"));
+    while captured.lock().await.is_empty() {
+        tokio::task::yield_now().await;
+    }
     let stop = captured.lock().await;
     assert_eq!(stop.len(), 1);
     assert_eq!(stop[0]["method"], "thread/realtime/stop");
@@ -3563,17 +3587,18 @@ async fn the_voice_goodbye_ends_the_call_once_its_audio_goes_quiet() {
         .requests;
     let captured = spawn_control_responder(&gateway, out_rx);
 
-    for (role, text) in [
-        ("user", "You can hang up the call now"),
-        ("assistant", "Alright. Bye!"),
-    ] {
+    gateway
+        .handle_voice_control_notification(&frame(
+            "thread/realtime/transcript/done",
+            json!({"threadId":"realtime-1","role":"user","text":" Thank you. Bye-bye"}),
+        ))
+        .await;
+    for delta in [" By", "e."] {
         gateway
-            .handle_voice_control_notification(
-                &json!({"method":"thread/realtime/transcript/done","params":{
-                    "threadId":"realtime-1","role":role,"text":text
-                }})
-                .to_string(),
-            )
+            .handle_voice_control_notification(&frame(
+                "thread/realtime/transcript/delta",
+                json!({"threadId":"realtime-1","role":"assistant","delta":delta}),
+            ))
             .await;
     }
     let armed_at = tokio::time::Instant::now();
@@ -4098,6 +4123,33 @@ async fn voice_notifications_route_one_completion_to_the_newest_delegation() {
 }
 
 #[tokio::test]
+async fn a_successful_claude_voice_turn_without_text_completes_the_handoff_silently() {
+    let gateway = test_gateway();
+    let mut session = external_voice_session();
+    session
+        .delegations
+        .begin("quiet-handoff", "quiet-input", 1.0);
+    session.delegations.bind_input("quiet-input", "quiet-turn");
+    gateway.voice.seed(None, Some(session));
+    let out_rx = crate::test_support::FakeControl::attach(&gateway, 4)
+        .await
+        .requests;
+    let captured = spawn_control_responder(&gateway, out_rx);
+    let completed = message(
+        "turn/completed",
+        json!({"threadId":"claude-session-1","turn":{"id":"quiet-turn","status":"completed"}}),
+    );
+    gateway.forward_voice_agent_notification(&completed).await;
+    gateway.forward_voice_agent_notification(&completed).await;
+
+    let requests = captured.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["method"], "thread/realtime/handoff/complete");
+    assert_eq!(requests[0]["params"]["handoffId"], "quiet-handoff");
+    assert_eq!(requests[0]["params"]["text"], "");
+}
+
+#[tokio::test]
 async fn voice_rejoin_delivers_running_text_work_without_dispatching_a_task() {
     let gateway = test_gateway();
     let mut session = external_voice_session();
@@ -4536,6 +4588,10 @@ async fn codex_voice_start_matches_the_desktop_provisional_thread_request() {
         assert_eq!(params["version"], "v3");
         assert_eq!(params["includeStartupContext"], false);
         assert_eq!(params["codexResponseHandoffMode"], "bemTags");
+        assert_eq!(
+            params["realtimeStartInstructions"],
+            include_str!("../../prompts/voice-call-agent.md"),
+        );
         let item_count = initial_items.as_array().map_or(0, Vec::len);
         assert_eq!(
             params

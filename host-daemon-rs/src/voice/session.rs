@@ -1,4 +1,4 @@
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
@@ -635,51 +635,28 @@ impl VoiceCoordinator {
         Some((owner, session))
     }
 
-    pub(crate) fn begin_agent_hangup(
-        &self,
-        _transition: &VoiceTransition<'_>,
-        conversation_thread_id: &str,
-        provider_is_claude: bool,
-    ) -> Option<Hangup> {
-        self.hang_up("agent tool", |session| {
-            session.conversation_thread_id == conversation_thread_id
-                && session.uses_external_executor == provider_is_claude
-        })
-    }
-
     pub(crate) fn begin_farewell_hangup(
         &self,
         _transition: &VoiceTransition<'_>,
         realtime_thread_id: &str,
-        now: tokio::time::Instant,
-    ) -> Option<Hangup> {
-        self.hang_up("farewell", |session| {
-            session.realtime_thread_id == realtime_thread_id
-                && session
-                    .farewell
-                    .as_ref()
-                    .and_then(FarewellWatch::close_at)
-                    .is_some_and(|close_at| close_at <= now)
-        })
-    }
-
-    fn hang_up(
-        &self,
-        reason: &'static str,
-        accepts: impl FnOnce(&VoiceSession) -> bool,
-    ) -> Option<Hangup> {
+        started: &Arc<tokio::time::Instant>,
+    ) -> Option<(Hangup, &'static str)> {
         let mut state = self.state();
-        let hangup = state
+        let session = state
             .phase
             .live_session()
-            .filter(|session| accepts(session))
-            .map(|session| Hangup {
-                realtime_session_id: session.realtime_session_id.clone(),
-                realtime_thread_id: session.realtime_thread_id.clone(),
-            })?;
+            .filter(|session| session.realtime_thread_id == realtime_thread_id)?;
+        let (close_at, reason) = session.farewell.as_ref()?.close_at(started)?;
+        if close_at > tokio::time::Instant::now() {
+            return None;
+        }
+        let hangup = Hangup {
+            realtime_session_id: session.realtime_session_id.clone(),
+            realtime_thread_id: session.realtime_thread_id.clone(),
+        };
         state.reclaim_authority.revoke(&hangup.realtime_session_id);
         state.phase.drain(reason);
-        Some(hangup)
+        Some((hangup, reason))
     }
 
     pub(crate) fn finish_draining(&self, realtime_thread_id: &str) -> Option<VoiceSession> {

@@ -260,15 +260,27 @@ impl Gateway {
                 .get("threadId")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let user = params.get("role").and_then(Value::as_str) == Some("user");
             let now = tokio::time::Instant::now();
-            self.voice.with_live_realtime_thread(thread_id, |active| {
-                match active.farewell.as_mut() {
-                    Some(farewell) if user => farewell.user_speech(),
-                    Some(farewell) => farewell.voice_speech(now),
-                    None => {}
-                }
-            });
+            let started = self
+                .voice
+                .with_live_realtime_thread(thread_id, |active| {
+                    let farewell = active.farewell.as_mut()?;
+                    if method == "thread/realtime/outputAudio/delta" {
+                        farewell.voice_output(now);
+                    } else if params["role"] == "user" {
+                        farewell.user_speech();
+                    } else if params["role"] == "assistant" {
+                        let delta = params["delta"].as_str()?;
+                        let started = farewell.voice_delta(delta, now)?;
+                        active.log_event("farewell/armed", serde_json::json!({ "delta": delta }));
+                        return Some(started);
+                    }
+                    None
+                })
+                .flatten();
+            if let Some(started) = started {
+                self.spawn_farewell_close(thread_id.to_string(), started);
+            }
             return;
         }
 
@@ -285,28 +297,17 @@ impl Gateway {
                 .get("text")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let now = tokio::time::Instant::now();
-            let farewell_armed = self.voice.with_realtime_thread(thread_id, |active| {
+            self.voice.with_live_realtime_thread(thread_id, |active| {
                 active.log_event(
                     "transcript",
                     serde_json::json!({ "role": role, "text": text }),
                 );
-                let armed = match (role, active.farewell.as_mut()) {
-                    ("user", Some(farewell)) => {
-                        farewell.user_line();
-                        false
-                    }
-                    ("assistant", Some(farewell)) => farewell.voice_line(text, now),
-                    _ => false,
-                };
-                if armed {
-                    active.log_event("farewell/armed", serde_json::json!({ "text": text }));
+                match (role, active.farewell.as_mut()) {
+                    ("user", Some(farewell)) => farewell.user_line(),
+                    ("assistant", Some(farewell)) => farewell.voice_done(text),
+                    _ => {}
                 }
-                armed
-            }) == Some(true);
-            if farewell_armed {
-                self.spawn_farewell_close(thread_id.to_string());
-            }
+            });
             return;
         }
 

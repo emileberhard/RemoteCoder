@@ -282,7 +282,7 @@ impl ToolCall {
             }
             ToolCall::EndVoiceCall => {
                 if gateway.end_voice_call_for_agent(caller).await {
-                    ToolOutcome::ok("Voice call ended.")
+                    ToolOutcome::ok("Voice call will end after the current speech.")
                 } else {
                     ToolOutcome::error("No active voice call to end.")
                 }

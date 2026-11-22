@@ -1,7 +1,9 @@
+use std::sync::Arc;
 use tokio::time::{Duration, Instant};
 
 pub(crate) const FAREWELL_QUIET: Duration = Duration::from_millis(1500);
 pub(crate) const FAREWELL_MAX_WAIT: Duration = Duration::from_secs(10);
+const MAX_REPLY_BYTES: usize = 8 * 1024;
 const SIGN_OFFS: &[&str] = &[
     "bye",
     "goodbye",
@@ -24,10 +26,6 @@ const LEAD_INS: &[&str] = &[
     "sorry",
     "thanks",
 ];
-
-pub(crate) fn is_sign_off(text: &str) -> bool {
-    sign_off_for_user(text, None)
-}
 
 fn sign_off_for_user(text: &str, user_name: Option<&str>) -> bool {
     let Some(sentence) = text
@@ -63,12 +61,18 @@ fn words(text: &str) -> String {
         .join(" ")
 }
 
+#[derive(Debug, Clone)]
+struct PendingClose {
+    started: Arc<Instant>,
+    agent_requested: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FarewellWatch {
     user_name: Option<String>,
-    awaiting_reply: bool,
-    last_voice_speech: Option<Instant>,
-    armed_at: Option<Instant>,
+    reply: Option<String>,
+    last_output: Option<Instant>,
+    pending: Option<PendingClose>,
 }
 
 impl FarewellWatch {
@@ -80,37 +84,85 @@ impl FarewellWatch {
     }
 
     pub(crate) fn user_speech(&mut self) {
-        self.armed_at = None;
-        self.awaiting_reply = false;
+        self.reply = None;
+        self.cancel_sign_off();
     }
 
     pub(crate) fn user_line(&mut self) {
-        self.armed_at = None;
-        self.awaiting_reply = true;
+        self.user_speech();
+        self.reply = Some(String::new());
     }
 
-    pub(crate) fn voice_speech(&mut self, now: Instant) {
-        self.last_voice_speech = Some(now);
+    pub(crate) fn voice_output(&mut self, now: Instant) {
+        self.last_output = Some(now);
     }
 
-    pub(crate) fn voice_line(&mut self, text: &str, now: Instant) -> bool {
-        self.voice_speech(now);
-        let arms = std::mem::take(&mut self.awaiting_reply)
-            && self.armed_at.is_none()
-            && match self.user_name.as_deref() {
-                Some(name) => sign_off_for_user(text, Some(name)),
-                None => is_sign_off(text),
-            };
-        if arms {
-            self.armed_at = Some(now);
+    pub(crate) fn voice_delta(&mut self, delta: &str, now: Instant) -> Option<Arc<Instant>> {
+        self.voice_output(now);
+        let Some(reply) = self.reply.as_mut() else {
+            self.cancel_sign_off();
+            return None;
+        };
+        if reply.len().saturating_add(delta.len()) > MAX_REPLY_BYTES {
+            self.reply = None;
+            self.cancel_sign_off();
+            return None;
         }
-        arms
+        reply.push_str(delta);
+        if sign_off_for_user(reply, self.user_name.as_deref()) {
+            self.arm(now, false)
+        } else {
+            self.cancel_sign_off();
+            None
+        }
     }
 
-    pub(crate) fn close_at(&self) -> Option<Instant> {
-        let armed_at = self.armed_at?;
-        let quiet = self.last_voice_speech.unwrap_or(armed_at).max(armed_at) + FAREWELL_QUIET;
-        Some(quiet.min(armed_at + FAREWELL_MAX_WAIT))
+    pub(crate) fn voice_done(&mut self, text: &str) {
+        if self.reply.take().is_some() && !sign_off_for_user(text, self.user_name.as_deref()) {
+            self.cancel_sign_off();
+        }
+    }
+
+    pub(crate) fn agent_requested_close(&mut self, now: Instant) -> Option<Arc<Instant>> {
+        self.arm(now, true)
+    }
+
+    fn arm(&mut self, now: Instant, agent_requested: bool) -> Option<Arc<Instant>> {
+        if let Some(pending) = self.pending.as_mut() {
+            pending.agent_requested |= agent_requested;
+            return None;
+        }
+        let started = Arc::new(now);
+        self.pending = Some(PendingClose {
+            started: Arc::clone(&started),
+            agent_requested,
+        });
+        Some(started)
+    }
+
+    fn cancel_sign_off(&mut self) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| !pending.agent_requested)
+        {
+            self.pending = None;
+        }
+    }
+
+    pub(crate) fn close_at(&self, started: &Arc<Instant>) -> Option<(Instant, &'static str)> {
+        let pending = self.pending.as_ref()?;
+        if !Arc::ptr_eq(started, &pending.started) {
+            return None;
+        }
+        let start = **started;
+        let quiet = self.last_output.unwrap_or(start).max(start) + FAREWELL_QUIET;
+        let reason = if pending.agent_requested {
+            "agent tool"
+        } else {
+            "farewell"
+        };
+        Some((quiet.min(start + FAREWELL_MAX_WAIT), reason))
     }
 }
 
@@ -127,16 +179,22 @@ mod tests {
         ] {
             let mut watch = FarewellWatch::for_user(Some("Maya Chen"));
             watch.user_line();
-            assert!(watch.voice_line(reply, Instant::now()), "{reply}");
+            assert!(
+                watch.voice_delta(reply, Instant::now()).is_some(),
+                "{reply}"
+            );
             let mut neutral = FarewellWatch::for_user(None);
             neutral.user_line();
-            assert!(!neutral.voice_line(reply, Instant::now()), "{reply}");
+            assert!(
+                neutral.voice_delta(reply, Instant::now()).is_none(),
+                "{reply}"
+            );
         }
         let mut watch = FarewellWatch::for_user(Some("Maya Chen"));
         watch.user_line();
-        assert!(!watch.voice_line("Bye, Taylor!", Instant::now()));
+        assert!(watch.voice_delta("Bye, Taylor!", Instant::now()).is_none());
         watch.user_line();
-        assert!(watch.voice_line("Bye!", Instant::now()));
+        assert!(watch.voice_delta("Bye!", Instant::now()).is_some());
     }
 
     #[test]
@@ -152,7 +210,7 @@ mod tests {
             "Bye-bye!",
             "Hej då!",
         ] {
-            assert!(is_sign_off(reply), "{reply}");
+            assert!(sign_off_for_user(reply, None), "{reply}");
         }
     }
 
@@ -171,7 +229,7 @@ mod tests {
             " Hey Taylor, what's up?",
             "",
         ] {
-            assert!(!is_sign_off(reply), "{reply}");
+            assert!(!sign_off_for_user(reply, None), "{reply}");
         }
     }
 
@@ -180,14 +238,44 @@ mod tests {
         let start = Instant::now();
         let mut watch = FarewellWatch::default();
         watch.user_line();
-        assert!(watch.voice_line("Alright, talk later.", start));
-        assert_eq!(watch.close_at(), Some(start + FAREWELL_QUIET));
+        let ticket = watch.voice_delta("Alright, talk later.", start).unwrap();
+        assert_eq!(
+            watch.close_at(&ticket),
+            Some((start + FAREWELL_QUIET, "farewell"))
+        );
 
         let later = start + Duration::from_secs(3);
-        watch.voice_speech(later);
-        assert_eq!(watch.close_at(), Some(later + FAREWELL_QUIET));
-        watch.voice_speech(start + Duration::from_secs(30));
-        assert_eq!(watch.close_at(), Some(start + FAREWELL_MAX_WAIT));
+        watch.voice_output(later);
+        watch.voice_done("Alright, talk later.");
+        assert_eq!(
+            watch.close_at(&ticket),
+            Some((later + FAREWELL_QUIET, "farewell"))
+        );
+        watch.voice_output(start + Duration::from_secs(30));
+        assert_eq!(
+            watch.close_at(&ticket),
+            Some((start + FAREWELL_MAX_WAIT, "farewell"))
+        );
+    }
+
+    #[test]
+    fn speech_after_a_sign_off_cancels_the_goodbye() {
+        let start = Instant::now();
+        for continuation in [
+            (" What else can I help with?", false),
+            (" I'll tell her you said that.", true),
+        ] {
+            let mut watch = FarewellWatch::default();
+            watch.user_line();
+            assert!(watch.voice_delta(" By", start).is_none());
+            let ticket = watch.voice_delta("e.", start).unwrap();
+            if continuation.1 {
+                watch.voice_done(&format!(" Bye.{}", continuation.0));
+            } else {
+                watch.voice_delta(continuation.0, start);
+            }
+            assert_eq!(watch.close_at(&ticket), None);
+        }
     }
 
     #[test]
@@ -195,20 +283,20 @@ mod tests {
         let start = Instant::now();
         let mut watch = FarewellWatch::default();
         watch.user_line();
-        assert!(watch.voice_line("Bye!", start));
+        let ticket = watch.voice_delta("Bye!", start).unwrap();
         watch.user_speech();
-        assert_eq!(watch.close_at(), None);
-        assert!(!watch.voice_line("Bye!", start));
+        assert_eq!(watch.close_at(&ticket), None);
+        assert!(watch.voice_delta("Bye!", start).is_none());
     }
 
     #[test]
     fn a_goodbye_that_answers_no_user_line_does_not_arm() {
         let start = Instant::now();
         let mut watch = FarewellWatch::default();
-        assert!(!watch.voice_line("Bye!", start));
+        assert!(watch.voice_delta("Bye!", start).is_none());
         watch.user_line();
-        assert!(!watch.voice_line("On it.", start));
-        assert!(!watch.voice_line("Done. Bye!", start));
-        assert_eq!(watch.close_at(), None);
+        assert!(watch.voice_delta("On it.", start).is_none());
+        watch.voice_done("On it.");
+        assert!(watch.voice_delta("Done. Bye!", start).is_none());
     }
 }

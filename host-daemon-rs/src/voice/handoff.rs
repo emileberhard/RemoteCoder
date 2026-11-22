@@ -403,10 +403,13 @@ impl VoiceDelegations {
                     if active.result_too_long {
                         "The task's result is too long to read aloud — see the chat.".to_string()
                     } else {
-                        "The task finished without a spoken result — see the chat.".to_string()
+                        String::new()
                     }
                 }),
         };
+        if text.is_empty() && active.target == VoiceOutputTarget::Conversation {
+            return None;
+        }
         Some(VoiceCompletion {
             target: active.target,
             text,

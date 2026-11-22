@@ -404,6 +404,8 @@ impl Gateway {
             realtime_params["handoffOwner"] = Value::String("client".to_string());
         } else {
             realtime_params["codexResponseHandoffMode"] = Value::String("bemTags".to_string());
+            realtime_params["realtimeStartInstructions"] =
+                json!(include_str!("../../prompts/voice-call-agent.md"));
         }
         if let Some(voice) = voice {
             realtime_params["voice"] = Value::String(voice);
@@ -615,51 +617,58 @@ impl Gateway {
         };
         // Serialize authorization and stopping with replacement: an old
         // call's authorized hang-up must never drain its successor.
-        let transition = self.voice.transition().await;
+        let _transition = self.voice.transition().await;
         // Agent-initiated calls require the explicit call ID. A delayed no-arg
         // hangup from an earlier call on this same thread must not end its successor.
         if self.calls.active().await.is_some() {
             return false;
         }
-        let Some(hangup) = self.voice.begin_agent_hangup(
-            &transition,
-            thread_id,
-            matches!(caller.provider, crate::providers::Provider::Claude),
-        ) else {
+        let provider_is_claude = matches!(caller.provider, crate::providers::Provider::Claude);
+        let Some(Some((realtime_thread_id, started))) =
+            self.voice.with_live_conversation(thread_id, |session| {
+                if session.uses_external_executor != provider_is_claude {
+                    return None;
+                }
+                let watch = session.farewell.as_mut()?;
+                let started = watch.agent_requested_close(tokio::time::Instant::now());
+                Some((session.realtime_thread_id.clone(), started))
+            })
+        else {
             return false;
         };
-        self.finish_hangup(hangup, "agent tool").await
+        started.is_none_or(|started| self.spawn_farewell_close(realtime_thread_id, started))
     }
 
-    pub(super) fn spawn_farewell_close(self: &Arc<Self>, realtime_thread_id: String) {
+    pub(super) fn spawn_farewell_close(
+        self: &Arc<Self>,
+        realtime_thread_id: String,
+        started: Arc<tokio::time::Instant>,
+    ) -> bool {
         let gateway = Arc::clone(self);
         self.voice_tasks.spawn("voice farewell", async move {
-            while let Some(close_at) = gateway
+            while let Some((close_at, _)) = gateway
                 .voice
                 .with_live_realtime_thread(&realtime_thread_id, |session| {
-                    session.farewell.as_ref().and_then(FarewellWatch::close_at)
+                    session.farewell.as_ref()?.close_at(&started)
                 })
                 .flatten()
             {
-                if tokio::time::Instant::now() < close_at {
-                    tokio::time::sleep_until(close_at).await;
-                    continue;
-                }
+                tokio::time::sleep_until(close_at).await;
                 let transition = gateway.voice.transition().await;
-                if let Some(hangup) = gateway.voice.begin_farewell_hangup(
-                    &transition,
-                    &realtime_thread_id,
-                    tokio::time::Instant::now(),
-                ) {
-                    gateway.finish_hangup(hangup, "farewell").await;
+                if let Some((hangup, reason)) =
+                    gateway
+                        .voice
+                        .begin_farewell_hangup(&transition, &realtime_thread_id, &started)
+                {
+                    gateway.finish_hangup(hangup, reason).await;
                     break;
                 }
             }
             Ok(())
-        });
+        })
     }
 
-    async fn finish_hangup(self: &Arc<Self>, hangup: Hangup, reason: &'static str) -> bool {
+    async fn finish_hangup(self: &Arc<Self>, hangup: Hangup, reason: &'static str) {
         // Tombstone the call and tell every client it ended on purpose,
         // before Codex closes the realtime transport: the app must treat the
         // coming close as final instead of auto-reconnecting the call the
@@ -677,17 +686,11 @@ impl Gateway {
                 warn!(%error, "failed to encode agent hangup notification");
             }
         }
-        match self
+        if let Err(error) = self
             .stop_draining_voice_session(Some(hangup.realtime_thread_id), reason)
             .await
         {
-            Ok(ended) => ended,
-            Err(error) => {
-                warn!(%error, reason, "voice hang-up failed upstream");
-                // The session was still put into draining and finalized, so
-                // the call is over from the user's side either way.
-                true
-            }
+            warn!(%error, reason, "voice hang-up failed upstream");
         }
     }
 

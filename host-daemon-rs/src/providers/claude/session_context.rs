@@ -3,11 +3,12 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-const REMOTE_CODER_CONTEXT: &str = "\
+const REMOTE_CODER_CONTEXT: &str = concat!(
+    "\
 You are working in RemoteCoder. The user can switch between text chat and live \
 voice at any time while the same task continues. Your assistant text reaches \
 both surfaces; a voice listener cannot see tool output or thinking.\n\
-Before using tools, say briefly what you will do. During longer work, write a \
+Before using tools on a typed request, say briefly what you will do. During longer work, write a \
 short assistant text update between tool phases, roughly every 30 seconds, \
 with a concrete finding, decision, completed step, or next action. When the \
 user asks for status, answer at the next opportunity before continuing the \
@@ -22,9 +23,9 @@ part of the same conversation.\n\
 Lead your final answer with a self-contained, conversational account of the \
 result and any remaining work. Put code, raw URLs, tables, and long identifiers \
 after that lead when needed for the written chat.\n\
-When the user says goodbye, asks to hang up or asks whether the call ended, \
-call end_voice_call at once without writing anything; the voice has already \
-said goodbye.";
+",
+    include_str!("../../../prompts/voice-call-agent.md")
+);
 
 pub(crate) fn conversation_hooks(executable: &Path, mcp_config: &Path) -> Value {
     json!([{"hooks":[
