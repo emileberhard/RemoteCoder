@@ -173,9 +173,12 @@ final class VoiceCall {
     private var incomingCall: IncomingCall?
     private var incomingMonitorTask: Task<Void, Never>?
     private var incomingExpiryTask: Task<Void, Never>?
-    private var incomingConnectedTask: Task<Void, Never>?
-    private var hasReportedIncomingConnected = false
-    private var greetingTask: Task<Void, Never>?
+    private var mediaConnectedTask: Task<Void, Never>?
+
+    private enum SystemCallEnd {
+        case action(EndConversationAction)
+        case report(CallEndReason)
+    }
 
     var state: State { lifecycle.state }
     var transcript: [RealtimeVoiceTranscriptEntry] { transcriptState.entries }
@@ -321,7 +324,6 @@ final class VoiceCall {
         voiceHistoryStore = model.voiceHistoryStore
         transcriptState.reset()
         hasReportedConnected = false
-        hasReportedIncomingConnected = false
         model.setVoiceModeActive(true)
         AgentCallDiagnostics.record("reportIncomingStarted", callID: push.callId, hostID: push.hostId, detail: "", error: nil)
         do {
@@ -555,12 +557,7 @@ final class VoiceCall {
             return
         }
 
-        // Fulfill before the teardown: tearDown awaits a gateway RPC, and
-        // holding the system action across a stalled link gets it timed out
-        // and reported as a failed hang-up. The gateway drains on client
-        // disconnect regardless.
-        action.fulfill(dateEnded: .now)
-        await tearDown()
+        await tearDown(systemEnd: .action(action))
     }
 
     private func handleJoinAction(_ action: JoinConversationAction) async {
@@ -862,13 +859,10 @@ final class VoiceCall {
             if nextState == .reconnecting {
                 scheduleReconnect(connectionID: connectionID)
             } else {
-                if let conversationUUID = lifecycle.callID {
-                    systemBridge.reportEnded(
-                        callID: conversationUUID,
-                        reason: nextState == .idle ? .remoteEnded : .failed
-                    )
-                }
-                await tearDown(finalState: nextState, stopRemoteSession: false)
+                await tearDown(
+                    finalState: nextState, stopRemoteSession: false,
+                    systemEnd: .report(nextState == .idle ? .remoteEnded : .failed)
+                )
             }
 
         case .preempted(let event):
@@ -876,12 +870,9 @@ final class VoiceCall {
             // End the system conversation too: tearing down only WebRTC
             // leaves iOS convinced a call is still live (green pill, voip
             // background mode) with no way left to end it.
-            if let conversationUUID = lifecycle.callID {
-                systemBridge.reportEnded(callID: conversationUUID, reason: .joinedElsewhere)
-            }
             await tearDown(
                 finalState: .failed("Voice Mode was opened in another call."),
-                stopRemoteSession: false
+                stopRemoteSession: false, systemEnd: .report(.joinedElsewhere)
             )
 
         case .agentEnded(let event):
@@ -901,10 +892,7 @@ final class VoiceCall {
     /// so the call ends like the far side hanging up instead of reconnecting.
     private func endAsAgentEnded() async {
         diagnostic("call ended by the agent")
-        if let conversationUUID = lifecycle.callID {
-            systemBridge.reportEnded(callID: conversationUUID, reason: .remoteEnded)
-        }
-        await tearDown(stopRemoteSession: false)
+        await tearDown(stopRemoteSession: false, systemEnd: .report(.remoteEnded))
     }
 
     private func configureWebRTCAudioSession() throws {
@@ -981,40 +969,37 @@ final class VoiceCall {
         if incomingCall == nil {
             systemBridge.reportConnected(callID: conversationUUID)
         }
-        reportIncomingConnectedIfReady()
-        requestGreetingIfReady()
+        announceMediaConnectedIfReady()
     }
 
-    private func reportIncomingConnectedIfReady() {
-        guard hasReportedConnected, systemAudioSessionIsActive, !hasReportedIncomingConnected,
-              incomingConnectedTask == nil, let incomingCall, incomingCall.answered,
-              let gateway else { return }
-        incomingConnectedTask = Task { @MainActor [weak self] in
-            do {
-                try await gateway.reportIncomingCallConnected(
-                    callID: incomingCall.push.callId, deviceID: incomingCall.deviceID
-                )
-                guard let self, self.lifecycle.isCurrentCall(incomingCall.push.callId) else { return }
-                self.hasReportedIncomingConnected = true
-                self.incomingConnectedTask = nil
-                AgentCallDiagnostics.record("audioConnectedAcknowledged", callID: incomingCall.push.callId, hostID: incomingCall.push.hostId, detail: "systemAudioActive=true", error: nil)
-            } catch {
-                guard !Task.isCancelled, let self,
-                      self.lifecycle.isCurrentCall(incomingCall.push.callId) else { return }
-                await self.failSession(error)
+    private func announceMediaConnectedIfReady() {
+        guard hasReportedConnected, systemAudioSessionIsActive, mediaConnectedTask == nil,
+              incomingCall?.answered != false, let callID = lifecycle.callID,
+              let realtimeSessionID, let gateway else { return }
+        let incomingCall = self.incomingCall
+        mediaConnectedTask = Task { @MainActor [weak self] in
+            guard let self, self.lifecycle.isCurrentCall(callID) else { return }
+            if self.systemAudioSessionIsActive {
+                await self.audioRoute.playCue(.connected, logger: self.logger)
             }
-        }
-    }
-
-    private func requestGreetingIfReady() {
-        guard hasReportedConnected, systemAudioSessionIsActive, greetingTask == nil,
-              incomingCall == nil, let realtimeSessionID, let gateway else { return }
-        greetingTask = Task { @MainActor [weak self] in
+            guard !Task.isCancelled, self.lifecycle.isCurrentCall(callID) else { return }
             do {
-                try await gateway.reportVoiceSessionConnected(realtimeSessionID: realtimeSessionID)
+                if let incomingCall {
+                    try await gateway.reportIncomingCallConnected(
+                        callID: callID, deviceID: incomingCall.deviceID
+                    )
+                    guard self.lifecycle.isCurrentCall(callID) else { return }
+                    AgentCallDiagnostics.record("audioConnectedAcknowledged", callID: callID, hostID: incomingCall.push.hostId, detail: "systemAudioActive=true", error: nil)
+                } else {
+                    try await gateway.reportVoiceSessionConnected(realtimeSessionID: realtimeSessionID)
+                }
             } catch {
-                guard !Task.isCancelled, let self else { return }
-                self.diagnostic("greeting request failed error=\(error.localizedDescription)")
+                guard !Task.isCancelled, self.lifecycle.isCurrentCall(callID) else { return }
+                if incomingCall != nil {
+                    await self.failSession(error)
+                } else {
+                    self.diagnostic("greeting request failed error=\(error.localizedDescription)")
+                }
             }
         }
     }
@@ -1024,10 +1009,10 @@ final class VoiceCall {
         logger.error("realtime voice failed: \(error.localizedDescription)")
         VoiceModeDiagnostics.log("realtime voice failed error=\(error.localizedDescription)")
         let message = error.localizedDescription
-        if let conversationUUID = lifecycle.callID {
-            systemBridge.reportEnded(callID: conversationUUID, reason: .failed)
-        }
-        await tearDown(finalState: incomingCall == nil ? .failed(message) : .idle, incomingEndReason: "failed")
+        await tearDown(
+            finalState: incomingCall == nil ? .failed(message) : .idle,
+            incomingEndReason: "failed", systemEnd: .report(.failed)
+        )
     }
 
     private func closePeerConnection() {
@@ -1047,9 +1032,13 @@ final class VoiceCall {
     private func tearDown(
         finalState: State = .idle,
         stopRemoteSession: Bool = true,
-        incomingEndReason: String? = nil
+        incomingEndReason: String? = nil,
+        systemEnd: SystemCallEnd? = nil
     ) async {
         if let teardownTask {
+            if case .action(let action) = systemEnd {
+                action.fulfill(dateEnded: .now)
+            }
             await teardownTask.value
             return
         }
@@ -1069,10 +1058,9 @@ final class VoiceCall {
         incomingMonitorTask = nil
         incomingExpiryTask?.cancel()
         incomingExpiryTask = nil
-        incomingConnectedTask?.cancel()
-        incomingConnectedTask = nil
-        greetingTask?.cancel()
-        greetingTask = nil
+        let wasMediaConnected = mediaConnectedTask != nil
+        mediaConnectedTask?.cancel()
+        mediaConnectedTask = nil
         systemStartTask?.cancel()
         systemStartTask = nil
         connectionTask?.cancel()
@@ -1082,10 +1070,25 @@ final class VoiceCall {
         audioActivationDeadlineTask?.cancel()
         audioActivationDeadlineTask = nil
         closePeerConnection()
-        RTCAudioSession.sharedInstance().isAudioEnabled = false
-        systemAudioSessionIsActive = false
 
         let task = Task { @MainActor [self] in
+            if wasMediaConnected {
+                if systemAudioSessionIsActive {
+                    await audioRoute.playCue(.ended, logger: logger)
+                } else {
+                    logger.error("Voice end cue could not play because the call audio route is inactive")
+                }
+            }
+            RTCAudioSession.sharedInstance().isAudioEnabled = false
+            systemAudioSessionIsActive = false
+            switch systemEnd {
+            case .action(let action):
+                action.fulfill(dateEnded: .now)
+            case .report(let reason):
+                systemBridge.reportEnded(callID: callID, reason: reason)
+            case nil:
+                break
+            }
             if stopRemoteSession, let endingGateway {
                 // Preserve transcript-tail delivery without allowing it to change call state.
                 do {
@@ -1113,7 +1116,6 @@ final class VoiceCall {
             pendingRemoteSDP.removeAll()
             hasReportedConnected = false
             incomingCall = nil
-            hasReportedIncomingConnected = false
             reconnectAttempts = 0
             isMuted = false
             audioRoute.refresh()
@@ -1194,8 +1196,7 @@ extension VoiceCall: CallSystemBridgeDelegate {
             detail: "category=\(category) mode=\(mode)", error: nil)
         webRTCSession?.setInputEnabled(!isMuted)
         audioRoute.refresh()
-        reportIncomingConnectedIfReady()
-        requestGreetingIfReady()
+        announceMediaConnectedIfReady()
     }
 
     func callSystemDidDeactivateAudio() {

@@ -5,9 +5,54 @@ import Observation
 @Observable
 @MainActor
 final class CallAudioRoute {
+    enum Cue: String, CaseIterable {
+        case connected = "voice-call-connected"
+        case ended = "voice-call-ended"
+    }
+
     private(set) var outputName: String?
     private(set) var isUsingSpeaker = false
     @ObservationIgnored private var listener: Task<Void, Never>?
+
+    @ObservationIgnored private var cueData: [Cue: Data] = [:]
+
+    init() {
+        Task { [weak self] in
+            let data = await Self.loadCueData()
+            self?.cueData = data
+        }
+    }
+
+    @concurrent private static func loadCueData() async -> [Cue: Data] {
+        var data: [Cue: Data] = [:]
+        for cue in Cue.allCases {
+            if let url = Bundle.main.url(forResource: cue.rawValue, withExtension: "wav") {
+                data[cue] = try? Data(contentsOf: url)
+            }
+        }
+        return data
+    }
+
+    func playCue(_ cue: Cue, logger: AppLogger) async {
+        guard !Task.isCancelled else { return }
+        guard let data = cueData[cue] else {
+            logger.error("Voice call cue unavailable: \(cue.rawValue)")
+            return
+        }
+        do {
+            let player = try AVAudioPlayer(data: data)
+            guard player.play() else {
+                logger.error("Voice call cue could not start: \(cue.rawValue)")
+                return
+            }
+            defer { player.stop() }
+            try await Task.sleep(for: .seconds(min(player.duration, 0.35)))
+        } catch is CancellationError {
+            return
+        } catch {
+            logger.error("Voice call cue failed: \(cue.rawValue) \(error.localizedDescription)")
+        }
+    }
 
     func toggleSpeaker() throws {
         let audioSession = AVAudioSession.sharedInstance()
