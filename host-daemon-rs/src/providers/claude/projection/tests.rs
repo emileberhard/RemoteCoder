@@ -1410,6 +1410,47 @@ async fn a_turn_interrupted_during_reasoning_keeps_its_place_before_later_turns(
 }
 
 #[test]
+fn merged_sends_are_one_canonical_item_in_live_and_history() {
+    let note = "<remotecoder_note>Separate context</remotecoder_note>";
+    let block = |text: &str| json!({"type": "text", "text": text});
+    for content in [
+        json!("Check the build\nRun the tests"),
+        json!([
+            block("Check the build"),
+            block(note),
+            block("Run the tests"),
+            block(note)
+        ]),
+    ] {
+        let home = TempDir::new().unwrap();
+        let record = json!({
+            "type": "user", "uuid": "second", "mergedSendUuids": ["first"],
+            "cwd": CWD, "timestamp": "2026-11-22T12:19:08.592Z",
+            "message": {"role": "user", "content": content},
+        });
+        let entries = all_entries(home.path(), "merged", std::slice::from_ref(&record), None);
+        let mut translator = TurnTranslator::new(
+            "claude_merged".into(),
+            "turn".into(),
+            CWD.into(),
+            None,
+            1_790_000_000_000,
+            std::sync::Arc::default(),
+        );
+        let notifications = translator.handle(&record).notifications;
+        let expected = json!({
+            "type": "userMessage", "id": "second", "clientId": "second",
+            "mergedClientIds": ["first"],
+            "content": [{"type": "text", "text": "Check the build\nRun the tests", "textElements": []}],
+        });
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["item"], expected);
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications[0]["params"]["item"], expected);
+    }
+}
+
+#[test]
 fn image_attachments_survive_live_and_history_user_items() {
     for caption in [None, Some("Inspect this")] {
         let home = TempDir::new().unwrap();

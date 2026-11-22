@@ -13,7 +13,9 @@ use crate::providers::claude::timeline::{
 use crate::providers::claude::translate::context_usage::token_usage_notification;
 use crate::providers::claude::translate::narration::{narration_text, sent_message_text};
 use crate::providers::claude::translate::tools::{ToolOutcome, is_advisor_call, tool_item};
-use crate::providers::claude::translate::{agent_message_item, user_message_item};
+use crate::providers::claude::translate::{
+    agent_message_item, prompt_user_message_item, user_message_item,
+};
 use crate::time::parse_rfc3339_millis;
 use anyhow::{Context, Result, anyhow, bail};
 use indexmap::IndexMap;
@@ -1042,7 +1044,7 @@ impl Projection {
                 let record = records.read(*span)?;
                 let text = user_prompt_text(record.pointer("/message/content"))
                     .ok_or_else(|| changed(&item.id))?;
-                user_message_item(&item.id, &text, record.pointer("/message/content"))
+                prompt_user_message_item(&item.id, &text, record)
             }
             Source::Queued(span) => {
                 let record = records.read(*span)?;
@@ -1081,6 +1083,7 @@ impl Projection {
             .as_ref()
             .and_then(|identity| identity.client_id.as_ref())
             && item.source.is_user_message()
+            && value.get("mergedClientIds").is_none()
         {
             value["clientId"] = json!(client_id);
         }

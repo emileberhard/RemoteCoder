@@ -1258,9 +1258,10 @@ actor ConversationCheckpointStore {
         if let stored = checkpoint.submissions[original.message.id] {
             return try submissionMatches(original, stored: stored) ? .absorbed : .conflicting
         }
-        for item in checkpoint.turns.values.flatMap({ $0.items.values }) {
-            guard case .userMessage(_, let content, let clientID) = item.value,
-                  clientID.flatMap(UUID.init(uuidString:)) == original.message.id else { continue }
+        for item in checkpoint.turns.values.lazy.flatMap(\.items.values) {
+            guard case .userMessage(_, let content, _, _) = item.value,
+                  item.value.userSendIDs.contains(original.message.id) else { continue }
+            if !item.isLocal, item.value.carriesMergedSends { return .absorbed }
             guard !item.isLocal, isInitialAdmission(original), let stored = item.localMessage else { return .conflicting }
             let texts = content.compactMap { input -> String? in
                 if case .text(let text, _) = input { text } else { nil }

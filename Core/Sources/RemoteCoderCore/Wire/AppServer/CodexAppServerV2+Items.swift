@@ -1,3 +1,5 @@
+import Foundation
+
 extension CodexAppServerV2 {
     struct ByteRange: Codable, Sendable, Hashable {
         let start: Int
@@ -29,7 +31,7 @@ extension CodexAppServerV2 {
     }
 
     enum ThreadItem: Sendable, Equatable {
-        case userMessage(id: String, content: [UserInput], clientId: String? = nil)
+        case userMessage(id: String, content: [UserInput], clientId: String? = nil, mergedClientIds: [String]? = nil)
         case hookPrompt(id: String, fragments: [HookPromptFragment])
         case agentMessage(
             id: String,
@@ -355,6 +357,7 @@ private enum ThreadItemPayload {
     struct UserMessage: Codable {
         let content: [V2.UserInput]
         let clientId: String?
+        let mergedClientIds: [String]?
     }
 
     struct HookPrompt: Codable {
@@ -473,7 +476,7 @@ extension CodexAppServerV2.ThreadItem: Codable {
         switch header.type {
         case "userMessage":
             let payload = try Payload.UserMessage(from: decoder)
-            self = .userMessage(id: id, content: payload.content, clientId: payload.clientId)
+            self = .userMessage(id: id, content: payload.content, clientId: payload.clientId, mergedClientIds: payload.mergedClientIds)
         case "hookPrompt":
             self = .hookPrompt(id: id, fragments: try Payload.HookPrompt(from: decoder).fragments)
         case "agentMessage":
@@ -543,8 +546,8 @@ extension CodexAppServerV2.ThreadItem: Codable {
             try Payload.Tagged(type: type, id: id, fields: fields).encode(to: encoder)
         }
         switch self {
-        case .userMessage(let id, let content, let clientId):
-            try write("userMessage", id, Payload.UserMessage(content: content, clientId: clientId))
+        case .userMessage(let id, let content, let clientId, let mergedClientIds):
+            try write("userMessage", id, Payload.UserMessage(content: content, clientId: clientId, mergedClientIds: mergedClientIds))
         case .hookPrompt(let id, let fragments):
             try write("hookPrompt", id, Payload.HookPrompt(fragments: fragments))
         case .agentMessage(let id, let text, let phase, let delivery, let questions):
@@ -628,9 +631,20 @@ extension CodexAppServerV2.ThreadItem {
         }
     }
 
+    var userSendIDs: [UUID] {
+        guard case .userMessage(_, _, let primary, let merged) = self else { return [] }
+        let id = primary.flatMap(UUID.init(uuidString:))
+        return (id.map { [$0] } ?? []) + (merged?.compactMap(UUID.init(uuidString:)) ?? [])
+    }
+
+    var carriesMergedSends: Bool {
+        guard case .userMessage(_, _, _, let merged) = self else { return false }
+        return merged?.isEmpty == false
+    }
+
     var id: String {
         switch self {
-        case .userMessage(let id, _, _), .hookPrompt(let id, _), .agentMessage(let id, _, _, _, _),
+        case .userMessage(let id, _, _, _), .hookPrompt(let id, _), .agentMessage(let id, _, _, _, _),
              .plan(let id, _), .imageView(let id, _, _), .enteredReviewMode(let id, _),
              .exitedReviewMode(let id, _), .contextCompaction(let id): id
         case .reasoning(let id, _, _), .fileChange(let id, _, _),

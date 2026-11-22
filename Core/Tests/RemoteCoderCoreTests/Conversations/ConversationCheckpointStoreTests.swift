@@ -389,6 +389,42 @@ struct ConversationCheckpointStoreTests: ConversationHistoryFixtures {
         withExtendedLifetime(control) {}
     }
 
+    @Test func aMergedCanonicalItemAbsorbsBothSubmissionFiles() async throws {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let host = UUID()
+        let id = UUID()
+        let threadID = "thread"
+        let store = ConversationCheckpointStore(hostID: host, directory: directory, primaryBudgetBytes: 64 * 1_024)
+        let generation = await store.generation(for: id)
+        let first = ChatMessage(role: .user, text: "First steer")
+        let second = ChatMessage(role: .user, text: "Second steer")
+        var state = ConversationState(conversationID: id, threadID: threadID)
+        for message in [first, second] {
+            state.submit(message)
+            let record = ConversationCheckpointStore.SubmissionRecord(revision: state.persistenceRevision,
+                threadID: threadID, submission: try #require(state.submissions[message.id]))
+            try await store.saveSubmission(record, conversationID: id, generation: generation)
+        }
+        let merged = CodexAppServerV2.ThreadItem.userMessage(id: second.id.uuidString,
+            content: [.text(text: "First steer\nSecond steer", textElements: [])],
+            clientId: second.id.uuidString, mergedClientIds: [first.id.uuidString])
+        state.merge(history(items: [merged], threadID: threadID))
+        try await store.save(state.checkpoint, conversationID: id)
+
+        for message in [first, second] {
+            let sidecar = directory.appending(path: "\(id).submissions/\(message.id).json")
+            #expect(!FileManager.default.fileExists(atPath: sidecar.path))
+        }
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "recovery/\(id)").path))
+        let cold = ConversationCheckpointStore(hostID: host, directory: directory, primaryBudgetBytes: 64 * 1_024)
+        let checkpoint = try #require(try await cold.load(id))
+        #expect(checkpoint.submissions.isEmpty)
+        var restored = ConversationState(conversationID: id, threadID: threadID)
+        restored.restore(checkpoint)
+        #expect(ConversationProjection.project(restored).messages.map(\.text) == ["First steer\nSecond steer"])
+    }
+
     @Test(arguments: ["", " \n\t ", " \nKeep original presentation\t "], [false, true])
     func canonicalEchoRetiresOnlyAbsorbedInitialSidecars(input: String, conflicting: Bool) async throws {
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)

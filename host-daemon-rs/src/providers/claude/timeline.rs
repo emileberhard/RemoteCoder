@@ -179,6 +179,34 @@ pub(crate) fn existing_recorded_cwd(
     Ok(existing.filter(|_| recorded_missing))
 }
 
+pub(super) fn user_send_ids(record: &Value) -> Vec<&str> {
+    match record["type"].as_str() {
+        Some("user") => {
+            let Some(primary) = record["uuid"].as_str() else {
+                return Vec::new();
+            };
+            let mut ids = vec![primary];
+            if let Some(merged) = record["mergedSendUuids"].as_array() {
+                let mut seen = std::collections::HashSet::from([primary]);
+                ids.extend(
+                    merged
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter(|id| seen.insert(*id)),
+                );
+            }
+            ids
+        }
+        Some("attachment") if record["attachment"]["type"] == "queued_command" => {
+            record["attachment"]["source_uuid"]
+                .as_str()
+                .into_iter()
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
 pub(crate) fn queued_user_prompt(record: &Value) -> Option<(String, &str)> {
     let attachment = record.get("attachment")?;
     if attachment.get("type").and_then(Value::as_str) != Some("queued_command")

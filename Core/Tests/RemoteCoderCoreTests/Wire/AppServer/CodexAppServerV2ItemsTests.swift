@@ -83,7 +83,7 @@ struct CodexAppServerV2ItemsTests {
          {"type":"image","fileId":"file_123","detail":"high"}]}
         """#
         let item = try JSONDecoder().decode(CodexAppServerV2.ThreadItem.self, from: Data(wire.utf8))
-        guard case .userMessage(_, let content, _) = item,
+        guard case .userMessage(_, let content, _, _) = item,
               content.count == 2,
               case .image(let inline) = content[0],
               case .image(let file) = content[1]

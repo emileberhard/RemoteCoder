@@ -560,10 +560,10 @@ enum ConversationProjection {
         let visualReplies: [HTMLVisualReply]
         let inline: InlineMessageContent?
         switch record.value {
-        case .userMessage(_, let content, let clientId):
+        case .userMessage(_, let content, let clientId, _):
             role = .user
             clientID = clientId.flatMap(UUID.init(uuidString:))
-            if let local = record.localMessage, !local.text.isEmpty || !local.attachments.isEmpty {
+            if !record.value.carriesMergedSends, let local = record.localMessage, !local.text.isEmpty || !local.attachments.isEmpty {
                 text = local.text
                 let needsCanonicalImages = local.attachments.contains { if case .canonicalImage = $0.content { true } else { false } }
                 let canonical = needsCanonicalImages ? userContent(content, id: record.value.id, parsesVoice: false, cache: &userContents).attachments.filter {
@@ -578,7 +578,7 @@ enum ConversationProjection {
                 questionReplies = local.questionReplies
                 visualReplies = local.visualReplies
             } else {
-                let prepared = userContent(content, id: record.value.id, parsesVoice: record.localMessage == nil && clientId == nil,
+                let prepared = userContent(content, id: record.value.id, parsesVoice: record.localMessage == nil && clientId == nil && !record.value.carriesMergedSends,
                                            cache: &userContents)
                 text = prepared.text
                 attachments = prepared.attachments

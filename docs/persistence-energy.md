@@ -171,8 +171,10 @@ with the canonical checkpoint and leaves their delivery uncertain. A successful
 checkpoint retires a record only when its client identity and content are absorbed
 and its revision is covered. Distinct client IDs restore even below the checkpoint's
 revision. Newer records remain protected; conflicting payloads move to recovery.
-Canonical absorption compares the dispatched trimmed text and the encoded message
-after canonical image normalization, retaining the exact local presentation.
+For a single-send canonical item, absorption compares the dispatched trimmed
+text and the encoded message after canonical image normalization, retaining the
+exact local presentation. A merged canonical item absorbs each send it names
+by identity and supplies the displayed content.
 Unreadable records move to recovery while readable submissions and
 new input remain durable. The regular checkpoint cadence and immediate
 acknowledgement saves remain unchanged.

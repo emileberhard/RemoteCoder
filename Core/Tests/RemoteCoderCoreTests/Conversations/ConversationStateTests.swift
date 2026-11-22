@@ -84,7 +84,7 @@ struct ConversationStateTests: ConversationHistoryFixtures {
         let item = CodexAppServerV2.ThreadItem.userMessage(id: "handoff", content: [.text(text: envelope, textElements: [])])
         var state = ConversationState(conversationID: UUID(), threadID: "thread")
         state.apply(try event("item/completed", item: item, ordinal: 1))
-        if case .userMessage(_, let content, _) = state.turns["turn"]?.items["handoff"]?.value,
+        if case .userMessage(_, let content, _, _) = state.turns["turn"]?.items["handoff"]?.value,
            case .text(let stored, _) = content.first {
             #expect(stored == envelope)
         } else { Issue.record("The canonical handoff must remain intact") }
@@ -513,6 +513,64 @@ struct ConversationStateTests: ConversationHistoryFixtures {
         #expect(delivered.timelines.map(\.isLive) == [false, true])
         #expect(delivered.timelines.first?.completedAt == Date(timeIntervalSince1970: 600))
         #expect(delivered.timelines.last?.startedAt == Date(timeIntervalSince1970: 600))
+    }
+
+    @Test(arguments: [false, true])
+    func mergedSteersReconcileBothSendsAndUseTheServerPresentation(earlyEcho: Bool) throws {
+        var state = ConversationState(conversationID: UUID(), threadID: "thread")
+        state.activity(turnID: "turn", active: true)
+        let first = ChatMessage(id: ChatMessage.deterministicID(for: "first-steer"),
+            role: .user, text: "First local steer", wasSteered: true, canonicalTurnID: "turn")
+        let second = ChatMessage(id: ChatMessage.deterministicID(for: "second-steer"),
+            role: .user, text: "Second local steer", wasSteered: true, canonicalTurnID: "turn")
+        for steer in [first, second] {
+            state.submit(steer)
+            state.accepted(steer.id, turnID: "turn")
+        }
+        #expect(ConversationProjection.project(state).messages.map(\.delivery) == [.pendingSteer, .pendingSteer])
+
+        state.apply(try lifecycle("turn/completed", turnID: "turn", status: "completed"))
+        let nextTurn = "next"
+        state.activity(turnID: nextTurn, active: true)
+        let firstID = first.id.uuidString
+        let secondID = second.id.uuidString
+        let serverText = "First server steer\nSecond server steer"
+        let content: [CodexAppServerV2.UserInput] = [.text(text: serverText, textElements: [])]
+        let merged = CodexAppServerV2.ThreadItem.userMessage(id: secondID, content: content,
+            clientId: secondID, mergedClientIds: [firstID])
+        if earlyEcho {
+            let single = CodexAppServerV2.ThreadItem.userMessage(id: firstID,
+                content: [.text(text: "First server steer", textElements: [])], clientId: firstID)
+            let early = try itemEvent("item/completed", single, turnID: nextTurn, ordinal: 1)
+            state.apply(early)
+            #expect(ConversationProjection.project(state).messages.first { $0.id == first.id }?.text == first.text)
+
+            let legacy = CodexAppServerV2.ThreadItem.userMessage(id: secondID, content: content, clientId: secondID)
+            state.apply(try itemEvent("item/completed", legacy, turnID: nextTurn, ordinal: 2))
+            func stored(_ item: CodexAppServerV2.ThreadItem) -> GatewayHistoryService.ConversationSnapshot {
+                .fixture(wire: [.init(turnId: nextTurn, item: item, startedAtOrdinal: 2, completedAtMs: 2002, isComplete: true)],
+                         turns: [summary(nextTurn)])
+            }
+            state.merge(stored(legacy))
+            #expect(state.submissions[first.id] == nil)
+            #expect(ConversationProjection.project(state).messages.map(\.text) == [second.text])
+
+            state.merge(stored(merged))
+            state.apply(early, replay: true)
+        } else {
+            state.apply(try itemEvent("item/completed", merged, turnID: nextTurn, ordinal: 2))
+        }
+
+        #expect(state.submissions.isEmpty)
+        #expect(state.contains(clientID: first.id))
+        #expect(state.turns[nextTurn]?.items[firstID] == nil)
+        let messages = ConversationProjection.project(state).messages
+        #expect(messages.count == 1)
+        let message = try #require(messages.first)
+        #expect(message.id == second.id)
+        #expect(message.canonicalItemID == secondID)
+        #expect(message.text == serverText)
+        #expect(message.delivery == .steered)
     }
 
     @Test func aSteerTheAgentNeverTookDoesNotReadAsSteered() throws {

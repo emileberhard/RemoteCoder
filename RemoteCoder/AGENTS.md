@@ -647,8 +647,8 @@ entrypoint linked above.
   provider envelope contract live in `docs/system-architecture.md`, *Steer and
   fork context notes*. Do not add viewport or reveal tracking for this capture.
 - A steer appears once. Both providers take it only after the running tool
-  batch finishes, and the only proof is the canonical `userMessage` whose
-  `clientId` matches; a `turn/steer` response means only that the gateway
+  batch finishes, and the only proof is a canonical `userMessage` that names
+  the send in `clientId` or `mergedClientIds`; a `turn/steer` response means only that the gateway
   handed it over. Until then the local row is not an action-group boundary: it
   renders after the turn's live group, so running work stays in that group,
   and reads "Steer pending" (active turn), "Not sent" (rejected) or

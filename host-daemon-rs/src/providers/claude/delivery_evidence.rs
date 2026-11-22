@@ -112,38 +112,17 @@ fn recorded_inputs<'a>(
         }
         let record: Value = serde_json::from_slice(&line)
             .with_context(|| format!("failed to parse {}", path.display()))?;
-        let (recorded_id, merged, content) = match record.get("type").and_then(Value::as_str) {
-            Some("user") => (
-                record.get("uuid"),
-                record.get("mergedSendUuids").and_then(Value::as_array),
-                record.pointer("/message/content"),
-            ),
-            Some("attachment")
-                if record.pointer("/attachment/type").and_then(Value::as_str)
-                    == Some("queued_command") =>
-            {
-                (
-                    record.pointer("/attachment/source_uuid"),
-                    None,
-                    record.pointer("/attachment/prompt"),
-                )
-            }
-            _ => (None, None, None),
+        let sends = super::timeline::user_send_ids(&record);
+        let content = if record["type"] == "user" {
+            record.pointer("/message/content")
+        } else {
+            record.pointer("/attachment/prompt")
         };
-        let merged = merged
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        for recorded_id in recorded_id
-            .and_then(Value::as_str)
-            .into_iter()
-            .chain(merged.iter().copied())
-        {
-            let Some(id) = ids.iter().find(|id| **id == recorded_id) else {
+        for recorded_id in &sends {
+            let Some(id) = ids.iter().find(|id| **id == *recorded_id) else {
                 continue;
             };
-            let recorded = if merged.is_empty() {
+            let recorded = if sends.len() == 1 {
                 Recorded::Alone(alone_fingerprint(&record, content, payload))
             } else {
                 Recorded::Merged(merged_text(content))
@@ -297,33 +276,40 @@ mod tests {
             "<agent_message id=\"first:completion\">\n  <result>one</result>\n</agent_message>";
         let second =
             "<agent_message id=\"second:completion\">\n  <result>two</result>\n</agent_message>";
-        let record = serde_json::json!({
-            "type": "user",
-            "uuid": "second-input",
-            "mergedSendUuids": ["first-input"],
-            "message": {"content": format!("{SYNTHETIC_PREFIX}{first}\n{second}")},
-        });
-        let (_dir, path) = transcript(&format!("{record}\n"));
+        let block = |text: &str| serde_json::json!({"type": "text", "text": text});
+        let note = block("<remotecoder_note>Separate context</remotecoder_note>");
+        for content in [
+            serde_json::json!(format!("{SYNTHETIC_PREFIX}{first}\n{second}")),
+            serde_json::json!([block(first), note, block(second), note]),
+        ] {
+            let record = serde_json::json!({
+                "type": "user",
+                "uuid": "second-input",
+                "mergedSendUuids": ["first-input"],
+                "message": {"content": content},
+            });
+            let (_dir, path) = transcript(&format!("{record}\n"));
 
-        assert_eq!(
-            recorded_ids(&path, &["first-input", "second-input", "absent"]).unwrap(),
-            HashSet::from(["first-input", "second-input"]),
-        );
-        for (id, text) in [("first-input", first), ("second-input", second)] {
             assert_eq!(
-                recorded_callback(&path, id, text).unwrap(),
-                Some(Verification::Matches)
+                recorded_ids(&path, &["first-input", "second-input", "absent"]).unwrap(),
+                HashSet::from(["first-input", "second-input"]),
             );
+            for (id, text) in [("first-input", first), ("second-input", second)] {
+                assert_eq!(
+                    recorded_callback(&path, id, text).unwrap(),
+                    Some(Verification::Matches)
+                );
+            }
+            assert_eq!(
+                recorded_callback(&path, "first-input", &first.replace("one", "changed")).unwrap(),
+                Some(Verification::Differs)
+            );
+            assert_eq!(
+                recorded_fingerprint(&path, "first-input").unwrap(),
+                Some(None)
+            );
+            assert_eq!(recorded_callback(&path, "absent", first).unwrap(), None);
         }
-        assert_eq!(
-            recorded_callback(&path, "first-input", &first.replace("one", "changed")).unwrap(),
-            Some(Verification::Differs)
-        );
-        assert_eq!(
-            recorded_fingerprint(&path, "first-input").unwrap(),
-            Some(None)
-        );
-        assert_eq!(recorded_callback(&path, "absent", first).unwrap(), None);
     }
 
     #[test]

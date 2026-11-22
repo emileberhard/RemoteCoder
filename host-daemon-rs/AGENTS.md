@@ -1601,9 +1601,13 @@ Claude. The `RC_CLAUDE_*` settings are in
   are `isMeta` context and skill injections, compaction summaries, and
   envelope-wrapped harness text such as `<task-notification>`,
   `<system-reminder>` and local-command plumbing.
-  - A steer sent during a running turn exists in the session file only as a
-    `queued_command` attachment; replay renders it as a user message whose id is
-    its `source_uuid`, the client id the stream echoed.
+  - A steer taken at a tool boundary is recorded as a `queued_command` attachment.
+    Replay renders it as a user message whose id is its `source_uuid`, the
+    client id the stream echoed. Claude can also combine steers into a single
+    user record at a turn boundary. `timeline.rs` owns the send identities for
+    live translation, history and delivery evidence. The merged item keeps the
+    record UUID as its id and `clientId` and names earlier sends in
+    `mergedClientIds`.
   - The CLI's own `<synthetic>` assistant records never render, such as
     "No response requested." answering the resume nudge after a restart.
   - An injected record between turns still opens a header-only turn draft, so

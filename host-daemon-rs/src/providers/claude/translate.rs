@@ -606,7 +606,7 @@ impl TurnTranslator {
             && let Some(id) = value.get("uuid").and_then(Value::as_str)
         {
             out.notifications
-                .push(self.item_completed(user_message_item(id, &text, content)));
+                .push(self.item_completed(prompt_user_message_item(id, &text, value)));
         }
         let Some(content) = value
             .get("message")
@@ -846,6 +846,17 @@ pub(crate) fn billing_violation(init: &Value, fast_selected: bool) -> Option<Bil
     }
 
     None
+}
+
+pub(super) fn prompt_user_message_item(id: &str, text: &str, record: &Value) -> Value {
+    let mut item = user_message_item(id, text, record.pointer("/message/content"));
+    let sends = super::timeline::user_send_ids(record);
+    if let [_, merged @ ..] = sends.as_slice()
+        && !merged.is_empty()
+    {
+        item["mergedClientIds"] = json!(merged);
+    }
+    item
 }
 
 pub(crate) fn user_message_item(id: &str, text: &str, source: Option<&Value>) -> Value {

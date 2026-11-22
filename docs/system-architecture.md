@@ -1204,7 +1204,12 @@ just before it.
 final reply belongs to a turn this model dispatched, never to a replayed or foreign one. History and
 checkpoint reads merge facts by identity; an absent row in a bounded page does
 not delete a local submission. A send is checkpointed before dispatch and keeps
-its exact `clientUserMessageId` until a canonical `clientId` reconciles it.
+its exact `clientUserMessageId` until canonical delivery reconciles it. Every
+delivered send id appears on exactly one canonical item. A Claude transcript
+record that combines sends keeps its record UUID as the item id and `clientId`
+and names the earlier sends in `mergedClientIds`. The app resolves all of those
+ids, replaces any separate live echoes of the earlier sends, and shows the
+combined server content in one bubble.
 Lost acknowledgements remain uncertain and never cause an automatic resend.
 Completion is applied once per `(thread, turn)` identity; replayed completion
 frames therefore cannot repeat the state transition or its side effects.
