@@ -977,12 +977,9 @@ final class VoiceCall {
               incomingCall?.answered != false, let callID = lifecycle.callID,
               let realtimeSessionID, let gateway else { return }
         let incomingCall = self.incomingCall
+        audioRoute.playConnectedCue(logger: logger)
         mediaConnectedTask = Task { @MainActor [weak self] in
-            guard let self, self.lifecycle.isCurrentCall(callID) else { return }
-            if self.systemAudioSessionIsActive {
-                await self.audioRoute.playCue(.connected, logger: self.logger)
-            }
-            guard !Task.isCancelled, self.lifecycle.isCurrentCall(callID) else { return }
+            guard !Task.isCancelled, let self, self.lifecycle.isCurrentCall(callID) else { return }
             do {
                 if let incomingCall {
                     try await gateway.reportIncomingCallConnected(
@@ -1042,7 +1039,12 @@ final class VoiceCall {
             await teardownTask.value
             return
         }
-        guard let callID = lifecycle.beginStop() else { return }
+        guard let callID = lifecycle.beginStop() else {
+            if case .action(let action) = systemEnd {
+                action.fulfill(dateEnded: .now)
+            }
+            return
+        }
         diagnostic("tearing down call=\(callID)")
         AgentCallDiagnostics.record("teardownStarted", callID: callID, hostID: incomingCall?.push.hostId, detail: "reason=\(incomingEndReason ?? "ended")", error: nil)
         let failedBeforeActivation = !hasReportedConnected
@@ -1070,11 +1072,12 @@ final class VoiceCall {
         audioActivationDeadlineTask?.cancel()
         audioActivationDeadlineTask = nil
         closePeerConnection()
+        audioRoute.stopConnectedCue()
 
         let task = Task { @MainActor [self] in
             if wasMediaConnected {
                 if systemAudioSessionIsActive {
-                    await audioRoute.playCue(.ended, logger: logger)
+                    await audioRoute.playEndedCue(logger: logger)
                 } else {
                     logger.error("Voice end cue could not play because the call audio route is inactive")
                 }
@@ -1083,6 +1086,9 @@ final class VoiceCall {
             systemAudioSessionIsActive = false
             switch systemEnd {
             case .action(let action):
+                // Fulfill after the cue and before the gateway RPC. A stalled
+                // link can time out the system action and report a failed hang-up.
+                // The gateway drains on client disconnect regardless.
                 action.fulfill(dateEnded: .now)
             case .report(let reason):
                 systemBridge.reportEnded(callID: callID, reason: reason)

@@ -5,7 +5,7 @@ import Observation
 @Observable
 @MainActor
 final class CallAudioRoute {
-    enum Cue: String, CaseIterable {
+    private enum Cue: String, CaseIterable {
         case connected = "voice-call-connected"
         case ended = "voice-call-ended"
     }
@@ -15,6 +15,7 @@ final class CallAudioRoute {
     @ObservationIgnored private var listener: Task<Void, Never>?
 
     @ObservationIgnored private var cueData: [Cue: Data] = [:]
+    @ObservationIgnored private var connectedCuePlayer: AVAudioPlayer?
 
     init() {
         Task { [weak self] in
@@ -33,24 +34,36 @@ final class CallAudioRoute {
         return data
     }
 
-    func playCue(_ cue: Cue, logger: AppLogger) async {
-        guard !Task.isCancelled else { return }
+    func playConnectedCue(logger: AppLogger) {
+        connectedCuePlayer = startCue(.connected, logger: logger)
+    }
+
+    func stopConnectedCue() {
+        connectedCuePlayer?.stop()
+        connectedCuePlayer = nil
+    }
+
+    func playEndedCue(logger: AppLogger) async {
+        guard !Task.isCancelled, let player = startCue(.ended, logger: logger) else { return }
+        defer { player.stop() }
+        try? await Task.sleep(for: .seconds(min(player.duration, 0.35)))
+    }
+
+    private func startCue(_ cue: Cue, logger: AppLogger) -> AVAudioPlayer? {
         guard let data = cueData[cue] else {
             logger.error("Voice call cue unavailable: \(cue.rawValue)")
-            return
+            return nil
         }
         do {
             let player = try AVAudioPlayer(data: data)
             guard player.play() else {
                 logger.error("Voice call cue could not start: \(cue.rawValue)")
-                return
+                return nil
             }
-            defer { player.stop() }
-            try await Task.sleep(for: .seconds(min(player.duration, 0.35)))
-        } catch is CancellationError {
-            return
+            return player
         } catch {
             logger.error("Voice call cue failed: \(cue.rawValue) \(error.localizedDescription)")
+            return nil
         }
     }
 
