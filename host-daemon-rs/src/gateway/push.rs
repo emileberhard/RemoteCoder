@@ -5,13 +5,31 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 impl Gateway {
+    pub(super) fn is_conversation_in_live_voice(&self, thread_id: &str) -> bool {
+        self.voice
+            .with_live_conversation(thread_id, |_| ())
+            .is_some()
+    }
+
+    pub(super) fn received_completion_during_voice(&self, message: &serde_json::Value) -> bool {
+        message["method"] == "turn/completed"
+            && message
+                .pointer("/params/threadId")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|thread_id| self.is_conversation_in_live_voice(thread_id))
+    }
+
     pub(super) async fn apns_completion_loop(&self, mut rx: mpsc::Receiver<ApnsSend>) {
         while let Some(apns) = rx.recv().await {
+            let thread_id = apns.payload["sessionID"].as_str();
+            let event_id = apns.payload["eventID"].as_str();
+            if apns.kind == AlertKind::TurnCompletionInVoice {
+                self.record_user_alert_suppression(thread_id, "alert", event_id, "liveVoiceCall");
+                continue;
+            }
             if self.apns.check_alert_registration("alert").await.is_err() {
                 continue;
             }
-            let thread_id = apns.payload["sessionID"].as_str();
-            let event_id = apns.payload["eventID"].as_str();
             if self
                 .check_user_alert_ownership(thread_id, "alert", event_id)
                 .await

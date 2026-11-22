@@ -1,5 +1,5 @@
 use super::transport::ClientFrame;
-use super::{ClientTx, Gateway};
+use super::{AlertKind, ClientTx, Gateway};
 use crate::notifications::history::{NotificationOrigin, Recorded, ReplayRequest};
 use crate::notifications::{notification_thread_id, should_store_notification_method};
 use crate::storage::tool_media::ToolMediaStore;
@@ -30,6 +30,7 @@ impl Gateway {
         message: &Value,
         origin: NotificationOrigin,
     ) -> Option<u64> {
+        let during_voice = self.received_completion_during_voice(message);
         let compacted = match compact_notification(raw, message, self.tool_media.as_ref()).await {
             Ok(compacted) => compacted,
             Err(error) => {
@@ -40,7 +41,7 @@ impl Gateway {
         let history_raw = compacted
             .as_ref()
             .map_or(Some(raw), |(frame, _)| frame.text());
-        self.record_agent_notification_for_clients(history_raw, message, origin)
+        self.record_agent_notification_for_clients(history_raw, message, origin, during_voice)
             .await
     }
 
@@ -49,6 +50,7 @@ impl Gateway {
         raw: Option<&str>,
         message: &Value,
         origin: NotificationOrigin,
+        during_voice: bool,
     ) -> Option<u64> {
         // Server requests are not notifications. Keeping them out of history
         // also preserves their byte-identical forwarding contract.
@@ -88,10 +90,13 @@ impl Gateway {
         if let Some((_method, _key, apns, live_activity)) =
             self.capture_agent_message(message).await
         {
-            if let Some(apns) = apns
+            if let Some(mut apns) = apns
                 && !self.is_planned_interruption(method, message)
                 && let Some(tx) = self.apns_completion_tx.lock().await.clone()
             {
+                if during_voice {
+                    apns.kind = AlertKind::TurnCompletionInVoice;
+                }
                 let _ = tx.try_send(apns);
             }
             if let Some(live_activity) = live_activity {
@@ -107,13 +112,14 @@ impl Gateway {
         message: &Value,
         origin: NotificationOrigin,
     ) -> Result<ClientFrame> {
+        let during_voice = self.received_completion_during_voice(message);
         let compacted = compact_notification(raw, message, self.tool_media.as_ref()).await?;
         let (frame, client_message) = match compacted {
             Some((frame, compacted)) => (frame, Some(compacted)),
             None => (ClientFrame::from_raw(raw), None),
         };
         let sequence = self
-            .record_agent_notification_for_clients(frame.text(), message, origin)
+            .record_agent_notification_for_clients(frame.text(), message, origin, during_voice)
             .await;
         frame.stamp(client_message.as_ref().unwrap_or(message), sequence)
     }
@@ -121,6 +127,7 @@ impl Gateway {
     /// Feeds a provider-generated notification into the same funnel as Codex
     /// Codex traffic: replay history, push side effects, then client fanout.
     pub(crate) async fn ingest_agent_notification(&self, mut message: Value) {
+        let during_voice = self.received_completion_during_voice(&message);
         self.forward_voice_agent_notification(&message).await;
         let frame = match ClientFrame::prepare(&mut message, self.tool_media.as_ref()).await {
             Ok(frame) => frame,
@@ -134,6 +141,7 @@ impl Gateway {
                 frame.text(),
                 &message,
                 NotificationOrigin::Provider,
+                during_voice,
             )
             .await;
         match frame.stamp(&message, sequence) {

@@ -817,7 +817,7 @@ async fn user_alert_gate_preserves_roots_and_silences_all_child_events() {
 }
 
 #[tokio::test]
-async fn muted_conversations_get_no_automatic_alerts_but_keep_explicit_ones() {
+async fn completion_alerts_respect_mute_and_the_call_at_completion() {
     const MUTED: &str = "3f1e6d2a-8b4c-4d5e-9f60-718293a4b5c6";
     const LOUD: &str = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
     let claude_test = crate::providers::claude::settings::ClaudeSettings::isolated_for_test();
@@ -949,6 +949,44 @@ async fn muted_conversations_get_no_automatic_alerts_but_keep_explicit_ones() {
             format!("{LOUD}:unmuted"),
             format!("question:{MUTED}:unmuted"),
         ])
+    );
+    let mut session = super::super::tests::external_voice_session();
+    session.conversation_thread_id = MUTED.to_owned();
+    gateway.voice.seed(None, Some(session));
+    let (tx, rx) = mpsc::channel(3);
+    *gateway.apns_completion_tx.lock().await = Some(tx);
+    for (thread, turn) in [
+        (MUTED, "in-call"),
+        (LOUD, "other-chat"),
+        (MUTED, "after-call"),
+    ] {
+        if turn == "after-call" {
+            gateway.voice.drain_for_test();
+        }
+        gateway
+            .ingest_agent_notification(json!({
+                "method": "turn/completed",
+                "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}},
+            }))
+            .await;
+    }
+    *gateway.apns_completion_tx.lock().await = None;
+    gateway.apns_completion_loop(rx).await;
+    let voice_round: Vec<_> = std::iter::from_fn(|| broker_rx.try_recv().ok()).collect();
+    assert_eq!(
+        voice_round
+            .iter()
+            .map(|body| {
+                let payload: Value = serde_json::from_str(
+                    body["custom_data"]["remoteCoder.taskCompletionPayload"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                payload["eventID"].as_str().unwrap().to_owned()
+            })
+            .collect::<Vec<_>>(),
+        [format!("{LOUD}:other-chat"), format!("{MUTED}:after-call")],
     );
     responder.abort();
     let _ = responder.await;

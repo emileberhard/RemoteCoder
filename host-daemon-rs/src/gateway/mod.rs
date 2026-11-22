@@ -206,6 +206,7 @@ struct GatewayCoreState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AlertKind {
     TurnCompletion,
+    TurnCompletionInVoice,
     Question,
 }
 

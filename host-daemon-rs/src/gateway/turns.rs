@@ -752,7 +752,13 @@ impl Gateway {
                 {
                     continue;
                 }
-                complete_tracked_turn(&mut core, &turn, status, true)
+                let (mut send, snapshot) = complete_tracked_turn(&mut core, &turn, status, true);
+                if let Some(send) = &mut send
+                    && self.is_conversation_in_live_voice(&turn.thread_id)
+                {
+                    send.kind = super::AlertKind::TurnCompletionInVoice;
+                }
+                (send, snapshot)
             };
             info!(
                 thread_id = turn.thread_id,
