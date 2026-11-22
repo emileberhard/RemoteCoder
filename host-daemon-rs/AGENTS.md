@@ -1024,6 +1024,10 @@ web and already installed native builds.
 - Task-completion alerts go through the configured push broker on
   `turn/completed`, best effort. A connected originating client, or its
   temporary disconnect observer, supplies the authoritative completion.
+  A completion received while its exact conversation owns the live voice session
+  suppresses the user alert with `reason: "liveVoiceCall"`, even if the call
+  closes before the queue drains. Completions received after the call ends use
+  the ordinary alert gates. Activity and silent delivery use their own paths.
 - When the control connection's `thread/status/changed` reports a thread
   inactive while the gateway still tracks one of its turns (for example a
   Desktop-started turn the phone stopped observing), the gateway reads that
@@ -2169,9 +2173,10 @@ Claude. The `RC_CLAUDE_*` settings are in
 The iOS side is in `RemoteCoder/AGENTS.md`; both paths are in
 `docs/system-architecture.md`, *Voice paths*.
 
-- Codex voice sessions let app-server own handoffs. Keep Codex realtime start
-  params aligned with the official desktop client: do not send
-  `delegationAckFiller`, and do not claim `handoffOwner`.
+- Codex voice sessions let app-server own handoffs. Keep realtime start params
+  aligned with the desktop client except for `realtimeStartInstructions`, which
+  supplies `prompts/voice-call-agent.md` to the Codex executor. Leave
+  `delegationAckFiller` and `handoffOwner` unset on that path.
 - Claude voice uses a host-default Codex realtime shadow thread with client-owned
   typed handoffs; only this path sends `handoffOwner: "client"`. The gateway
   runs those handoffs against the warm Claude runtime and streams commentary and
@@ -2183,13 +2188,14 @@ The iOS side is in `RemoteCoder/AGENTS.md`; both paths are in
     again mid-task.
   - Each Claude turn gets exactly one authoritative completion, at
     `turn/completed`. Mid-turn agent messages are commentary appends and
-    completion candidates, never completions.
+    completion candidates, never completions. A successful Claude handoff with
+    no assistant text completes with empty text to retire the delegation silently.
   - Superseded delegations are silently retired, never completed with invented
     failure text.
 - Every Claude runtime's `--settings` file carries a `SessionStart` hook
   (`claude-session-context`, `src/providers/claude/session_context.rs`) that
-  supplies RemoteCoder's context, requesting regular assistant-text progress
-  usable in text and voice. Claude Code records it as hook context once per
+  supplies RemoteCoder's context. It keeps the typed-request preamble and
+  embeds `prompts/voice-call-agent.md` for spoken work. Claude Code records it as hook context once per
   conversation, adds it on resume when missing, and leaves resumed
   system-prompt snapshots unchanged. Never send it as stream-json input: the
   CLI prefixes a synthetic frame without a typed origin with `[MESSAGE FROM
@@ -2230,12 +2236,14 @@ The iOS side is in `RemoteCoder/AGENTS.md`; both paths are in
   `voice_mode_prompt`, appending only the configured user name, as the realtime `prompt`:
   speaking style, a delegation policy, and an ending policy: the voice answers
   a goodbye or hang-up request with a reply whose last sentence is "Bye!".
-  `FarewellWatch::for_user` (`src/voice/farewell.rs`) arms on that sign-off when it
-  answers a user line, and the gateway ends the call through the same
-  `agentEnded` path as `end_voice_call` once the voice has been quiet for
-  1.5 s, at most 10 s; any user speech cancels it. Agent calls keep Codex's
-  default prompt plus their brief and have no farewell watch. Spoken requests
-  get no gateway acknowledgement; the voice model acknowledges them itself.
+  `FarewellWatch::for_user` (`src/voice/farewell.rs`) arms when that sign-off
+  appears in the streamed reply to a user line. A continuation can invalidate
+  the candidate and new user speech cancels an automatic close. The gateway
+  waits for 1.5 s without output, capped at 10 s from arming, then closes through
+  `agentEnded`. Transcript finalization does not extend that wait. The
+  `end_voice_call` tool uses the same quiet period to finish current speech.
+  Agent-initiated calls have their own voice prompt and hang-up tool. GPT Live
+  owns acknowledgements and goodbyes, and the executor reports news and results.
 - After 45–60 s without assistant text, the watchdog reports once that the task
   is still active, labelling any tool evidence as the last reported activity.
   It waits for real assistant output before another quiet-period notice.

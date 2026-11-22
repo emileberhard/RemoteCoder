@@ -1748,7 +1748,10 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   `CallAudioRoute` the audio route (`Platform/iOS/SystemCalls/`).
   LiveCommunicationKit is the only call lifecycle: system and in-app mute and end flow through the same conversation
   actions, and WebRTC audio starts only after the system activates the call
-  audio session.
+  audio session. `CallAudioRoute` plays a short cue on that route when the
+  call first connects, before the greeting. `VoiceCall` plays the end cue for a
+  connected call before releasing system audio or fulfilling its end action.
+  Any playback failure is logged and leaves the call lifecycle moving.
 - The system call UI shows the conversation's title (`VoiceCallHost.voiceCallTitle`:
   the pinned name, else the header's title), or RemoteCoder when it has none.
   iOS ignores a `StartConversationAction` handle's display name, so

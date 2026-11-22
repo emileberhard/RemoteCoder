@@ -2643,30 +2643,34 @@ is persisted. If a hot update fails after future defaults were accepted, the
 RPC acknowledges `nextTurn` with a warning so the app retains the new settings.
 
 A Voice Mode call the user starts greets them once. When its first WebRTC
-connection and the system audio session are both up, the app sends
-`voice/session/connected`, and the gateway asks the realtime model through
-`appendSpeech` for a short greeting. The
-`VoiceSession` records it, so a repeated report or a media reconnect within
+connection and the system audio session are both up, the app plays a short cue
+on the call route and sends `voice/session/connected`. The gateway asks GPT Live
+for a short greeting through `appendSpeech`. A connected call plays the matching
+end cue before releasing the route. Both cues are optional and the end cue can
+hold system audio only for its own length.
+`VoiceSession` records the greeting, so a repeated report or a media reconnect within
 the call never greets again. Agent calls greet through `calls/connected`
 instead. A failed greeting request is logged and never fails the call.
 
-The same call replaces Codex's default realtime prompt with
-`host-daemon-rs/prompts/voice-mode.md`, which follows OpenAI's GPT-Live
-template: a brief, direct speaking style and a delegation policy. GPT Live
-cannot call tools and often fails to delegate a goodbye, so the voice model ends
-the call in words instead: it answers a goodbye or hang-up request with a short
-reply whose last sentence is "Bye!". The gateway's `FarewellWatch`
-(`host-daemon-rs/src/voice/farewell.rs`) arms when the voice's own transcript
-ends that way in reply to the user, and ends the call like `end_voice_call` once
-the voice has been quiet for 1.5 s (at most 10 s); any user speech cancels it. The
-agent's `end_voice_call` remains for a hang-up it receives.
+User-started Voice Mode gives GPT Live its speaking and delegation policy in
+`host-daemon-rs/prompts/voice-mode.md`. GPT Live acknowledges requests and says
+goodbye. Both executors get the same spoken-work brief in
+`host-daemon-rs/prompts/voice-call-agent.md` and relay findings and results. A
+successful Claude delegation without assistant text sends an empty completion.
+The gateway watches the streamed assistant reply for a sign-off in response to
+a user line. Continuing the reply can invalidate the sign-off, and user speech
+cancels the automatic close. It closes after 1.5 s without voice output, capped
+at 10 s after arming, without waiting for transcript finalization.
+`end_voice_call` uses that same bounded quiet period before ending the media.
+A turn completing in the live call's conversation skips its user alert, even
+if the call ends by the time that alert reaches the delivery queue.
 
 Joining Claude voice observes existing work through `appendSpeech`; only spoken
 requests create handoffs. Handoffs bind to the provider's echo of the exact input
 UUID, even if a previous turn finishes before that input is consumed. Synthetic
 runtime context and CLI model-change echoes never become visible user input or
-phantom active turns. Text and voice share the same progress instructions and
-agent process; leaving voice stops the output route without interrupting work.
+phantom active turns. Typed and spoken work share an agent process. Leaving
+voice stops the output route without interrupting work.
 The shared conversation projection displays a native voice delegation's input
 with its spoken excerpt in an expandable row. A transcript-tail flush becomes an
 expandable “Voice conversation ended” row. Assembly orders hang-ups across turn
