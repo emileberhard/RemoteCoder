@@ -3587,21 +3587,30 @@ async fn the_voice_goodbye_ends_the_call_once_its_audio_goes_quiet() {
         .requests;
     let captured = spawn_control_responder(&gateway, out_rx);
 
-    gateway
-        .handle_voice_control_notification(&frame(
-            "thread/realtime/transcript/done",
-            json!({"threadId":"realtime-1","role":"user","text":" Thank you. Bye-bye"}),
-        ))
+    let start = tokio::time::Instant::now();
+    let events = [
+        (143_743, "delta", "user", " Thank"),
+        (143_990, "delta", "user", " you"),
+        (144_271, "delta", "user", ". Bye"),
+        (144_290, "delta", "user", "-bye"),
+        (145_335, "delta", "assistant", " Bye"),
+        (145_361, "done", "user", " Thank you. Bye-bye"),
+        (145_535, "delta", "assistant", "."),
+    ];
+    for (millis, phase, role, text) in events {
+        tokio::time::advance(
+            start + Duration::from_millis(millis - events[0].0) - tokio::time::Instant::now(),
+        )
         .await;
-    for delta in [" By", "e."] {
+        let field = if phase == "delta" { "delta" } else { "text" };
         gateway
             .handle_voice_control_notification(&frame(
-                "thread/realtime/transcript/delta",
-                json!({"threadId":"realtime-1","role":"assistant","delta":delta}),
+                &format!("thread/realtime/transcript/{phase}"),
+                json!({"threadId":"realtime-1","role":role,(field):text}),
             ))
             .await;
     }
-    let armed_at = tokio::time::Instant::now();
+    let last_output = tokio::time::Instant::now();
     assert!(gateway.voice.ended_call().is_none());
 
     let ClientCommand::Text(notification) =
@@ -3609,7 +3618,10 @@ async fn the_voice_goodbye_ends_the_call_once_its_audio_goes_quiet() {
     else {
         panic!("expected a text notification");
     };
-    assert_eq!(armed_at.elapsed(), crate::voice::farewell::FAREWELL_QUIET);
+    assert_eq!(
+        last_output.elapsed(),
+        crate::voice::farewell::FAREWELL_QUIET
+    );
     assert!(gateway.voice.is_draining());
     let notification: Value = serde_json::from_str(&notification).expect("agent-ended json");
     assert_eq!(notification["method"], "voice/session/agentEnded");
@@ -3620,6 +3632,32 @@ async fn the_voice_goodbye_ends_the_call_once_its_audio_goes_quiet() {
     let stop = captured.lock().await;
     assert_eq!(stop.len(), 1);
     assert_eq!(stop[0]["method"], "thread/realtime/stop");
+}
+
+#[tokio::test(start_paused = true)]
+async fn agent_hangup_without_a_farewell_watch_stops_immediately() {
+    let gateway = test_gateway();
+    let session = VoiceSession {
+        farewell: None,
+        ..external_voice_session()
+    };
+    gateway.voice.seed(None, Some(session));
+    let control = crate::test_support::FakeControl::attach(&gateway, 4).await;
+    let captured = spawn_control_responder(&gateway, control.requests);
+
+    let started = tokio::time::Instant::now();
+    assert!(
+        gateway
+            .end_voice_call_for_agent(&crate::agents::tools::Caller {
+                turn_id: None,
+                provider: crate::providers::Provider::Claude,
+                thread_id: Some("claude-session-1".to_string()),
+            })
+            .await
+    );
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(gateway.voice.ended_call().as_deref(), Some("session-1"));
+    assert_eq!(captured.lock().await[0]["method"], "thread/realtime/stop");
 }
 
 #[tokio::test]

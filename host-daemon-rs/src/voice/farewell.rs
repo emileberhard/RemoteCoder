@@ -84,13 +84,12 @@ impl FarewellWatch {
     }
 
     pub(crate) fn user_speech(&mut self) {
-        self.reply = None;
+        self.reply = Some(String::new());
         self.cancel_sign_off();
     }
 
     pub(crate) fn user_line(&mut self) {
-        self.user_speech();
-        self.reply = Some(String::new());
+        self.reply.get_or_insert_with(String::new);
     }
 
     pub(crate) fn voice_output(&mut self, now: Instant) {
@@ -193,7 +192,7 @@ mod tests {
         let mut watch = FarewellWatch::for_user(Some("Maya Chen"));
         watch.user_line();
         assert!(watch.voice_delta("Bye, Taylor!", Instant::now()).is_none());
-        watch.user_line();
+        watch.user_speech();
         assert!(watch.voice_delta("Bye!", Instant::now()).is_some());
     }
 
@@ -259,6 +258,21 @@ mod tests {
     }
 
     #[test]
+    fn a_late_user_transcript_keeps_the_sign_off_already_streaming() {
+        let start = Instant::now();
+        let mut watch = FarewellWatch::default();
+        watch.user_speech();
+        let ticket = watch.voice_delta(" Bye", start).unwrap();
+        watch.user_line();
+        let punctuation = start + Duration::from_millis(190);
+        assert!(watch.voice_delta(".", punctuation).is_none());
+        assert_eq!(
+            watch.close_at(&ticket),
+            Some((punctuation + FAREWELL_QUIET, "farewell"))
+        );
+    }
+
+    #[test]
     fn speech_after_a_sign_off_cancels_the_goodbye() {
         let start = Instant::now();
         for continuation in [
@@ -286,6 +300,8 @@ mod tests {
         let ticket = watch.voice_delta("Bye!", start).unwrap();
         watch.user_speech();
         assert_eq!(watch.close_at(&ticket), None);
+        assert!(watch.voice_delta("I can stay.", start).is_none());
+        watch.voice_done("I can stay.");
         assert!(watch.voice_delta("Bye!", start).is_none());
     }
 

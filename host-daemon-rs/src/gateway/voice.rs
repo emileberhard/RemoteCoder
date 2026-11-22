@@ -7,8 +7,8 @@ use crate::time::unix_seconds;
 use crate::voice::farewell::FarewellWatch;
 use crate::voice::handoff::VoiceDelegations;
 use crate::voice::session::{
-    Hangup, StopRequest, VoiceCallEnded, VoiceSession, VoiceSessionOrigin, voice_mode_greeting,
-    voice_mode_prompt,
+    AgentHangup, Hangup, StopRequest, VoiceCallEnded, VoiceSession, VoiceSessionOrigin,
+    voice_mode_greeting, voice_mode_prompt,
 };
 use crate::voice::shadows::VOICE_SHADOW_REPLENISH_DELAY_SECONDS;
 use crate::wire::gateway::{
@@ -617,26 +617,28 @@ impl Gateway {
         };
         // Serialize authorization and stopping with replacement: an old
         // call's authorized hang-up must never drain its successor.
-        let _transition = self.voice.transition().await;
+        let transition = self.voice.transition().await;
         // Agent-initiated calls require the explicit call ID. A delayed no-arg
         // hangup from an earlier call on this same thread must not end its successor.
         if self.calls.active().await.is_some() {
             return false;
         }
-        let provider_is_claude = matches!(caller.provider, crate::providers::Provider::Claude);
-        let Some(Some((realtime_thread_id, started))) =
-            self.voice.with_live_conversation(thread_id, |session| {
-                if session.uses_external_executor != provider_is_claude {
-                    return None;
-                }
-                let watch = session.farewell.as_mut()?;
-                let started = watch.agent_requested_close(tokio::time::Instant::now());
-                Some((session.realtime_thread_id.clone(), started))
-            })
-        else {
-            return false;
-        };
-        started.is_none_or(|started| self.spawn_farewell_close(realtime_thread_id, started))
+        match self.voice.request_agent_hangup(
+            &transition,
+            thread_id,
+            matches!(caller.provider, crate::providers::Provider::Claude),
+        ) {
+            Some(AgentHangup::Scheduled {
+                realtime_thread_id,
+                started,
+            }) => self.spawn_farewell_close(realtime_thread_id, started),
+            Some(AgentHangup::AlreadyScheduled) => true,
+            Some(AgentHangup::Immediate(hangup)) => {
+                self.finish_hangup(hangup, "agent tool").await;
+                true
+            }
+            None => false,
+        }
     }
 
     pub(super) fn spawn_farewell_close(

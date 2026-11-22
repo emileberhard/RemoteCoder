@@ -154,6 +154,22 @@ pub(crate) struct Hangup {
     pub(crate) realtime_thread_id: String,
 }
 
+fn session_hangup(session: &VoiceSession) -> Hangup {
+    Hangup {
+        realtime_session_id: session.realtime_session_id.clone(),
+        realtime_thread_id: session.realtime_thread_id.clone(),
+    }
+}
+
+pub(crate) enum AgentHangup {
+    Scheduled {
+        realtime_thread_id: String,
+        started: Arc<tokio::time::Instant>,
+    },
+    AlreadyScheduled,
+    Immediate(Hangup),
+}
+
 #[derive(Debug)]
 struct VoicePredecessor {
     owner: VoiceSessionOwner,
@@ -635,6 +651,34 @@ impl VoiceCoordinator {
         Some((owner, session))
     }
 
+    pub(crate) fn request_agent_hangup(
+        &self,
+        _transition: &VoiceTransition<'_>,
+        conversation_thread_id: &str,
+        provider_is_claude: bool,
+    ) -> Option<AgentHangup> {
+        let mut state = self.state();
+        let session = state.phase.live_session_mut().filter(|session| {
+            session.conversation_thread_id == conversation_thread_id
+                && session.uses_external_executor == provider_is_claude
+        })?;
+        if let Some(watch) = &mut session.farewell {
+            return Some(
+                match watch.agent_requested_close(tokio::time::Instant::now()) {
+                    Some(started) => AgentHangup::Scheduled {
+                        realtime_thread_id: session.realtime_thread_id.clone(),
+                        started,
+                    },
+                    None => AgentHangup::AlreadyScheduled,
+                },
+            );
+        }
+        let hangup = session_hangup(session);
+        state.reclaim_authority.revoke(&hangup.realtime_session_id);
+        state.phase.drain("agent tool");
+        Some(AgentHangup::Immediate(hangup))
+    }
+
     pub(crate) fn begin_farewell_hangup(
         &self,
         _transition: &VoiceTransition<'_>,
@@ -650,10 +694,7 @@ impl VoiceCoordinator {
         if close_at > tokio::time::Instant::now() {
             return None;
         }
-        let hangup = Hangup {
-            realtime_session_id: session.realtime_session_id.clone(),
-            realtime_thread_id: session.realtime_thread_id.clone(),
-        };
+        let hangup = session_hangup(session);
         state.reclaim_authority.revoke(&hangup.realtime_session_id);
         state.phase.drain(reason);
         Some((hangup, reason))
