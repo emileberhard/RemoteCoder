@@ -245,18 +245,24 @@ impl ClaudeSupervisor {
             if line.trim().is_empty() {
                 continue;
             }
+            let unrecognized = line
+                .strip_prefix("[claude-code:unrecognized_model] ")
+                .and_then(|diagnostic| serde_json::from_str::<Value>(diagnostic).ok());
+            let model = unrecognized
+                .as_ref()
+                .and_then(|details| details["model"].as_str());
             let ring = {
-                let runtimes = self.runtimes.lock().await;
-                runtimes.get(&thread_id).and_then(|runtime| {
-                    (runtime.process_group_id == process_group_id).then(|| {
-                        (
-                            Arc::clone(&runtime.stderr_ring),
-                            runtime.warn_unrecognized_model,
-                        )
+                let mut runtimes = self.runtimes.lock().await;
+                runtimes
+                    .get_mut(&thread_id)
+                    .filter(|runtime| runtime.process_group_id == process_group_id)
+                    .map(|runtime| {
+                        let warning =
+                            model.filter(|_| std::mem::take(&mut runtime.warn_unrecognized_model));
+                        (Arc::clone(&runtime.stderr_ring), warning)
                     })
-                })
             };
-            let Some((ring, warn_unrecognized_model)) = ring else {
+            let Some((ring, warning)) = ring else {
                 return;
             };
             {
@@ -266,11 +272,7 @@ impl ClaudeSupervisor {
                 }
                 ring.push(line.clone());
             }
-            if warn_unrecognized_model
-                && let Some(diagnostic) = line.strip_prefix("[claude-code:unrecognized_model] ")
-                && let Ok(details) = serde_json::from_str::<Value>(diagnostic)
-                && let Some(model) = details["model"].as_str()
-            {
+            if let Some(model) = warning {
                 self.emit(json!({
                     "method": "gateway/warning",
                     "params": {

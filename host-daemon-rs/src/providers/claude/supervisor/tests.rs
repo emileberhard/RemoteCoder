@@ -550,8 +550,8 @@ fn agent_with_mcp_dir(dir: &Path) -> (ClaudeTestSettings, Arc<ClaudeSupervisor>,
     )
 }
 
-#[test]
-fn the_mcp_token_travels_in_a_private_file_never_in_argv() {
+#[tokio::test]
+async fn the_mcp_token_travels_in_a_private_file_never_in_argv() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = scratch_dir("private");
@@ -561,8 +561,12 @@ fn the_mcp_token_travels_in_a_private_file_never_in_argv() {
     let conversation = super::jobs::LaunchPolicy::Conversation {
         scope: crate::agents::jobs::model::ToolScope::Full,
     };
+    let overrides = agent
+        .model_overrides(&crate::providers::claude::exec::Route::Default)
+        .await
+        .unwrap();
     let access = agent
-        .prepare_mcp_access(&turn, &conversation, None)
+        .prepare_mcp_access(&turn, &conversation, overrides.as_ref())
         .expect("mcp access");
     let args = claude_stream_args(&turn, Some(access.config_path.as_path()));
 
@@ -606,6 +610,10 @@ fn the_mcp_token_travels_in_a_private_file_never_in_argv() {
     let settings: Value =
         serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
     assert_eq!(settings["fastMode"], false);
+    assert_eq!(
+        settings["modelOverrides"],
+        json!({"claude-fixture-1":"fixture"})
+    );
     assert_eq!(
         settings["hooks"]["PreToolUse"][0]["matcher"],
         "^mcp__remotecoder__notify_user$"
@@ -1319,22 +1327,25 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
     };
     agent.recover_stored_cwd(&mut turn, &full).await.unwrap();
     assert_eq!(Path::new(&turn.cwd), cwd);
+    let read_only = super::jobs::LaunchPolicy::Conversation {
+        scope: crate::agents::jobs::model::ToolScope::ReadOnly { root: cwd.clone() },
+    };
     let prepared = agent
         .prepare_runtime(
             &turn,
-            &full,
+            &read_only,
             &crate::providers::claude::exec::Route::Default,
         )
         .await
         .unwrap();
-    let mut spawned = agent.spawn_runtime(&turn, &full, prepared).unwrap();
+    let mut spawned = agent.spawn_runtime(&turn, &read_only, prepared).unwrap();
     let mut lines = BufReader::new(&mut spawned.stdout).lines();
     let observed = tokio::time::timeout(Duration::from_secs(5), async {
         let mut lines_seen = Vec::new();
         while let Some(line) = lines.next_line().await.unwrap() {
             let done = lines_seen
                 .last()
-                .is_some_and(|previous| previous == "--resume");
+                .is_some_and(|previous| previous == "--settings");
             lines_seen.push(line);
             if done {
                 break;
@@ -1348,19 +1359,24 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
         Path::new(&observed[0]).canonicalize().unwrap(),
         cwd.canonicalize().unwrap()
     );
+    let resume_position = observed.iter().position(|arg| arg == "--resume").unwrap();
     assert_eq!(
-        observed.last().unwrap(),
+        &observed[resume_position + 1],
         &transcript
             .canonicalize()
             .unwrap()
             .to_string_lossy()
             .into_owned()
     );
-    assert!(
-        !observed
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "--fork-session" | "--session-id"))
+    let settings: Value = serde_json::from_str(observed.last().unwrap()).unwrap();
+    assert_eq!(
+        settings["modelOverrides"],
+        json!({"claude-fixture-1":"fixture"})
     );
+    assert!(!observed.iter().any(|arg| matches!(
+        arg.as_str(),
+        "--fork-session" | "--session-id" | "--mcp-config"
+    )));
     let mut arbitrary = request("claude_a", false);
     arbitrary.cwd = home
         .root_path()

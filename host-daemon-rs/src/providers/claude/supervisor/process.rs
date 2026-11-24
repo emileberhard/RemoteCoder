@@ -252,15 +252,13 @@ impl ClaudeSupervisor {
         route: &claude_exec::Route,
     ) -> Result<PreparedRuntime, TurnStartError> {
         let history = self.validate_runtime_launch(request)?;
-        let mut prepared = self
-            .prepare_process(request, launch, history.as_deref(), route)
+        let model_overrides = self.model_overrides(route).await?;
+        self.prepare_process(request, launch, history.as_deref(), route, model_overrides)
             .map_err(|err| TurnStartError {
                 data: None,
                 code: RpcCode::Internal,
                 message: format!("failed to spawn claude in {}: {err}", request.cwd),
-            })?;
-        prepared.model_overrides = self.model_overrides(route).await?;
-        Ok(prepared)
+            })
     }
 
     fn prepare_process(
@@ -269,6 +267,7 @@ impl ClaudeSupervisor {
         launch: &super::jobs::LaunchPolicy,
         history: Option<&Path>,
         route: &claude_exec::Route,
+        model_overrides: Option<Value>,
     ) -> std::io::Result<PreparedRuntime> {
         let mut resume = None;
         if let Some(history) = history {
@@ -313,7 +312,7 @@ impl ClaudeSupervisor {
             command,
             history: history.map(Path::to_path_buf),
             resume,
-            model_overrides: None,
+            model_overrides,
         })
     }
 

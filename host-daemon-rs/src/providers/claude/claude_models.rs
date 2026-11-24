@@ -84,7 +84,7 @@ async fn fetch(router: &Router) -> Result<Models> {
         );
         match page["has_more"].as_bool() {
             Some(false) => {
-                let catalog = rows(&models);
+                let catalog = build_models(&models);
                 ensure!(!catalog.overrides.is_empty(), "no active Claude models");
                 return Ok(catalog);
             }
@@ -102,7 +102,7 @@ async fn fetch(router: &Router) -> Result<Models> {
     bail!("too many model pages")
 }
 
-fn rows(models: &[Value]) -> Models {
+fn build_models(models: &[Value]) -> Models {
     let mut families = IndexMap::<&str, (&Value, &str, OffsetDateTime)>::new();
     for model in models.iter().filter(|model| model["lifecycle"] == "active") {
         let Some(family) = model["line"]
@@ -111,7 +111,7 @@ fn rows(models: &[Value]) -> Models {
         else {
             continue;
         };
-        let Some(id) = model["id"].as_str().filter(|id| !id.is_empty()) else {
+        let Some(id) = model["id"].as_str() else {
             continue;
         };
         let Some(created) = model["created_at"]
@@ -177,7 +177,7 @@ mod tests {
             {"id":"claude-missing-1", "lifecycle":"active", "created_at":"2026-11-10T00:00:00Z"},
             {"id":"claude-retired-1", "line":"retired", "lifecycle":"retired", "created_at":"2026-11-10T00:00:00Z"}
         ]);
-        let catalog = rows(models.as_array().unwrap());
+        let catalog = build_models(models.as_array().unwrap());
         assert_eq!(
             json!(catalog.overrides),
             json!({"claude-mythos-5-2":"mythos","claude-opus-5-1":"opus"})
