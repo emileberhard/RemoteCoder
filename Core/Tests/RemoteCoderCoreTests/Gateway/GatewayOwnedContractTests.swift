@@ -148,16 +148,17 @@ struct GatewayOwnedContractTests {
         #expect(failure.kind == .historyPageTooLarge(actualBytes: 33_000_000, limitBytes: 24_000_000))
     }
 
-    @Test func identityPersistenceWarningReachesTheApplicationRouter() throws {
+    @Test(arguments: [GatewayWarning.Kind.historyIdentityPersistence, .claudeUnrecognizedModel])
+    func threadWarningReachesTheApplicationRouter(kind: GatewayWarning.Kind) throws {
         let note = GatewayEventFixture.notification(method: "gateway/warning", params: .object([
-            "kind": .string("historyIdentityPersistence"), "threadId": .string("claude_fixture"),
+            "kind": .string(kind.rawValue), "threadId": .string("claude_fixture"),
             "message": .string("History identity could not be saved.")
         ]), receivedAt: .now)
         guard case .warning(let warning) = GatewayNotificationRouting.route(note) else {
             Issue.record("The warning was discarded"); return
         }
         #expect(warning.threadId == "claude_fixture")
-        #expect(warning.kind == .historyIdentityPersistence)
+        #expect(warning.kind == kind)
     }
 
     @Test(arguments: [42, nil] as [UInt64?])

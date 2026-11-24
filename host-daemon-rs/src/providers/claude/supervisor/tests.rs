@@ -30,14 +30,16 @@ fn live_subscription_settings(workspace: &Path) -> ClaudeSettings {
     let home = paths.home();
     let claude_home = home.join(".claude");
     let defaults = ClaudeSettings::isolated_for_test().settings;
+    let sources = crate::config::ConfigSources::load(Some(&paths.state("codex-gateway.env")))
+        .expect("live gateway configuration");
     ClaudeSettings {
         enabled: true,
         claude_home: claude_home.clone(),
         config_dir: None,
         router: Some(
-            crate::providers::router::RouterConfig::unreachable_for_test(
-                home.join(".remote-coder/llm-router.key"),
-            ),
+            crate::providers::router::RouterConfig::load(&sources)
+                .expect("valid live router configuration")
+                .expect("configured live router"),
         ),
         mcp_config_dir: workspace.join("mcp"),
         mcp_endpoint: "http://127.0.0.1:1/mcp".to_string(),
