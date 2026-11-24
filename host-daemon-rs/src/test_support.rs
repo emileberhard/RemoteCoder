@@ -106,7 +106,10 @@ if MODE == 'suspend':
 session = sys.argv[-1]
 cwd = os.environ.get('RC_TEST_CWD', os.getcwd())
 slug = ''.join(c if c.isascii() and c.isalnum() else '-' for c in cwd)
-settings = json.loads(Path(args[args.index('--settings') + 1]).read_text()) if '--settings' in args else {}
+settings = {}
+if '--settings' in args:
+    settings_arg = args[args.index('--settings') + 1]
+    settings = json.loads(settings_arg if settings_arg.startswith('{') else Path(settings_arg).read_text())
 transcript = Path(HISTORY) if MODE == 'messages' else root / 'projects' / slug / (session + '.jsonl')
 if MODE == 'restart':
     append(state / 'launches.jsonl', {'argv': args, 'cwd': os.getcwd(), 'configDir': str(root), 'accountHeader': os.environ.get('ANTHROPIC_CUSTOM_HEADERS'), 'providerManaged': os.environ.get('CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'), 'context': json.loads(os.environ['REMOTE_CODER_PARENT_CONTEXT'])})
