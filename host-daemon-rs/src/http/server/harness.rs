@@ -83,7 +83,18 @@ impl LanHarness {
             )
             .await,
             router: Arc::new(
-                crate::providers::router::Router::new(claude_test.settings.router.clone()).unwrap(),
+                crate::providers::router::Router::new(Some(
+                    crate::providers::router::RouterConfig::unreachable_for_test(
+                        claude_test
+                            .settings
+                            .router
+                            .as_ref()
+                            .unwrap()
+                            .key_file()
+                            .to_owned(),
+                    ),
+                ))
+                .unwrap(),
             ),
             auth_token: OPERATOR.to_string(),
             installation_credentials: installations.clone(),
