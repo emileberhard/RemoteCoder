@@ -10,7 +10,7 @@ use crate::providers::claude::translate::narration::SEND_USER_MESSAGE_ENV;
 use crate::providers::claude::wake_hold::WakeHold;
 use crate::providers::claude::{ClaudeTurnRequest, claude_thread_id, exec as claude_exec};
 use crate::rpc::error::RpcCode;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +24,7 @@ pub(super) struct PreparedRuntime {
     command: ClaudeCommand,
     history: Option<PathBuf>,
     resume: Option<String>,
+    model_overrides: Option<Value>,
 }
 
 impl ClaudeSupervisor {
@@ -244,19 +245,22 @@ impl ClaudeSupervisor {
         Ok(history)
     }
 
-    pub(super) fn prepare_runtime(
+    pub(super) async fn prepare_runtime(
         &self,
         request: &ClaudeTurnRequest,
         launch: &super::jobs::LaunchPolicy,
         route: &claude_exec::Route,
     ) -> Result<PreparedRuntime, TurnStartError> {
         let history = self.validate_runtime_launch(request)?;
-        self.prepare_process(request, launch, history.as_deref(), route)
+        let mut prepared = self
+            .prepare_process(request, launch, history.as_deref(), route)
             .map_err(|err| TurnStartError {
                 data: None,
                 code: RpcCode::Internal,
                 message: format!("failed to spawn claude in {}: {err}", request.cwd),
-            })
+            })?;
+        prepared.model_overrides = self.model_overrides(route).await?;
+        Ok(prepared)
     }
 
     fn prepare_process(
@@ -309,6 +313,7 @@ impl ClaudeSupervisor {
             command,
             history: history.map(Path::to_path_buf),
             resume,
+            model_overrides: None,
         })
     }
 
@@ -336,6 +341,7 @@ impl ClaudeSupervisor {
             mut command,
             history,
             resume,
+            model_overrides,
         } = prepared;
         let wakes = if request.first_turn {
             WakeHold::default()
@@ -350,7 +356,9 @@ impl ClaudeSupervisor {
         // Tools ride each spawn: nothing is written to Claude's own config, so
         // they follow the runtime's dimensions and vanish when it retires.
         let mcp = match launch.scope() {
-            crate::agents::jobs::model::ToolScope::Full => self.prepare_mcp_access(request, launch),
+            crate::agents::jobs::model::ToolScope::Full => {
+                self.prepare_mcp_access(request, launch, model_overrides.as_ref())
+            }
             crate::agents::jobs::model::ToolScope::ReadOnly { .. } => None,
         };
         let mut args = claude_stream_args(
@@ -361,6 +369,14 @@ impl ClaudeSupervisor {
             *args
                 .last_mut()
                 .expect("Claude stream arguments include the session") = resume;
+        }
+        if mcp.is_none()
+            && let Some(overrides) = model_overrides
+        {
+            args.extend([
+                "--settings".to_owned(),
+                json!({"modelOverrides": overrides}).to_string(),
+            ]);
         }
         launch.apply_args(&mut args);
         command.args(&args);
@@ -417,6 +433,7 @@ impl ClaudeSupervisor {
         &self,
         request: &ClaudeTurnRequest,
         launch: &super::jobs::LaunchPolicy,
+        model_overrides: Option<&Value>,
     ) -> Option<McpRuntimeAccess> {
         let token = self
             .mcp_tokens
@@ -450,6 +467,9 @@ impl ClaudeSupervisor {
                     &request.session_uuid,
                 ),
             }});
+            if let Some(overrides) = model_overrides {
+                settings["modelOverrides"] = overrides.clone();
+            }
             settings["hooks"]["SessionStart"] = match launch.job() {
                 None => crate::providers::claude::session_context::conversation_hooks(
                     &executable,

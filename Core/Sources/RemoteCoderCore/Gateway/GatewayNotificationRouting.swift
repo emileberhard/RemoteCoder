@@ -169,7 +169,10 @@ enum GatewayNotificationRouting {
 }
 
 struct GatewayWarning: Decodable, Sendable {
-    enum Kind: String, Decodable, Sendable { case historyIdentityPersistence }
+    enum Kind: String, Decodable, Sendable {
+        case historyIdentityPersistence
+        case claudeUnrecognizedModel
+    }
     let kind: Kind
     let threadId: String?
     let message: String

@@ -73,9 +73,10 @@ impl ClaudeSettings {
             claude_path: PathBuf::from("claude"),
             claude_home: claude_home.clone(),
             config_dir: Some(claude_home.clone()),
-            router: Some(
-                crate::providers::router::RouterConfig::unreachable_for_test(router_key_file),
-            ),
+            router: Some(crate::providers::router::RouterConfig::local_for_test(
+                crate::test_support::claude_catalog_fixture_address(),
+                router_key_file,
+            )),
             external_providers: None,
             default_model: "claude-fable-5".to_string(),
             auth_preflight_interval_secs: 300,

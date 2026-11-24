@@ -501,6 +501,7 @@ pub(crate) enum ClaudeNotification {
 
 pub(crate) struct ClaudeSupervisor {
     settings: ClaudeSettings,
+    models: super::claude_models::Catalog,
     notifications: mpsc::Sender<ClaudeNotification>,
     journal: Journal,
     mcp_tokens: McpTokens,
@@ -546,6 +547,7 @@ impl ClaudeSupervisor {
             ),
             queue_drains: queue::QueueDrains::default(),
             queued_writes: queue::QueuedWrites::default(),
+            models: super::claude_models::Catalog::new(settings.router.clone()),
             settings,
             notifications,
             journal,
@@ -564,6 +566,30 @@ impl ClaudeSupervisor {
             turn_settled: tokio::sync::Notify::new(),
             job_changes: tokio::sync::watch::channel(()).0,
         })
+    }
+
+    pub(crate) async fn model_rows(&self) -> Vec<Value> {
+        self.models.models().await.rows
+    }
+
+    async fn model_overrides(
+        &self,
+        route: &crate::providers::claude::exec::Route,
+    ) -> Result<Option<Value>, TurnStartError> {
+        if !matches!(route, crate::providers::claude::exec::Route::Default)
+            || self.settings.router.is_none()
+        {
+            return Ok(None);
+        }
+        let overrides = self.models.models().await.overrides;
+        if overrides.is_empty() {
+            return Err(TurnStartError {
+                data: Some(TurnErrorData::ProviderUnavailable),
+                code: RpcCode::Unavailable,
+                message: "Claude model catalog is unavailable from llm-router".into(),
+            });
+        }
+        Ok(Some(Value::Object(overrides)))
     }
 
     pub(crate) fn process_group_ids(&self) -> HashSet<i32> {
@@ -842,7 +868,7 @@ fn claude_model_matches(requested: &str, actual: &str) -> bool {
     }
     let family = requested.strip_suffix("[1m]").unwrap_or(requested);
     crate::providers::claude::exec::is_family_alias(family)
-        && actual.starts_with(&format!("claude-{family}-"))
+        && (actual == family || actual.starts_with(&format!("claude-{family}-")))
 }
 
 fn other_turn(turn_id: &str, current: &str) -> TurnStartError {

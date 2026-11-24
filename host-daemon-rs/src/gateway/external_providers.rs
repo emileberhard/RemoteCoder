@@ -78,10 +78,16 @@ impl Gateway {
                 external.refresh().await;
             }
         };
+        let claude_rows = async {
+            match self.claude_agent() {
+                Some(agent) => agent.model_rows().await,
+                None => Vec::new(),
+            }
+        };
         let (listing, (), claude) = tokio::join!(
             self.call_control("model/list", params),
             refresh_external,
-            self.claude_models.rows()
+            claude_rows
         );
         let mut listing = listing.map_err(|error| native_error(&error))?;
         if listing["nextCursor"].is_null()

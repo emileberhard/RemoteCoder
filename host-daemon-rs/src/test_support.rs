@@ -322,6 +322,31 @@ impl FakeControl {
     }
 }
 
+pub(crate) fn claude_catalog_fixture_address() -> SocketAddr {
+    static ADDRESS: std::sync::OnceLock<SocketAddr> = std::sync::OnceLock::new();
+    *ADDRESS.get_or_init(|| {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    let app = axum::Router::new().route("/v1/models", axum::routing::get(|| async {
+                        axum::Json(serde_json::json!({
+                            "data": [{"id":"claude-fixture-1", "line":"fixture", "lifecycle":"active", "created_at":"2026-01-01T00:00:00Z"}],
+                            "has_more": false
+                        }))
+                    }));
+                    axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app).await.unwrap();
+                });
+        });
+        address
+    })
+}
+
 pub(crate) async fn serve(router: axum::Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

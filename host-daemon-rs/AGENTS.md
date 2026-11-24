@@ -1992,7 +1992,12 @@ Claude. The `RC_CLAUDE_*` settings are in
   `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK`, without which a router token reports
   Fast as disabled by the organization. Each command reads the private
   regular key file anew, failing visibly if unavailable; never log its contents.
-  The router owns subscriptions and failover. `system/init` must still report
+  The router owns subscriptions, failover and the model version. On its route
+  the launch settings map each family's newest active catalog ID to its family
+  word, using the same selection as the picker. Launches use the last good
+  catalog after a refresh failure and return an unavailable error if none has
+  loaded. Claude's unrecognized-model diagnostic uses the thread warning.
+  `system/init` must still report
   `apiKeySource: "none"`, Fast off unless the runtime's confirmed selection
   turned it on, and `permissionMode: "bypassPermissions"`; the existing guard
   kills violations. `result.total_cost_usd` remains an

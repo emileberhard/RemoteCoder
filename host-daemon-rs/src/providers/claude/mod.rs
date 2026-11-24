@@ -1,5 +1,6 @@
 pub(crate) mod auth;
 mod capacity;
+mod claude_models;
 pub(crate) mod conversation_index;
 mod delivery_evidence;
 pub(crate) mod exec;

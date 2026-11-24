@@ -260,6 +260,19 @@ impl ClaudeSupervisor {
                 }
                 ring.push(line.clone());
             }
+            if let Some(diagnostic) = line.strip_prefix("[claude-code:unrecognized_model] ")
+                && let Ok(details) = serde_json::from_str::<Value>(diagnostic)
+                && let Some(model) = details["model"].as_str()
+            {
+                self.emit(json!({
+                    "method": "gateway/warning",
+                    "params": {
+                        "kind": "claudeUnrecognizedModel",
+                        "threadId": thread_id,
+                        "message": format!("Claude Code does not recognize {model}. Update Claude Code on this host to restore model capabilities and prompt caching.")
+                    }
+                })).await;
+            }
             self.emit(json!({
                 "method": "daemon/claudeStderr",
                 "params": { "threadId": thread_id, "line": line }

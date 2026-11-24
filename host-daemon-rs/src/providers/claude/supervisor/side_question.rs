@@ -63,6 +63,24 @@ impl ClaudeSupervisor {
             Err(error) => return Err(format!("Claude parent record is unreadable: {error:#}")),
         }
         .unwrap_or_else(|| self.settings.default_model.clone());
+        let selection = crate::providers::claude::ClaudeSelection {
+            model: model.clone(),
+            effort: None,
+            fast: false,
+        };
+        let route = self
+            .validate_route(thread_id, &selection, None, false)
+            .await
+            .map_err(|error| error.message)?;
+        let mut settings = json!({"fastMode":false});
+        if let Some(overrides) = self
+            .model_overrides(&route)
+            .await
+            .map_err(|error| error.message)?
+        {
+            settings["modelOverrides"] = overrides;
+        }
+        let settings = settings.to_string();
         let args = [
             "-p",
             "--resume",
@@ -73,7 +91,7 @@ impl ClaudeSupervisor {
             "",
             "--strict-mcp-config",
             "--settings",
-            r#"{"fastMode":false}"#,
+            &settings,
             "--permission-mode",
             "bypassPermissions",
             "--output-format",
@@ -84,15 +102,6 @@ impl ClaudeSupervisor {
             question,
         ]
         .map(str::to_owned);
-        let selection = crate::providers::claude::ClaudeSelection {
-            model: model.clone(),
-            effort: None,
-            fast: false,
-        };
-        let route = self
-            .validate_route(thread_id, &selection, None, false)
-            .await
-            .map_err(|error| error.message)?;
         let mut command = claude_exec::command_on_route(&self.settings, &args, &route, None)
             .map_err(|error| format!("failed to prepare claude: {error}"))?;
         command

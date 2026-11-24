@@ -207,7 +207,7 @@ impl ClaudeSupervisor {
                         ))
                     })?;
             }
-            prepared_runtime = Some(self.prepare_runtime(&request, &policy, &route)?);
+            prepared_runtime = Some(self.prepare_runtime(&request, &policy, &route).await?);
             self.check_callback_generation(&request.thread_id, origin)
                 .await?;
             let mut runtimes = self.runtimes.lock().await;
@@ -382,7 +382,12 @@ impl ClaudeSupervisor {
                 drop(runtimes);
                 let runtime = match prepared_runtime {
                     Some(runtime) => runtime,
-                    None => self.prepare_runtime(&request, &policy, &route)?,
+                    None => {
+                        let runtime = self.prepare_runtime(&request, &policy, &route).await?;
+                        self.check_callback_generation(&request.thread_id, origin)
+                            .await?;
+                        runtime
+                    }
                 };
                 let spawned = self.spawn_runtime(&request, &policy, runtime)?;
                 let slot = spawned.runtime.input.reserve().await?;

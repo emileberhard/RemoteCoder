@@ -325,6 +325,8 @@ async fn a_cancelled_caller_never_leaves_a_partial_frame() {
 fn applied_models_must_match_the_requested_identity_or_family() {
     assert!(claude_model_matches("mythos", "claude-mythos-5-2"));
     assert!(claude_model_matches("mythos[1m]", "claude-mythos-5-2"));
+    assert!(claude_model_matches("mythos[1m]", "mythos"));
+    assert!(!claude_model_matches("mythos[1m]", "fable"));
     assert!(claude_model_matches("sonnet", "claude-sonnet-5"));
     assert!(claude_model_matches("fable", "claude-fable-5-1"));
     assert!(claude_model_matches("haiku", "claude-haiku-5-5"));
@@ -558,7 +560,7 @@ fn the_mcp_token_travels_in_a_private_file_never_in_argv() {
         scope: crate::agents::jobs::model::ToolScope::Full,
     };
     let access = agent
-        .prepare_mcp_access(&turn, &conversation)
+        .prepare_mcp_access(&turn, &conversation, None)
         .expect("mcp access");
     let args = claude_stream_args(&turn, Some(access.config_path.as_path()));
 
@@ -629,7 +631,9 @@ fn the_mcp_token_travels_in_a_private_file_never_in_argv() {
         scope: crate::agents::jobs::model::ToolScope::Full,
         coordination_socket: dir.join("coordination.sock"),
     };
-    let delegated = agent.prepare_mcp_access(&turn, &job).expect("mcp access");
+    let delegated = agent
+        .prepare_mcp_access(&turn, &job, None)
+        .expect("mcp access");
     let delegated_settings: Value = serde_json::from_str(
         &fs::read_to_string(runtime_settings_path(&delegated.config_path)).unwrap(),
     )
@@ -1318,6 +1322,7 @@ async fn deleted_recorded_cwd_resumes_the_exact_transcript_in_an_existing_record
             &full,
             &crate::providers::claude::exec::Route::Default,
         )
+        .await
         .unwrap();
     let mut spawned = agent.spawn_runtime(&turn, &full, prepared).unwrap();
     let mut lines = BufReader::new(&mut spawned.stdout).lines();
