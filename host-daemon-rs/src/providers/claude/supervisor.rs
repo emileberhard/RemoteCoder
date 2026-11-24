@@ -389,6 +389,7 @@ struct ClaudeRuntime {
     background_tasks: Vec<suspend::BackgroundTask>,
     lifecycle_generation: u64,
     stderr_ring: Arc<Mutex<Vec<String>>>,
+    warn_unrecognized_model: bool,
     _mcp: Option<McpRuntimeAccess>,
     idle: Option<IdleArm>,
     wakes: WakeHold,

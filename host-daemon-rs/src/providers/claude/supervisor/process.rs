@@ -370,6 +370,7 @@ impl ClaudeSupervisor {
                 .last_mut()
                 .expect("Claude stream arguments include the session") = resume;
         }
+        let warn_unrecognized_model = model_overrides.is_some();
         if mcp.is_none()
             && let Some(overrides) = model_overrides
         {
@@ -415,6 +416,7 @@ impl ClaudeSupervisor {
                 background_tasks: Vec::new(),
                 lifecycle_generation: 1,
                 stderr_ring,
+                warn_unrecognized_model,
                 _mcp: mcp,
                 idle: None,
                 wakes,

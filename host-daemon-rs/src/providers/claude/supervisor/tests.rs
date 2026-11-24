@@ -721,6 +721,7 @@ async fn placeholder_runtime(
         idle: None,
         wakes: WakeHold::default(),
         stderr_ring: Arc::new(Mutex::new(Vec::new())),
+        warn_unrecognized_model: false,
     };
     (runtime, child)
 }

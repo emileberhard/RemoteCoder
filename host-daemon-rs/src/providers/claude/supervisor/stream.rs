@@ -248,11 +248,17 @@ impl ClaudeSupervisor {
             let ring = {
                 let runtimes = self.runtimes.lock().await;
                 runtimes.get(&thread_id).and_then(|runtime| {
-                    (runtime.process_group_id == process_group_id)
-                        .then(|| Arc::clone(&runtime.stderr_ring))
+                    (runtime.process_group_id == process_group_id).then(|| {
+                        (
+                            Arc::clone(&runtime.stderr_ring),
+                            runtime.warn_unrecognized_model,
+                        )
+                    })
                 })
             };
-            let Some(ring) = ring else { return };
+            let Some((ring, warn_unrecognized_model)) = ring else {
+                return;
+            };
             {
                 let mut ring = ring.lock().await;
                 if ring.len() >= STDERR_RING_CAPACITY {
@@ -260,7 +266,8 @@ impl ClaudeSupervisor {
                 }
                 ring.push(line.clone());
             }
-            if let Some(diagnostic) = line.strip_prefix("[claude-code:unrecognized_model] ")
+            if warn_unrecognized_model
+                && let Some(diagnostic) = line.strip_prefix("[claude-code:unrecognized_model] ")
                 && let Ok(details) = serde_json::from_str::<Value>(diagnostic)
                 && let Some(model) = details["model"].as_str()
             {
