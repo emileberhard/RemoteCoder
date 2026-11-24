@@ -344,7 +344,13 @@ mod tests {
                 })
             })
             .collect();
-        assert_eq!(env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:1");
+        assert_eq!(
+            env["ANTHROPIC_BASE_URL"],
+            format!(
+                "http://{}",
+                crate::test_support::claude_catalog_fixture_address()
+            )
+        );
         assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "test-router-key");
         assert_eq!(env["CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK"], "1");
         assert!(!format!("{command:?}").contains("test-router-key"));
