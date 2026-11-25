@@ -247,6 +247,29 @@ fn malformed_resets_degrade_only_the_affected_claude_observation() {
     }
 }
 
+#[test]
+fn route_inventory_preserves_provider_options_and_active_routes() {
+    let mut inventory = payload();
+    inventory["claude"]["active_route"] = json!({"kind":"anthropic"});
+    inventory["claude"]["route_options"] = json!(["subscription", "anthropic", "other"]);
+    inventory["codex"] = json!({
+        "active_route": {"kind":"openrouter"},
+        "route_options": ["subscription", "openrouter"]
+    });
+    let wire = serde_json::to_value(map_directory(inventory).unwrap()).unwrap();
+    assert_eq!(wire["claudeRouteId"], "anthropic");
+    assert_eq!(
+        wire["claudeRouteOptions"],
+        json!(["subscription", "anthropic", "other"])
+    );
+    assert_eq!(wire["codexRouteId"], "openrouter");
+    assert_eq!(
+        wire["codexRouteOptions"],
+        json!(["subscription", "openrouter"])
+    );
+    assert!(wire["codexRoute"].is_null());
+}
+
 fn copilot_row() -> Value {
     json!({"id":"copilot","provider":"copilot","label":"emil-eberhard-stretch","plan":"business",
         "shared":false,"credential":"COPILOT_GITHUB_TOKEN","availability":"exhausted",

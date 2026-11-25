@@ -32,9 +32,12 @@ time instead of routing marks in the popover. An older router or gateway with no
 model choices keeps the single-account Automatic popover. The ring continues to
 follow the general automatic choice. Choosing an account stores RemoteCoder's router
 preference, shared by both hosts, and choosing Automatic clears it. An error
-keeps the prior preference. When the router reports Copilot, a GitHub Copilot
-row with the seat's monthly budget joins the Claude choices, and the Codex
-section offers a ChatGPT | Copilot route switch.
+keeps the prior preference. The route pickers use llm-router's selectable choices for each provider.
+Automatic preserves its existing preference and fallback policy. Anthropic keeps
+Claude on Anthropic, and ChatGPT keeps Codex Responses on the subscription.
+Copilot and OpenRouter send requests for the selected provider's model family to
+that service. A model unavailable on the chosen route fails with the router's
+reason. Claude choices are principal-scoped. Codex choices are router-wide.
 
 Each Codex account has one name across its hosts: a nickname from the overview's
 row menu, else its verified email, else "Codex account". Names sync as user
@@ -211,7 +214,7 @@ The host control API uses the existing gateway installation/operator credential:
 |---|---|
 | Read the cached directory; optionally refresh, and optionally wait for the in-flight refresh | `GET /accounts?refresh=true&wait=refresh` |
 | List Claude router subscriptions, usage, the automatic choice, RemoteCoder's preference and Claude route, the Codex route and the Copilot account | `GET /claude/accounts` |
-| Set RemoteCoder's Claude preference or Copilot route, or `null` for automatic | `PUT /claude/accounts/preference` |
+| Set RemoteCoder's Claude account preference or provider override | `PUT /claude/accounts/preference` |
 | Set the router-wide Codex route | `PUT /codex/route` |
 | Explicitly refresh stale Claude and Copilot observations | `POST /claude/accounts/refresh` |
 | Redeem a reset on the host-default Codex account | `POST /accounts/default-codex/resets/redeem` |
@@ -224,13 +227,14 @@ current snapshot, whose `refreshing` says whether a round is still open.
 The preference takes `{account: <router account ID> | "copilot" | null}` and
 refresh takes `{}`; `null` returns to the router's automatic choice and
 `"copilot"` routes every Claude request of the `remotecoder` principal to
-GitHub Copilot. `PUT /codex/route` takes `{route: "subscription" | "copilot"}`
-and sets the Codex route for every router principal. The gateway reads the
-router's `GET /accounts`, `PUT /accounts/preference` and `POST /accounts/refresh`
-with the host's key and returns the Claude accounts in `accounts` and the
-Copilot account separately. The preference and Claude route belong to the
-`remotecoder` principal, so both hosts share them. A key whose router policy does
-not allow Copilot gets 403 `copilot_not_permitted`.
+GitHub Copilot. `PUT /claude/accounts/preference` also accepts
+`{route: "anthropic"}` or an available router-advertised override.
+`PUT /codex/route` takes `{route: "<route id>"}` and sets the Codex route for every
+router principal. The directory returns optional `claudeRouteOptions` and
+`codexRouteOptions` and, for new overrides, `claudeRouteId` and `codexRouteId`.
+The gateway maps the router's inventory and forwards changes through its
+authenticated `/accounts/preference` endpoint. Legacy subscription and Copilot
+requests keep their previous shape. Router policy authorizes all selections.
 
 `route` (`subscription`, `openrouter` or `copilot`), `codexRoute`
 (`subscription` or `copilot`) and `copilot` are null when the router does not

@@ -148,14 +148,12 @@ account-wide availability come from the router. Exhausted 5-hour or weekly
 windows report `exhausted` with `availableAt`; `cooling` still decodes from older
 routers. Model exhaustion stays separate from account-wide availability.
 
-When the router reports Copilot (llm-router 1.10.0 and a gateway that passes
-it on), the selector also offers **Copilot**, which routes every Claude request
-of the `remotecoder` principal to GitHub Copilot, and the Codex popover and
-overview offer a ChatGPT | Copilot switch for the router-wide Codex route. A
-ring whose provider runs on Copilot shows the Copilot mark and the seat's
-monthly budget, with the dollars left and its reset; unknown Copilot usage shows
-the router's error instead of a ring value. With an older router or gateway the
-Copilot choices stay hidden.
+The Claude and Codex pickers use the route options advertised by llm-router.
+Automatic keeps the existing routing policy. Explicit overrides choose the
+inference provider, and the Claude picker retains the individual account choices.
+Copilot shows the seat's monthly budget, dollars left, and reset when reported.
+Routes without a usage observation show unavailable usage. Older routers and
+gateways keep their existing choices.
 `/health` starts no Claude process or quota probe, and unavailable usage is
 never synthesized as zero.
 See [Provider accounts](provider-accounts.md#claude-router-and-profile-migration).

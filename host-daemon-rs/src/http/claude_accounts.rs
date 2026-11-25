@@ -24,7 +24,9 @@ struct RouterChoice {
     automatic: String,
     models: Option<Vec<RouterModelChoice>>,
     preference: Option<String>,
-    route: Option<RouterRoute<ClaudeRoute>>,
+    route: Option<RouterRoute>,
+    active_route: Option<RouterRoute>,
+    route_options: Option<Vec<String>>,
 }
 #[derive(Deserialize)]
 struct RouterModelChoice {
@@ -32,26 +34,15 @@ struct RouterModelChoice {
     automatic: Option<String>,
     available_at: Option<String>,
 }
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct RouterCodex {
-    route: Option<RouterRoute<CodexRoute>>,
+    route: Option<RouterRoute>,
+    active_route: Option<RouterRoute>,
+    route_options: Option<Vec<String>>,
 }
 #[derive(Deserialize)]
-struct RouterRoute<Kind> {
-    kind: Kind,
-}
-#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Debug)]
-#[serde(rename_all = "lowercase")]
-enum ClaudeRoute {
-    Subscription,
-    Openrouter,
-    Copilot,
-}
-#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Debug)]
-#[serde(rename_all = "lowercase")]
-enum CodexRoute {
-    Subscription,
-    Copilot,
+struct RouterRoute {
+    kind: String,
 }
 #[derive(Deserialize)]
 #[serde(tag = "provider", rename_all = "lowercase")]
@@ -136,8 +127,16 @@ struct Directory {
     #[serde(skip_serializing_if = "Option::is_none")]
     models: Option<Vec<ModelChoice>>,
     preference: Option<String>,
-    route: Option<ClaudeRoute>,
-    codex_route: Option<CodexRoute>,
+    route: Option<String>,
+    codex_route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    claude_route_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codex_route_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    claude_route_options: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codex_route_options: Option<Vec<String>>,
     copilot: Option<Copilot>,
     accounts: Vec<Account>,
 }
@@ -286,15 +285,21 @@ fn map_directory(value: Value) -> Result<Directory> {
                 .collect::<Result<Vec<_>>>()
         })
         .transpose()?;
+    let RouterCodex {
+        route,
+        active_route,
+        route_options,
+    } = inventory.codex.unwrap_or_default();
     Ok(Directory {
         automatic: inventory.claude.automatic,
         models,
         preference: inventory.claude.preference,
         route: inventory.claude.route.map(|route| route.kind),
-        codex_route: inventory
-            .codex
-            .and_then(|codex| codex.route)
-            .map(|route| route.kind),
+        codex_route: route.map(|route| route.kind),
+        claude_route_id: inventory.claude.active_route.map(|route| route.kind),
+        codex_route_id: active_route.map(|route| route.kind),
+        claude_route_options: inventory.claude.route_options,
+        codex_route_options: route_options,
         copilot,
         accounts,
     })
@@ -425,6 +430,11 @@ fn response(result: Result<Value>) -> Response {
                         "copilot_not_permitted",
                         "This gateway's llm-router key may not use Copilot; its router policy needs copilot allowed",
                     ),
+                    (403, "route_not_available") => error(
+                        StatusCode::FORBIDDEN,
+                        "route_not_available",
+                        "This route is unavailable for the configured llm-router key",
+                    ),
                     (401 | 403, _) => error(
                         StatusCode::BAD_GATEWAY,
                         "router_unauthorized",
@@ -469,66 +479,71 @@ pub(super) async fn directory(State(state): State<HttpState>, _: Authorized) -> 
     response(state.router.get("accounts").await)
 }
 #[derive(Deserialize)]
+#[serde(untagged)]
+pub(super) enum Preference {
+    Account(AccountPreference),
+    Route(RoutePreference),
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Preference {
+pub(super) struct AccountPreference {
     account: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RoutePreference {
+    route: String,
 }
 pub(super) async fn prefer(
     State(state): State<HttpState>,
     _: Authorized,
     Json(request): Json<Preference>,
 ) -> Response {
-    let account = match request.account {
-        Value::Null => Value::Null,
-        Value::String(account) if valid_id(&account) => Value::String(account),
+    let body = match request {
+        Preference::Account(AccountPreference {
+            account: Value::Null,
+        }) => {
+            json!({"provider":"claude","account":null})
+        }
+        Preference::Account(AccountPreference {
+            account: Value::String(account),
+        }) if valid_id(&account) => {
+            json!({"provider":"claude","account":account})
+        }
+        Preference::Route(RoutePreference { route }) if valid_id(&route) => {
+            json!({"provider":"claude","route":route})
+        }
         _ => {
             return error(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
-                "Choose a valid Claude account id or null for automatic",
+                "Choose a valid Claude account id, route, or null for automatic",
             );
         }
     };
-    response(
-        state
-            .router
-            .put(
-                "accounts/preference",
-                json!({"provider":"claude","account":account}),
-            )
-            .await,
-    )
+    response(state.router.put("accounts/preference", body).await)
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct CodexRouteChoice {
-    route: Value,
-}
+
 pub(super) async fn route_codex(
     State(state): State<HttpState>,
     _: Authorized,
-    Json(request): Json<CodexRouteChoice>,
+    Json(request): Json<RoutePreference>,
 ) -> Response {
-    let account = match request.route.as_str() {
-        Some("subscription") => Value::Null,
-        Some("copilot") => json!("copilot"),
+    let body = match request.route.as_str() {
+        "subscription" => json!({"provider":"codex","account":null}),
+        "copilot" => json!({"provider":"codex","account":"copilot"}),
+        route if valid_id(route) => json!({"provider":"codex","route":route}),
         _ => {
             return error(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
-                "Choose subscription or copilot for the Codex route",
+                "Choose a valid Codex route",
             );
         }
     };
-    response(
-        state
-            .router
-            .put(
-                "accounts/preference",
-                json!({"provider":"codex","account":account}),
-            )
-            .await,
-    )
+    response(state.router.put("accounts/preference", body).await)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
