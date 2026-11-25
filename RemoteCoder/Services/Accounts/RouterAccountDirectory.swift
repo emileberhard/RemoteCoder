@@ -78,7 +78,7 @@ final class RouterAccountDirectory {
             }
             for await (host, readID, options) in group {
                 guard !Task.isCancelled else { return }
-                guard providerReadIDs[host] == readID else { continue }
+                guard providerReadIDs[host] == readID, let options else { continue }
                 if conversationProviders[host] != options { conversationProviders[host] = options }
             }
         }

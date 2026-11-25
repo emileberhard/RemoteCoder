@@ -47,7 +47,7 @@ struct ConversationHistoryView: View {
             .sheet(item: $providerConversation) { row in
                 ConversationProviderPicker(address: row.address, directory: workspace.accountDirectory.router)
             }
-            .task(id: isVisible) {
+            .task(id: Arrangement(isVisible: isVisible, windowActivations: windowActivations)) {
                 if isVisible { await workspace.accountDirectory.router.refreshConversationProviders() }
             }
             .safeAreaInset(edge: .top) {

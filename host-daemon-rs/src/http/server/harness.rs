@@ -249,6 +249,11 @@ async fn claude_accounts_routes_require_authorization_without_codex_availability
     for (method, path, body) in [
         ("GET", "/claude/accounts", ""),
         ("GET", "/conversation/provider", ""),
+        (
+            "PUT",
+            "/conversation/provider",
+            r#"{"threadId":"12345678-1234-1234-1234-123456789abc","route":"openrouter"}"#,
+        ),
         ("PUT", "/claude/accounts/preference", "{\"account\":null}"),
         ("POST", "/claude/accounts/refresh", "{}"),
         ("PUT", "/codex/route", "{\"route\":\"copilot\"}"),
