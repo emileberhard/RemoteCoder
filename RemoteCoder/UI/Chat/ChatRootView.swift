@@ -1,21 +1,19 @@
 import OSLog
 import SwiftUI
 
-enum ChatOpeningEvent: Equatable {
-    case initial(ConversationWindowValue)
-    case admitted(ExternalEvent, UUID)
+struct ChatOpeningEvent: Equatable {
+    let event: ExternalEvent
+    let generation: UUID
 
     @MainActor
     func performIfCurrent(in window: ChatWindowModel, navigationGeneration: UUID, perform: (ExternalEvent) -> Void) {
-        guard case .admitted(let event, let generation) = self,
-              window.isAttached, generation == navigationGeneration else { return }
+        guard window.isAttached, generation == navigationGeneration else { return }
         perform(event)
     }
 }
 
 struct ChatRootView: View {
     var workspace: ChatWorkspaceModel
-    @Binding private var sceneValue: ConversationWindowValue?
     @State private var openingEvent: ChatOpeningEvent?
     @State private var eventPreparation: (id: UUID, task: Task<Void, Never>)?
     @State private var eventError: String?
@@ -23,13 +21,6 @@ struct ChatRootView: View {
     @State private var window: ChatWindowModel?
     @State private var composerSafeAreaOverlap: CGFloat = 0
     @Environment(\.scenePhase) private var scenePhase
-    private let logger = AppLogger(category: "ChatRootView")
-
-    init(workspace: ChatWorkspaceModel, sceneValue: Binding<ConversationWindowValue?>) {
-        self.workspace = workspace
-        _sceneValue = sceneValue
-        _openingEvent = State(initialValue: sceneValue.wrappedValue.map(ChatOpeningEvent.initial))
-    }
 
     var body: some View {
         let failure = workspace.draftRetirementFailure(for: window?.selectedTarget)
@@ -67,32 +58,18 @@ struct ChatRootView: View {
             composerSafeAreaOverlap = $0
         }
         #endif
-        #if os(macOS)
-        .background {
-            if let window { WindowSceneValueMirror(window: window, value: $sceneValue) }
-        }
-        #endif
         .background {
             if let window {
                 Color.clear.frame(width: 0, height: 0)
                     .onAppear {
                         registerWithEventRouter(window)
-                        if scenePhase == .active, case .initial(let value) = openingEvent {
-                            perform(.open(value, opening: workspace.events.claimOpening(for: value)), in: window)
-                        }
-                    }
-                    .onChange(of: scenePhase) { _, phase in
-                        if phase == .active, eventPreparation == nil, case .initial(let value) = openingEvent {
-                            perform(.open(value, opening: workspace.events.claimOpening(for: value)), in: window)
-                        }
                     }
                     .modifier(WindowActivity(workspace: workspace, window: window))
             }
         }
         .onAppear {
             if window == nil {
-                let value: ConversationWindowValue? = if case .initial(let value) = openingEvent { value } else { nil }
-                window = workspace.attachWindow(opening: value)
+                window = workspace.attachWindow()
             }
         }
         .onDisappear {
@@ -104,17 +81,18 @@ struct ChatRootView: View {
             workspace.detachWindow(attached)
         }
         .alert(workspace.notificationRoutingError == nil ? "Conversations" : "Notifications", isPresented: Binding(
-            get: { workspace.notificationRoutingError != nil || eventError != nil },
+            get: { workspace.notificationRoutingError != nil || workspace.externalEventError != nil || eventError != nil },
             set: {
                 if !$0 {
                     if workspace.notificationRoutingError != nil { workspace.notificationRoutingError = nil }
+                    else if workspace.externalEventError != nil { workspace.externalEventError = nil }
                     else { eventError = nil }
                 }
             }
         )) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(workspace.notificationRoutingError ?? eventError ?? "")
+            Text(workspace.notificationRoutingError ?? workspace.externalEventError ?? eventError ?? "")
         }
         .onChange(of: workspace.settings.activeHostID) { _, _ in
             // Settings can also change the selection; the workspace only
@@ -123,54 +101,35 @@ struct ChatRootView: View {
         }
         .onChange(of: workspace.settings.hosts) { _, _ in workspace.reconcileHosts() }
         .onOpenURL { url in
-            guard let event = ExternalEvent(url: url) else { return }
-            logger.notice("Received deep link")
-            if case .open(.conversation(let address), let opening) = event {
-                guard let hostID = workspace.hostIDForConversationLink(address.hostID) else {
-                    eventError = "This link doesn't name a unique configured host."
-                    return
-                }
-                let resolved = ConversationAddress(hostID: hostID, threadID: address.threadID)
-                workspace.events.receive(.open(.conversation(resolved), opening: opening))
-            } else {
-                workspace.events.receive(event)
-            }
+            _ = workspace.openDeepLink(url)
         }
     }
 
     private func registerWithEventRouter(_ window: ChatWindowModel) {
-        workspace.events.register(.init(
-            presents: { [workspace, window] value in
-                switch value {
-                case .conversation(let address): workspace.isShowingConversation(at: address, on: window.selectedScreen)
-                case .unsentDraft(let address): workspace.isShowingUnsentDraft(address, in: window)
-                case .newChat: false
-                }
-            },
-            perform: { event in
-                if case .open = event { workspace.setWindowActive(window, isActive: true) }
-                perform(event, in: window)
-            }
-        ), id: window.id)
+        workspace.events.register(id: window.id) { event in
+            if workspace.keyWindow !== window { workspace.setWindowKey(window) }
+            perform(event, in: window)
+        }
     }
 
     private func perform(_ event: ExternalEvent, in window: ChatWindowModel) {
         eventPreparation?.task.cancel()
         eventPreparation = nil
         eventError = nil
+        workspace.externalEventError = nil
         openingEvent = nil
         guard window.isAttached, !workspace.isQuiescing else { return }
         if workspace.keyWindow === window { workspace.supersedePendingNavigation() }
         let admittedGeneration = workspace.navigationGeneration
         switch event {
         case .completionNotificationTap: break
-        case .quickAction, .presentVoiceCall, .open, .sharedItems:
+        case .quickAction, .presentVoiceCall, .openConversation, .sharedItems:
             if let screen = window.selectedScreen, let perform = eventPresenter.handler(for: screen) {
                 perform(event)
                 return
             }
             if window.selectedScreen != nil {
-                openingEvent = .admitted(event, admittedGeneration)
+                openingEvent = ChatOpeningEvent(event: event, generation: admittedGeneration)
                 return
             }
         }
@@ -187,7 +146,7 @@ struct ChatRootView: View {
                     try Task.checkCancellation()
                     guard eventPreparation?.id == id, window.isAttached,
                           workspace.navigationGeneration == admittedGeneration else { throw CancellationError() }
-                    openingEvent = .admitted(event, admittedGeneration)
+                    openingEvent = ChatOpeningEvent(event: event, generation: admittedGeneration)
                 }
             } catch is CancellationError {
                 if eventPreparation?.id == id { openingEvent = nil }
@@ -379,7 +338,7 @@ private struct ChatScreen: View {
             eventPresenter?.remove(screen)
         }
         .task(id: scenePhase == .active ? openingEvent : nil) {
-            guard scenePhase == .active, let event = openingEvent, case .admitted = event else { return }
+            guard scenePhase == .active, let event = openingEvent else { return }
             openingEvent = nil
             event.performIfCurrent(in: window, navigationGeneration: workspace.navigationGeneration, perform: perform)
         }
@@ -421,15 +380,9 @@ private struct ChatScreen: View {
         case .presentVoiceCall:
             break
         #endif
-        case .open(.conversation(let address), let opening):
-            workspace.setWindowActive(window, isActive: true)
+        case .openConversation(let address, let opening):
+            if workspace.keyWindow !== window { workspace.setWindowKey(window) }
             selectConversation(address, opening: opening)
-        case .open(.newChat, _):
-            workspace.setWindowActive(window, isActive: true)
-            openNewChatInHomeFolder()
-        case .open(.unsentDraft(let address), _):
-            workspace.setWindowActive(window, isActive: true)
-            openUnsentDraft(address)
         case .sharedItems(let id):
             openNewChatWithKeyboard()?.receiveSharedItems(id)
         case .completionNotificationTap(let payloadJSON):

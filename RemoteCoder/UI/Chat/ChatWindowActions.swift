@@ -84,7 +84,7 @@ private struct ChatWindowFocusPublication: View, Equatable {
 }
 
 enum ChatCommand: String, CaseIterable, Hashable, Sendable {
-    case newChat, newChatInHomeFolder, newWindow, fork, chooseFolder
+    case newChat, newChatInHomeFolder, fork, chooseFolder
     case searchConversations, findInConversation, findNext, findPrevious
     case commandPalette, toggleSidebar, toggleInspector, reviewChanges, refresh
     case send, stop, focusComposer, attachFile, toggleFastMode
@@ -95,7 +95,6 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
     var shortcut: KeyboardShortcut? {
         switch self {
         case .newChat: KeyboardShortcut("n")
-        case .newWindow: KeyboardShortcut("n", modifiers: [.command, .shift])
         case .newChatInHomeFolder: KeyboardShortcut("n", modifiers: [.command, .option])
         case .chooseFolder: KeyboardShortcut("o")
         case .searchConversations: KeyboardShortcut("f", modifiers: [.command, .shift])
@@ -132,7 +131,6 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
     var systemImage: String {
         switch self {
         case .newChat, .newChatInHomeFolder: "square.and.pencil"
-        case .newWindow: "macwindow.badge.plus"
         case .fork: "arrow.triangle.branch"
         case .chooseFolder: "folder"
         case .searchConversations, .findInConversation, .findNext, .findPrevious: "magnifyingglass"
@@ -167,7 +165,6 @@ enum ChatCommand: String, CaseIterable, Hashable, Sendable {
         switch self {
         case .newChat: "New Chat"
         case .newChatInHomeFolder: "New Chat in Home Folder"
-        case .newWindow: "New Window"
         case .fork: "Fork Conversation"
         case .chooseFolder: "Choose Folder…"
         case .searchConversations: "Search Conversations…"
@@ -228,12 +225,6 @@ extension KeyboardShortcut {
     }
 }
 
-extension OpenWindowAction {
-    func openNewChatWindow() {
-        callAsFunction(value: ConversationWindowValue.newChat(slot: UUID()))
-    }
-}
-
 extension FocusedValues {
     @Entry var chatWindowActions: ChatWindowActions?
 }
@@ -263,7 +254,6 @@ struct ChatWindowActionsPublisher: View {
     let toggleAgents: () -> Void
     let attachFile: () -> Void
     let toggleCommandPalette: (ChatWindowActions) -> Void
-    @Environment(\.openWindow) private var openWindow
     @State private var performer = ChatWindowActionPerformer()
 
     var body: some View {
@@ -302,7 +292,6 @@ struct ChatWindowActionsPublisher: View {
             toggleAgents: toggleAgents,
             attachFile: attachFile,
             toggleCommandPalette: toggleCommandPalette,
-            openWindow: openWindow,
             performer: performer
         )
     }
@@ -334,7 +323,6 @@ fileprivate struct ChatWindowActionContext {
     let toggleAgents: () -> Void
     let attachFile: () -> Void
     let toggleCommandPalette: (ChatWindowActions) -> Void
-    let openWindow: OpenWindowAction
     weak var performer: ChatWindowActionPerformer?
 
     var commandState: ChatWindowCommandState {
@@ -388,7 +376,6 @@ fileprivate struct ChatWindowActionContext {
         switch command {
         case .newChat: newChat()
         case .newChatInHomeFolder: newChatInHomeFolder()
-        case .newWindow: openWindow.openNewChatWindow()
         case .fork:
             if let address = screen.openAddress { fork(address) }
         case .chooseFolder: chooseFolder()

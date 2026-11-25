@@ -76,6 +76,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     func retryDraftRetirement(_ target: ExecutionTarget) { targets.retry(target) }
 
     var notificationRoutingError: String?
+    var externalEventError: String?
     @ObservationIgnored private(set) var navigationGeneration = UUID()
     @ObservationIgnored private var notificationSceneGeneration = UUID()
     @ObservationIgnored private let notificationApplicationIsActive: @MainActor () -> Bool
@@ -487,17 +488,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         windows.first { $0.id == events.keyScreenID } ?? windows.first { $0.isAttached } ?? windows[0]
     }
 
-    func attachWindow(opening value: ConversationWindowValue?) -> ChatWindowModel {
+    func attachWindow(draftSlot: UUID? = nil) -> ChatWindowModel {
         let window: ChatWindowModel
-        switch value {
-        case .newChat(let slot):
-            window = windows.first { $0.id == slot } ?? addWindow(id: slot)
-        case .conversation, .unsentDraft, nil:
-            if let primary = windows.first(where: { $0.isPrimary && !$0.isAttached }) {
-                window = primary
-            } else {
-                window = addWindow(id: UUID())
-            }
+        if let draftSlot {
+            window = windows.first { $0.id == draftSlot } ?? addWindow(id: draftSlot)
+        } else if let primary = windows.first(where: { $0.isPrimary && !$0.isAttached }) {
+            window = primary
+        } else {
+            window = addWindow(id: UUID())
         }
         window.attach()
         applyVisibility()
@@ -582,7 +580,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     var hasMultipleHosts: Bool { settings.hosts.count > 1 }
 
-    var hasOpenWindow: Bool { windows.contains { $0.isAttached } }
+    var isMainWindowOpen: Bool { windows.first(where: \.isPrimary)?.isAttached == true }
 
     private func applyModelPickerPreferences(for provider: AgentProvider, previousModelVisibility: ModelVisibility) {
         for model in models { model.applyModelPickerPreferences(for: provider, previousModelVisibility: previousModelVisibility) }
@@ -1427,7 +1425,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     enum ConversationSwitchOutcome: Equatable {
-        case refusedWhileDictating, unchanged, changed, shownInAnotherWindow
+        case refusedWhileDictating, unchanged, changed
     }
 
     var refusesSwitchWhileDictating: Bool { selectedModel?.voice.isRecording == true }
@@ -1438,10 +1436,6 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         let isShowing = isShowingConversation(at: address, on: selectedScreen)
         if (!isShowing || opening != nil), refusesSwitchWhileDictating { return .refusedWhileDictating }
         supersedePendingNavigation()
-        if !isShowing, events.focusWindow(presenting: .conversation(address), besides: keyWindow.id) {
-            if let opening { events.receive(.open(.conversation(address), opening: opening)) }
-            return .shownInAnotherWindow
-        }
         conversationSwitch = Task { [weak self] in
             guard let self, !Task.isCancelled else { return }
             let span = PerfBuild.span("switch.commit"); defer { span.end() }
@@ -1450,6 +1444,23 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             selectConversation(at: address, opening: opening)
         }
         return isShowing ? .unchanged : .changed
+    }
+
+    @discardableResult
+    func openDeepLink(_ url: URL) -> Bool {
+        guard let event = ExternalEvent(url: url) else { return false }
+        logger.notice("Received deep link")
+        if case .openConversation(let address, let opening) = event {
+            guard let hostID = hostIDForConversationLink(address.hostID) else {
+                externalEventError = "This link doesn't name a unique configured host."
+                return true
+            }
+            let resolved = ConversationAddress(hostID: hostID, threadID: address.threadID)
+            events.receive(.openConversation(resolved, opening: opening))
+        } else {
+            events.receive(event)
+        }
+        return true
     }
 
     func hostIDForConversationLink(_ id: UUID) -> UUID? {
@@ -1592,11 +1603,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         guard !isQuiescing, window.isAttached, navigationGeneration == generation else { throw CancellationError() }
         guard let destination, destination.acceptsWork else {
             if case .presentVoiceCall = event { throw CancellationError() }
-            if case .open(.conversation, _) = event {
+            if case .openConversation = event {
                 throw WindowEventUnavailable(message: "This conversation's host is unavailable.")
-            }
-            if case .open(.unsentDraft, _) = event {
-                throw WindowEventUnavailable(message: "This draft's host is unavailable.")
             }
             if let failure = draftRetirementFailure(for: window.selectedTarget) {
                 throw WindowEventUnavailable(message: failure.message)
@@ -1613,13 +1621,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     private func readyTarget(for event: ExternalEvent, in window: ChatWindowModel) -> ChatTargetModel? {
-        if case .open(.conversation(let address), _) = event {
+        if case .openConversation(let address, _) = event {
             guard let target = model(for: address.hostID), target.acceptsWork else { return nil }
-            return target
-        }
-        if case .open(.unsentDraft(let address), _) = event {
-            guard let target = model(for: address.target.hostID),
-                  target.acceptsWork else { return nil }
             return target
         }
         if case .presentVoiceCall(let callID) = event {

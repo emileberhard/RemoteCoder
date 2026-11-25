@@ -266,8 +266,8 @@ struct ChatWorkspaceModelTests {
         let fixture = await WorkspaceFixture()
         defer { fixture.workspace.teardown(); await fixture.cleanUp() }
         let workspace = fixture.workspace
-        let first = workspace.attachWindow(opening: nil)
-        let second = workspace.attachWindow(opening: .newChat(slot: UUID()))
+        let first = workspace.attachWindow()
+        let second = workspace.attachWindow(draftSlot: UUID())
         let original = try #require(first.selectedScreen)
         #expect(await original.prepareDraft())
         let address = UnsentDraftAddress(target: original.executionTarget, draftID: original.newChatDraftID)
@@ -288,7 +288,7 @@ struct ChatWorkspaceModelTests {
         let fixture = await WorkspaceFixture()
         defer { fixture.workspace.teardown(); await fixture.cleanUp() }
         let workspace = fixture.workspace
-        let window = workspace.attachWindow(opening: nil)
+        let window = workspace.attachWindow()
         let screen = try #require(window.selectedScreen)
         #expect(await screen.prepareDraft())
         let address = UnsentDraftAddress(target: screen.executionTarget, draftID: screen.newChatDraftID)
@@ -768,8 +768,8 @@ struct ChatWorkspaceModelTests {
         let fixture = await WorkspaceFixture()
         defer { fixture.workspace.teardown(); await fixture.cleanUp() }
         let workspace = fixture.workspace
-        let first = workspace.attachWindow(opening: nil)
-        let second = workspace.attachWindow(opening: nil)
+        let first = workspace.attachWindow()
+        let second = workspace.attachWindow()
         let target = ExecutionTarget(hostID: fixture.mini.id)
 
         #expect(first !== second)
@@ -791,8 +791,8 @@ struct ChatWorkspaceModelTests {
         let fixture = await WorkspaceFixture()
         defer { fixture.workspace.teardown(); await fixture.cleanUp() }
         let workspace = fixture.workspace
-        let first = workspace.attachWindow(opening: nil)
-        let second = workspace.attachWindow(opening: nil)
+        let first = workspace.attachWindow()
+        let second = workspace.attachWindow()
         let mini = try #require(workspace.model(for: fixture.mini.id))
         let book = try #require(workspace.model(for: fixture.book.id))
 

@@ -16,27 +16,6 @@ struct WindowActivity: ViewModifier {
     }
 }
 
-struct WindowSceneValueMirror: View {
-    let window: ChatWindowModel
-    @Binding var value: ConversationWindowValue?
-
-    var body: some View {
-        Color.clear
-            .onAppear {
-                if value == nil || value == .newChat(slot: window.id) { value = presented }
-            }
-            .onChange(of: presented) { _, presented in value = presented }
-    }
-
-    private var presented: ConversationWindowValue? {
-        let screen = window.selectedScreen
-        if let address = screen?.openAddress { return .conversation(address) }
-        guard !window.isPrimary else { return nil }
-        guard let screen, let draft = screen.shownNewChatDraft else { return .newChat(slot: window.id) }
-        return .unsentDraft(UnsentDraftAddress(target: screen.executionTarget, draftID: draft))
-    }
-}
-
 struct WindowVisibility: ViewModifier {
     @Binding var isVisible: Bool
 

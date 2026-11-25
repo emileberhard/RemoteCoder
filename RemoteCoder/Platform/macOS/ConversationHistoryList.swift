@@ -14,7 +14,6 @@ struct ConversationHistoryList: View {
 
     @FocusState private var isSearchFocused: Bool
     @State private var selection: Set<ConversationAddress> = []
-    @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -260,8 +259,6 @@ struct ConversationHistoryList: View {
 
     @ViewBuilder
     private func menu(for row: ConversationSidebarRow) -> some View {
-        Button("Open in New Window") { openWindow(value: ConversationWindowValue.conversation(row.address)) }
-        Divider()
         ForEach(actions.rowMenuItems(for: row)) { item in
             Button(item.title, systemImage: item.systemImage, action: item.perform)
         }

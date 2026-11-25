@@ -78,7 +78,7 @@ final class QuickEntry {
     private func open() {
         guard let display = NSScreen.main else { return }
         let front = workspace.selectedScreen
-        let window = workspace.attachWindow(opening: .newChat(slot: Self.draftSlot))
+        let window = workspace.attachWindow(draftSlot: Self.draftSlot)
         if let front, let screen = window.selectedScreen, screen.executionTarget == front.executionTarget,
            let folder = front.workingDirectory, screen.workingDirectory != folder {
             screen.suggestWorkingDirectory(folder)
@@ -121,7 +121,7 @@ final class QuickEntry {
     private func openInWindow(_ address: ConversationAddress) {
         close()
         NSApp.activate()
-        workspace.events.summon(.open(.conversation(address)))
+        workspace.events.summon(.openConversation(address))
     }
 }
 #endif

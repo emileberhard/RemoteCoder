@@ -20,7 +20,6 @@ enum AttentionDockMenu {
         }
         if menu.numberOfItems > 0 { menu.addItem(.separator()) }
         menu.addItem(item("New Chat", performing: .newChat, target: target, action: action))
-        menu.addItem(item("New Window", performing: .newWindow, target: target, action: action))
         return menu
     }
 

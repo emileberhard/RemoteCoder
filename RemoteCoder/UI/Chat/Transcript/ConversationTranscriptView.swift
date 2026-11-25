@@ -33,12 +33,17 @@ struct ConversationTranscriptView: View {
         self.onOpenAgent = onOpenAgent
         self.onReviewChanges = onReviewChanges
         self.onEditAsFork = onEditAsFork
-        _openURLAction = State(initialValue: OpenURLAction { [weak screen] url in
-            screen?.openFileURL(url, transition: nil, presentationScope: nil) ?? .discarded
-        })
+        _openURLAction = State(initialValue: Self.makeOpenURLAction(screen: screen, workspace: workspace))
         _agentOpener = State(initialValue: AgentConversationOpener(hostID: screen.hostID, action: onOpenAgent))
     }
     private let logger = AppLogger(category: "ChatScreen")
+
+    private static func makeOpenURLAction(screen: ChatScreenModel, workspace: ChatWorkspaceModel) -> OpenURLAction {
+        OpenURLAction { [weak screen, weak workspace] url in
+            if let workspace, workspace.openDeepLink(url) { return .handled }
+            return screen?.openFileURL(url, transition: nil, presentationScope: nil) ?? .discarded
+        }
+    }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -59,10 +64,8 @@ struct ConversationTranscriptView: View {
             .environment(\.htmlVisualSource, HTMLVisualSource(hostID: screen.hostID, documents: screen.htmlVisualDocuments,
                 renderer: screen.htmlVisualRenderer, preparation: screen.htmlVisualPreparation))
             .environment(\.htmlVisualReplies, screen.htmlVisualReplies)
-        .onChange(of: ObjectIdentifier(screen)) { [screen] _, _ in
-            openURLAction = OpenURLAction { [weak screen] url in
-                screen?.openFileURL(url, transition: nil, presentationScope: nil) ?? .discarded
-            }
+        .onChange(of: ObjectIdentifier(screen)) { [screen, workspace] _, _ in
+            openURLAction = Self.makeOpenURLAction(screen: screen, workspace: workspace)
             agentOpener.hostID = screen.hostID
         }
         .onAppear {

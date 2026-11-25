@@ -20,7 +20,7 @@ struct RemoteCoderDeepLinksTests {
         let link = RemoteCoderConversationLink(hostID: hostID, threadID: "thread/1 a", itemKey: itemKey)
         let url = RemoteCoderDeepLinks.url(for: link)
         #expect(url.path == "/conversation")
-        #expect(ExternalEvent(url: url) == .open(.conversation(.init(hostID: hostID, threadID: link.threadID)),
+        #expect(ExternalEvent(url: url) == .openConversation(.init(hostID: hostID, threadID: link.threadID),
             opening: .init(itemKey: itemKey, findTerm: nil)))
         var components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
         components.path = "/open"

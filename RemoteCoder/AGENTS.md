@@ -961,7 +961,7 @@ entrypoint linked above.
 
 ## Chat screen and composer (`UI/Chat/`, `Chat/`)
 
-- `ChatRootView(workspace:sceneValue:)` is the scene root. It attaches its
+- `ChatRootView(workspace:)` is the scene root. It attaches its
   `ChatWindowModel` on appear and detaches it on disappear, and owns workspace
   bootstrap and teardown and forwards scene phase, settings changes,
   notification taps and APNs token updates, so every host reacts, not just the
@@ -1420,14 +1420,11 @@ entrypoint linked above.
     input, unknown, probably done). The full host and path are the row's tooltip.
   - The Mac selection mirrors the snapshot's selected row. Choosing a row, by
     click, arrow keys or type-select, calls `switchConversation(to:)` through
-    `ChatScreen`. A row that another window shows brings that window forward
-    instead. Any choice that does not switch restores the shown row. A click
+    `ChatScreen`. Any choice that does not switch restores the shown row. A click
     then focuses the composer, and arrow keys keep focus in the list. Rows draw
     their question count themselves: on macOS 27 a `.badge` on a `List` row
     makes that row ignore clicks and its context menu. The selection context
-    menu's primary action, Return or double-click, focuses the composer, and
-    the menu adds "Open in New Window"
-    (`ConversationWindowValue.conversation`). ⌫ settles the selected rows
+    menu's primary action, Return or double-click, focuses the composer. ⌫ settles the selected rows
     that are not running, with Undo, or unsettles them when every selected row is
     settled. Hovering a row that can be settled replaces its date with a
     checkmark button that settles it.
@@ -2155,11 +2152,15 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
     `RemoteCoderQuickActionRequest` and the `remotecoder://` vocabulary. It
     compiles into the app, the widget and the share extension.
   - Intents and deep links both produce a request and hand it to
-    `ChatWorkspaceModel.events`, the `ExternalEventRouter`. It holds the
+    `ChatWorkspaceModel.events`, the `ExternalEventRouter`. `ChatWorkspaceModel.openDeepLink(_:)`
+    is the single owner of `remotecoder://` URL resolution, used by both
+    `ChatRootView.onOpenURL` and `ConversationTranscriptView`'s `openURL`
+    action so in-app conversation links switch in the current window without
+    bouncing through LaunchServices. The router holds the
     latest event in memory for at most 60 s and delivers it once, to the
-    key screen while its scene is `.active`. An `.open` event goes to the
-    screen presenting that address, else the only screen, else a new window
-    where supported. A completion-notification tap does not expire; it waits
+    key screen while its scene is `.active` (falling back to the registered
+    main screen if an unregistered surface such as `QuickEntry` is briefly key).
+    A completion-notification tap does not expire; it waits
     for navigation to be ready. There is no app-group event queue: shared
     files wait in the share inbox, and only their share id travels as an event.
   - Do not add a second queue or URL parser in an extension.
@@ -2171,53 +2172,40 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   routing and teardown belong to the stable `ChatRootView` root, which runs
   before a host's chat model exists. The selected screen never owns
   workspace startup or teardown.
-- **Windows.** Both apps declare `WindowGroup(for: ConversationWindowValue.self)`.
-  The iPhone and iPad run one window (`UIApplicationSupportsMultipleScenes` is
-  false in `Config/InfoPlists/RemoteCoder-Info.plist`). The Mac runs one conversation per window, with
-  the sidebar in every window: ⇧⌘N opens a window, and the app keeps running
-  after its last window closes. Native window tabbing is disabled; do not add
-  tab commands or tab adoption. Use the sidebar to switch chats.
-  - Each scene attaches its own `ChatWindowModel` with its own selection and
-    screens. A window without a value is the primary one; a window
-    opened with a value performs that `.open` once on its own screen.
-  - On the Mac, `WindowSceneValueMirror` keeps the scene value equal to what
-    the window presents: its conversation, the unsent draft it shows
-    (`.unsentDraft`), or no value for the primary window's new chat. `openWindow(value:)` therefore brings
-    the window already presenting a conversation forward, and
-    `switchConversation(to:)` does the same through
-    `ExternalEventRouter.focusWindow(presenting:besides:)`.
+- **Windows.** Both apps run a single chat window: iPhone and iPad use
+  `WindowGroup` (`UIApplicationSupportsMultipleScenes` is false in
+  `Config/InfoPlists/RemoteCoder-Info.plist`), and Mac uses `Window("RemoteCoder", id: "main")`
+  with `.handlesExternalEvents(matching: ["*"])` and `.handlesExternalEvents(preferring: ["*"], allowing: ["*"])`
+  so external `remotecoder://` links reuse the single window instead of opening
+  another. Native window tabbing is disabled; do not add multi-window or tab
+  commands. Use the sidebar to switch chats.
+  - On Mac, `RemoteCoderMacAppDelegate` returns `false` from
+    `applicationShouldTerminateAfterLastWindowClosed(_:)` so menu bar status,
+    `QuickEntry`, APNs, and dictation stay alive when the main window closes,
+    and reopens the main window from `applicationShouldHandleReopen(_:hasVisibleWindows:)`.
   - Workspace operations (send, model picker, new chat, navigation) act on the
     key window, and its selection is mirrored into `HostStore.activeHostID`.
     `WindowActivity` owns key tracking. On iOS the key screen is the scene
-    that last became `.active`. On the Mac every open window is active and the
-    key window follows `appearsActive`, because all visible Mac windows report
-    `.active`. Anything that sends from its own window (the quick-entry panel)
-    makes that window key first.
-  - An async operation that finishes after the key window changed still
-    resolves through the new key window.
-  - Each window's sidebar reads `sidebarSnapshot(arrangedBy:in:)` for its own
-    window, so it highlights that window's conversation.
-  - The router's `openWindow` is attached only where the device supports
-    multiple windows.
-  - Mac surfaces outside a window (Dock menu, menu bar item, notification
+    that last became `.active`. On the Mac the main window is active while open
+    and key status follows `appearsActive`. Anything that sends from its own
+    surface (the quick-entry panel) makes its `ChatWindowModel` key first.
+  - Mac surfaces outside the main window (Dock menu, menu bar item, notification
     taps, quick entry's Open in Window) deliver through
-    `ExternalEventRouter.summon`. It opens a window when none is open, and it
-    always opens one for `.open(.newChat)`. Open RemoteCoder calls
-    `openMainWindow` only while no `ChatWindowModel` is attached; that includes
-    the gateway configuration and loading states. Main windows and the Settings
-    window attach the openers, so they exist even when only Settings was
-    restored.
+    `ExternalEventRouter.summon`, which queues/delivers the event and invokes
+    `openMainWindow` (`openWindow(id: "main")`) to open or bring forward the
+    single main window. Main window and Settings attach the opener so it exists
+    even when only Settings is open.
 - **Quick entry (Mac).** `QuickEntry` in `Platform/macOS/` is the one owner of
   the ⌃⌥Space hotkey and its panel. `GlobalHotKey` uses Carbon
   `RegisterEventHotKey`, which works in the App Sandbox without an entitlement
   or TCC grant; a global `NSEvent` monitor would need Accessibility. The Chat
   settings toggle registers and unregisters it, and `stop()` runs on
   termination. Each opening attaches its own `ChatWindowModel` on a fixed draft
-  slot, makes it the key window while the non-activating `FloatingPanel` is
-  key (`setWindowKey`), sends through `workspace.send(from:)` and detaches it on
-  close. Open in Window delivers `.open(.conversation(address))` through the
-  router; the panel's screen never registers with it. Do not add a second send
-  path for the panel.
+  slot (`attachWindow(draftSlot:)`), makes it the key window while the
+  non-activating `FloatingPanel` is key (`setWindowKey`), sends through
+  `workspace.send(from:)` and detaches it on close. Open in Window delivers
+  `.openConversation(address)` through `summon`; the panel's screen never
+  registers with the router. Do not add a second send path for the panel.
 - **Voice Mode intent parameters: Model, Reasoning Effort, Fast Mode.**
   - `App/CodexIntentOptions.swift` projects the same visible new-chat models the
     composer offers, and `VoiceModeIntentOptions.swift` filters effort and speed

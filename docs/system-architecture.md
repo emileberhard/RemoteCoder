@@ -128,50 +128,49 @@ Rules:
   shows the target; it gates loops, warming, deferred refresh and observation.
   *Key*: the key window's target; it gates the audio route, haptics and the
   log-export host. *Leave*: each screen runs its own leave actions (flush the
-  draft, finish dictation, close the file reader). With one window (iPhone, iPad and Mac) all three coincide.
-- **One conversation per window.** Opening an address that is already presented
-  focuses that window, because `ConversationState` owns one `HistoryWindow` and two
-  viewers would evict each other's pages. Mac windows mirror what they present
-  into their scene value, so `openWindow(value:)` and `switchConversation(to:)`
-  bring the presenting window forward. The window's scene value is
-  `ConversationWindowValue` (`.conversation(ConversationAddress)`,
-  `.newChat(slot:)` or `.unsentDraft(UnsentDraftAddress)`). A secondary window
-  starts on the unsent draft keyed by its slot and then mirrors the exact draft
-  it shows, so restoration reopens that draft on its own target; the primary
-  window has no value and `LaunchRestore` reopens its draft.
+  draft, finish dictation, close the file reader). With one chat window (iPhone, iPad and Mac) all three coincide.
+- **Single chat window.** Both iOS and Mac show at most one chat window at a
+  time, so at most one conversation is presented and `ConversationState`'s
+  `HistoryWindow` has a single viewer. Mac uses `Window("RemoteCoder", id: "main")`
+  with `.handlesExternalEvents(matching: ["*"])` and `.handlesExternalEvents(preferring: ["*"], allowing: ["*"])`,
+  and `ChatWorkspaceModel.openDeepLink(_:)` handles `remotecoder://` URLs
+  in-process for both transcript links and system `onOpenURL` deliveries so
+  clicking a conversation link switches in place instead of opening another
+  window. `QuickEntry` attaches a temporary `ChatWindowModel` on its fixed draft
+  slot (`attachWindow(draftSlot:)`) without registering as an event screen.
 - **Workspace flows take the originating screen.** Send and question answers receive the `ChatScreenModel` that started
   them, never the key window's selection.
 - **The workspace routes events to screens.** `ExternalEventRouter` holds one
-  event and delivers it once to an `.active` window. An `.open` goes to the
-  window already presenting the address, else the only window, else a new window
-  where the platform supports several, else the key window; every other event
-  goes to the key window. Quick actions and deep links expire after 60 s; a
+  event and delivers it once to the active registered screen (falling back to
+  the registered main screen if an unregistered surface such as `QuickEntry` is
+  key). Quick actions and deep links expire after 60 s; a
   completion-notification tap does not, and waits until navigation is ready.
-  Each window's stable `ChatRootView` owns registration and window activity even
+  The stable `ChatRootView` owns registration and window activity even
   while its selected screen is loading or unavailable. The selected screen supplies
   its current presentation actions; replacing it never unregisters the window.
   A no-screen New Chat resolves through the existing new-conversation target owner,
   restores cached accounts only when needed and selects a ready configured target.
   It never joins unrelated target retirements or substitutes an unavailable preferred
-  account. Initial and not-yet-mounted presentation events share one root-owned slot;
+  account. Not-yet-mounted presentation events share one root-owned slot;
   newer events cancel older preparation, and detach cancels it and unregisters.
   Admission captures the workspace navigation generation before scheduling;
   queued or suspended work checks that same generation before any mutation and
   cannot supersede later navigation or adopt its generation.
-- **Selection.** Each window owns its selected target, so windows present
-  independent conversations. The conversation list is target-scoped and a screen
-  holds only what it presents. The key target comes from the key window, and
-  its selection is mirrored into `activeHostID`, the persisted last-used host,
-  which workspace navigation, Shortcuts and direct exec follow.
-- **Windows.** The iPad app runs one window
+- **Selection.** Each `ChatWindowModel` owns its selected target. The
+  conversation list is target-scoped and a screen holds only what it presents.
+  The key target comes from the key window, and its selection is mirrored into
+  `activeHostID`, the persisted last-used host, which workspace navigation,
+  Shortcuts and direct exec follow.
+- **Windows.** iPhone and iPad run one window
   (`UIApplicationSupportsMultipleScenes` is false in `Config/InfoPlists/RemoteCoder-Info.plist`). The Mac
-  app's `WindowGroup` is keyed by `ConversationWindowValue`: New Window
-  and Open in New Window each present their own conversation. Native window
-  tabbing is disabled; the sidebar switches chats. The focused window is the key
-  window. Send, the model
-  picker, the question editor, voice-call binding, dictation hand-off, the
-  foreground-refresh throttle and observation reconciliation resolve through
-  the key window rather than the originating one.
+  app runs one main `Window("RemoteCoder", id: "main")` alongside Settings and
+  the `QuickEntry` panel; native window tabbing is disabled and the sidebar
+  switches chats. Closing the main window keeps the Mac app running (via
+  `applicationShouldTerminateAfterLastWindowClosed`), and Dock reopen or
+  `ExternalEventRouter.summon` reopens or brings forward that single window.
+  Send, the model picker, the question editor, voice-call binding, dictation
+  hand-off, the foreground-refresh throttle and observation reconciliation
+  resolve through the key window rather than the originating one.
 
 | Invariant | Owner |
 |---|---|

@@ -3,7 +3,6 @@ import SwiftUI
 struct ChatCommands: Commands {
     let shortcuts: ChatKeyboardShortcuts
     @FocusedValue(\.chatWindowActions) private var actions
-    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -13,8 +12,6 @@ struct ChatCommands: Commands {
                 Button("New Chat on \(host.name)") { actions?.newChatOnHost(host.id) }
                     .disabled((actions?.hosts.count ?? 0) < 2)
             }
-            Button(ChatCommand.newWindow.title(in: actions)) { openWindow.openNewChatWindow() }
-                .keyboardShortcut(shortcuts.shortcut(for: .newWindow))
             Divider()
             command(.fork)
             command(.chooseFolder)

@@ -8,7 +8,6 @@ import UIKit
 @Suite(.serialized)
 struct ChatRootEventTests {
     enum RootState: Sendable { case loading, retirementFailure }
-    enum Entry: Sendable { case quickAction, newChatLink }
     enum Supersession: Sendable { case cancellation, navigation }
 
     @Test
@@ -16,7 +15,7 @@ struct ChatRootEventTests {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let workspace = fixture.workspace
-        let window = workspace.attachWindow(opening: nil)
+        let window = workspace.attachWindow()
         defer { workspace.detachWindow(window) }
         let mini = try #require(workspace.model(for: fixture.mini.id))
         let book = try #require(window.screen(for: .init(hostID: fixture.book.id)))
@@ -26,7 +25,7 @@ struct ChatRootEventTests {
         let generation = workspace.navigationGeneration
         let event = ExternalEvent.quickAction(.init(action: .newChat))
         try await workspace.prepareWindowForExternalEvent(event, in: window, admittedGeneration: generation)
-        let prepared = ChatOpeningEvent.admitted(event, generation)
+        let prepared = ChatOpeningEvent(event: event, generation: generation)
 
         workspace.selectConversation(at: address)
         var performed = false
@@ -40,23 +39,40 @@ struct ChatRootEventTests {
     }
 
     @Test
-    func anInitialWindowValueReachesTheNativeComposer() async throws {
+    func conversationDeepLinkSwitchesInTheSameWindowAndReportsUnknownHosts() async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
+        let workspace = fixture.workspace
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let hosted = HostedWindow(scene: scene)
-        let slot = UUID()
-        let controller = UIHostingController(rootView: ChatRootView(workspace: fixture.workspace, sceneValue: .constant(.newChat(slot: slot)))
-            .environment(fixture.workspace.settings)
-            .environment(fixture.workspace.modelPickerPreferences)
+        let controller = UIHostingController(rootView: ChatRootView(workspace: workspace)
+            .environment(workspace.settings)
+            .environment(workspace.modelPickerPreferences)
             .environment(AppThemeStore())
             .environment(\.scenePhase, .active)
             .environment(\.horizontalSizeClass, .compact))
         hosted.show(controller)
         defer { controller.view.endEditing(true); hosted.close() }
+        try #require(await waitUntil { workspace.keyWindow.isAttached && workspace.events.keyScreenID == workspace.keyWindow.id })
 
-        #expect(await waitUntil { composer(in: controller.view)?.isFirstResponder == true })
-        #expect(fixture.workspace.keyWindow.id == slot)
+        let window = workspace.keyWindow
+        let book = try #require(window.screen(for: .init(hostID: fixture.book.id)))
+        book.activeConversation = try fixture.thread("book-linked", updatedAt: 20)
+        let address = ConversationAddress(hostID: fixture.book.id, threadID: "book-linked")
+        let link = RemoteCoderDeepLinks.url(for: RemoteCoderConversationLink(hostID: fixture.book.id, threadID: "book-linked"))
+
+        #expect(workspace.openDeepLink(link))
+        #expect(await waitUntil { workspace.isShowingConversation(at: address, on: window.selectedScreen) })
+        #expect(workspace.keyWindow === window)
+        #expect(workspace.isMainWindowOpen)
+        #expect(workspace.externalEventError == nil)
+
+        let unknownHostLink = RemoteCoderDeepLinks.url(for: RemoteCoderConversationLink(hostID: UUID(), threadID: "missing"))
+        #expect(workspace.openDeepLink(unknownHostLink))
+        #expect(workspace.externalEventError != nil)
+
+        let nonAppURL = try #require(URL(string: "https://example.com"))
+        #expect(!workspace.openDeepLink(nonAppURL))
     }
 
     @Test
@@ -64,7 +80,7 @@ struct ChatRootEventTests {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let workspace = fixture.workspace
-        let window = workspace.attachWindow(opening: nil)
+        let window = workspace.attachWindow()
         defer { workspace.detachWindow(window) }
         let mini = try #require(workspace.model(for: fixture.mini.id))
         window.removeScreen(for: mini.target)
@@ -84,7 +100,7 @@ struct ChatRootEventTests {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let workspace = fixture.workspace
-        let window = workspace.attachWindow(opening: nil)
+        let window = workspace.attachWindow()
         defer { workspace.detachWindow(window) }
         let mini = try #require(workspace.model(for: fixture.mini.id))
         let book = try #require(window.screen(for: .init(hostID: fixture.book.id)))
@@ -109,8 +125,8 @@ struct ChatRootEventTests {
             "A superseded queued event must leave the newer conversation switch intact")
     }
 
-    @Test(arguments: [RootState.loading, .retirementFailure], [Entry.quickAction, .newChatLink])
-    func newChatRoutesWhileTheRootHasNoSelectedScreen(state: RootState, entry: Entry) async throws {
+    @Test(arguments: [RootState.loading, .retirementFailure])
+    func newChatRoutesWhileTheRootHasNoSelectedScreen(state: RootState) async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let workspace = fixture.workspace
@@ -138,7 +154,7 @@ struct ChatRootEventTests {
         }
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let hosted = HostedWindow(scene: scene)
-        let controller = UIHostingController(rootView: ChatRootView(workspace: workspace, sceneValue: .constant(nil))
+        let controller = UIHostingController(rootView: ChatRootView(workspace: workspace)
             .environment(workspace.settings)
             .environment(workspace.modelPickerPreferences)
             .environment(AppThemeStore())
@@ -157,11 +173,7 @@ struct ChatRootEventTests {
         }
         #expect(window.selectedScreen == nil)
         #expect(await waitUntil { workspace.events.keyScreenID == window.id })
-        let event: ExternalEvent = switch entry {
-        case .quickAction: .quickAction(.init(action: .newChat))
-        case .newChatLink: .open(.newChat(slot: UUID()))
-        }
-        workspace.events.receive(event)
+        workspace.events.receive(.quickAction(.init(action: .newChat)))
 
         #expect(await waitUntil { composer(in: controller.view)?.isFirstResponder == true },
             "A real New Chat event must reach the native composer while the root has no selected screen")

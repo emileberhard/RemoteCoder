@@ -890,13 +890,10 @@ struct ChatWorkspaceLifecycleTests {
             let relaunched = await relaunch(fixture)
             defer { await relaunched.retireEverything() }
             let screenID = UUID()
-            relaunched.events.register(.init(
-                presents: { _ in false },
-                perform: { event in
-                    guard case .completionNotificationTap(let payloadJSON) = event else { return }
-                    Task { await relaunched.handleCompletionNotificationTap(payloadJSON: payloadJSON) }
-                }
-            ), id: screenID)
+            relaunched.events.register(id: screenID) { event in
+                guard case .completionNotificationTap(let payloadJSON) = event else { return }
+                Task { await relaunched.handleCompletionNotificationTap(payloadJSON: payloadJSON) }
+            }
             relaunched.events.setActive(true, screen: screenID)
             relaunched.events.receive(.completionNotificationTap(
                 payloadJSON: try String(decoding: JSONEncoder().encode(notification("tapped", host: fixture.mini.id)), as: UTF8.self)))

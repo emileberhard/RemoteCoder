@@ -124,17 +124,14 @@ struct RemoteCoderApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(for: ConversationWindowValue.self) { $window in
-            WindowRoot(app: appDelegate.app, value: $window)
+        WindowGroup {
+            WindowRoot(app: appDelegate.app)
         }
     }
 }
 
 private struct WindowRoot: View {
     let app: RemoteCoderAppModel
-    @Binding var value: ConversationWindowValue?
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
 
     var body: some View {
         Group {
@@ -144,10 +141,10 @@ private struct WindowRoot: View {
             } else if ProcessInfo.processInfo.arguments.contains("-mermaid-preview-fixture") {
                 MermaidPreviewFixture()
             } else {
-                ChatRootView(workspace: app.workspace, sceneValue: $value)
+                ChatRootView(workspace: app.workspace)
             }
             #else
-            ChatRootView(workspace: app.workspace, sceneValue: $value)
+            ChatRootView(workspace: app.workspace)
             #endif
         }
         .environment(app.workspace.settings)
@@ -158,10 +155,6 @@ private struct WindowRoot: View {
         .environment(\.siteIcons, app.workspace.siteIcons)
         .modifier(SceneLifecycle(app: app))
         .background { HapticAttachment(voiceCall: app.voiceCalls.call) }
-        .onAppear {
-            guard supportsMultipleWindows else { return }
-            app.workspace.events.attach(openWindow: { openWindow(value: $0) })
-        }
     }
 }
 

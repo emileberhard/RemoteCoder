@@ -41,6 +41,18 @@ final class RemoteCoderMacAppDelegate: NSObject, NSApplicationDelegate, UNUserNo
         app.synchronizeHosts()
     }
 
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag || !app.workspace.isMainWindowOpen {
+            app.workspace.events.openMainWindow()
+            return false
+        }
+        return true
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard terminationTask == nil else { return .terminateLater }
         let drain: TerminationDrain

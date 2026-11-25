@@ -5,7 +5,7 @@ import OSLog
 enum ExternalEvent: Equatable, Sendable {
     case quickAction(RemoteCoderQuickActionRequest)
     case presentVoiceCall(UUID)
-    case open(ConversationWindowValue, opening: ConversationSearchOpening? = nil)
+    case openConversation(ConversationAddress, opening: ConversationSearchOpening? = nil)
     case sharedItems(UUID)
     case completionNotificationTap(payloadJSON: String)
 
@@ -18,35 +18,24 @@ enum ExternalEvent: Equatable, Sendable {
 @MainActor
 @Observable
 final class ExternalEventRouter {
-    struct Screen {
-        let presents: @MainActor (ConversationWindowValue) -> Bool
-        let perform: @MainActor (ExternalEvent) -> Void
-    }
-
     private struct Pending {
         let event: ExternalEvent
         let receivedAt: Date
-        var waitingForWindow = false
     }
 
     static let maximumAge: TimeInterval = 60
 
-    @ObservationIgnored private var screens: [UUID: Screen] = [:]
+    @ObservationIgnored private var screens: [UUID: @MainActor (ExternalEvent) -> Void] = [:]
     @ObservationIgnored private var activeScreens: Set<UUID> = []
     private(set) var keyScreenID: UUID?
     @ObservationIgnored private var pending: Pending?
     @ObservationIgnored private var isNavigationReady = false
-    @ObservationIgnored private var openWindow: (@MainActor (ConversationWindowValue) -> Void)?
     @ObservationIgnored private var mainWindowOpener: (@MainActor () -> Void)?
     @ObservationIgnored private let now: @MainActor () -> Date
     @ObservationIgnored private let logger = AppLogger(category: "ExternalEvents")
 
     init(now: @escaping @MainActor () -> Date) {
         self.now = now
-    }
-
-    func attach(openWindow: @escaping @MainActor (ConversationWindowValue) -> Void) {
-        self.openWindow = openWindow
     }
 
     func attach(openMainWindow: @escaping @MainActor () -> Void) {
@@ -63,15 +52,18 @@ final class ExternalEventRouter {
         deliverPending()
     }
 
-    func register(_ screen: Screen, id: UUID) {
-        screens[id] = screen
+    func register(id: UUID, perform: @escaping @MainActor (ExternalEvent) -> Void) {
+        screens[id] = perform
         deliverPending()
     }
 
     func unregister(id: UUID) {
         screens[id] = nil
         activeScreens.remove(id)
-        if keyScreenID == id { keyScreenID = activeScreens.first }
+        if keyScreenID == id {
+            keyScreenID = activeScreens.first
+            deliverPending()
+        }
     }
 
     func setActive(_ isActive: Bool, screen id: UUID) {
@@ -109,30 +101,12 @@ final class ExternalEventRouter {
     }
 
     func summon(_ event: ExternalEvent) {
-        guard let openWindow else { return receive(event) }
-        switch event {
-        case .open(.newChat(let slot), nil):
-            openWindow(.newChat(slot: slot))
-        case .open(let value, let opening) where screens.isEmpty:
-            if opening != nil { pending = Pending(event: event, receivedAt: now(), waitingForWindow: true) }
-            openWindow(value)
-        default:
-            receive(event)
-            if pending != nil, screens.isEmpty { openWindow(.newChat(slot: UUID())) }
+        receive(event)
+        if let mainWindowOpener {
+            mainWindowOpener()
+        } else if screens.isEmpty {
+            logger.error("No window has attached a window opener; the main window cannot open.")
         }
-    }
-
-    func claimOpening(for value: ConversationWindowValue) -> ConversationSearchOpening? {
-        guard let held = pending, held.waitingForWindow,
-              case .open(let requested, let opening) = held.event, requested == value else { return nil }
-        pending = nil
-        return now().timeIntervalSince(held.receivedAt) <= Self.maximumAge ? opening : nil
-    }
-
-    func focusWindow(presenting value: ConversationWindowValue, besides id: UUID) -> Bool {
-        guard let openWindow, screens.contains(where: { $0.key != id && $0.value.presents(value) }) else { return false }
-        openWindow(value)
-        return true
     }
 
     func openMainWindow() {
@@ -149,48 +123,25 @@ final class ExternalEventRouter {
             logger.notice("Dropped expired external event.")
             return
         }
-        guard let destination = destination(for: held.event) else { return }
+        if case .completionNotificationTap = held.event, !isNavigationReady { return }
+        guard let id = keyScreen else { return }
         pending = nil
-        switch destination {
-        case .screen(let id):
-            screens[id]?.perform(held.event)
-        case .newWindow(let value):
-            if case .open(_, .some) = held.event {
-                var waiting = held
-                waiting.waitingForWindow = true
-                pending = waiting
-            }
-            openWindow?(value)
-        }
-    }
-
-    private enum Destination {
-        case screen(UUID)
-        case newWindow(ConversationWindowValue)
-    }
-
-    private func destination(for event: ExternalEvent) -> Destination? {
-        if case .completionNotificationTap = event, !isNavigationReady { return nil }
-        guard case .open(let value, _) = event else { return keyScreen.map { .screen($0) } }
-        if let presenting = activeScreens.first(where: { screens[$0]?.presents(value) == true }) {
-            return .screen(presenting)
-        }
-        if pending?.waitingForWindow == true { return nil }
-        if screens.count == 1, let only = screens.keys.first, activeScreens.contains(only) { return .screen(only) }
-        if openWindow != nil, !activeScreens.isEmpty { return .newWindow(value) }
-        return keyScreen.map { .screen($0) }
+        screens[id]?(held.event)
     }
 
     private var keyScreen: UUID? {
-        keyScreenID.flatMap { screens[$0] != nil && activeScreens.contains($0) ? $0 : nil }
+        if let keyScreenID, screens[keyScreenID] != nil, activeScreens.contains(keyScreenID) {
+            return keyScreenID
+        }
+        return activeScreens.first { screens[$0] != nil }
     }
 }
 
 extension ExternalEvent {
     init?(url: URL) {
         if let link = RemoteCoderDeepLinks.conversation(from: url) {
-            self = .open(.conversation(ConversationAddress(hostID: link.hostID, threadID: link.threadID)),
-                         opening: link.itemKey.map { ConversationSearchOpening(itemKey: $0, findTerm: nil) })
+            self = .openConversation(ConversationAddress(hostID: link.hostID, threadID: link.threadID),
+                                     opening: link.itemKey.map { ConversationSearchOpening(itemKey: $0, findTerm: nil) })
         } else if let request = RemoteCoderDeepLinks.request(from: url) {
             self = .quickAction(request)
         } else if let id = RemoteCoderDeepLinks.sharedItems(from: url) {

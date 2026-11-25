@@ -148,7 +148,7 @@ struct ChatWorkspaceStartupTests {
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previousWindow = scene.keyWindow
         let window = UIWindow(windowScene: scene)
-        let controller = UIHostingController(rootView: ChatRootView(workspace: workspace, sceneValue: .constant(nil))
+        let controller = UIHostingController(rootView: ChatRootView(workspace: workspace)
             .environment(workspace.settings)
             .environment(workspace.modelPickerPreferences)
             .environment(AppThemeStore())

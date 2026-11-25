@@ -14,7 +14,7 @@ struct NewChatFocusTests {
         defer { await fixture.cleanUp() }
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let hosted = HostedWindow(scene: scene)
-        let controller = UIHostingController(rootView: ChatRootView(workspace: fixture.workspace, sceneValue: .constant(nil))
+        let controller = UIHostingController(rootView: ChatRootView(workspace: fixture.workspace)
             .environment(fixture.workspace.settings)
             .environment(fixture.workspace.modelPickerPreferences)
             .environment(AppThemeStore())
@@ -24,14 +24,14 @@ struct NewChatFocusTests {
         defer { controller.view.endEditing(true); hosted.close() }
         #expect(await waitUntil { fixture.workspace.keyWindow.isAttached && fixture.workspace.events.keyScreenID != nil })
 
-        fixture.workspace.events.receive(.open(.newChat(slot: UUID())))
+        fixture.workspace.events.receive(.quickAction(.init(action: .newChat)))
         try #require(await waitUntil { hasComposerFirstResponder(in: controller.view) },
             "The real New Chat event must be able to focus the native composer before testing cancellation")
         controller.view.endEditing(true)
         try #require(await waitUntil { !hasComposerFirstResponder(in: controller.view) })
 
         let before = try #require(fixture.workspace.selectedScreen).transcriptIdentity
-        fixture.workspace.events.receive(.open(.newChat(slot: UUID())))
+        fixture.workspace.events.receive(.quickAction(.init(action: .newChat)))
         try #require(fixture.workspace.selectedScreen?.transcriptIdentity != before)
         let request = try #require(fixture.workspace.keyWindow.composerFocusCompletion)
         let completed = TestFlag()

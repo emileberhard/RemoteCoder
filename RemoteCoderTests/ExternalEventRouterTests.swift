@@ -10,12 +10,10 @@ struct ExternalEventRouterTests {
 
     @MainActor private final class Window {
         let id = UUID()
-        var presented: Set<ConversationWindowValue> = []
         var performed: [ExternalEvent] = []
 
-        var screen: ExternalEventRouter.Screen {
-            .init(presents: { [unowned self] in self.presented.contains($0) },
-                  perform: { [unowned self] in self.performed.append($0) })
+        func register(in router: ExternalEventRouter) {
+            router.register(id: id) { [unowned self] in self.performed.append($0) }
         }
     }
 
@@ -39,7 +37,7 @@ struct ExternalEventRouterTests {
     @Test func aQuickActionCarriesItsWholeConfigurationToTheActiveScreenExactlyOnce() {
         let router = router()
         let window = Window()
-        router.register(window.screen, id: window.id)
+        window.register(in: router)
         router.setActive(true, screen: window.id)
 
         router.receive(voice)
@@ -53,7 +51,7 @@ struct ExternalEventRouterTests {
         let router = router()
         let window = Window()
         router.receive(newChat)
-        router.register(window.screen, id: window.id)
+        window.register(in: router)
         #expect(window.performed.isEmpty)
 
         router.setActive(true, screen: window.id)
@@ -64,7 +62,7 @@ struct ExternalEventRouterTests {
     @Test func aNewerEventReplacesAPendingOneAndAnExpiredOneIsDropped() {
         let router = router()
         let window = Window()
-        router.register(window.screen, id: window.id)
+        window.register(in: router)
         router.receive(voice)
         router.receive(newChat)
         router.setActive(true, screen: window.id)
@@ -77,55 +75,47 @@ struct ExternalEventRouterTests {
         #expect(window.performed == [newChat])
     }
 
-    @Test func summoningWithNoWindowOpenOpensOneForTheEvent() {
+    @Test func summoningOpensTheMainWindowAndDeliversTheLatestEvent() {
         let router = router()
-        var opened: [ConversationWindowValue] = []
-        router.attach(openWindow: { opened.append($0) })
-        let conversation = ConversationWindowValue.conversation(address)
+        var mainWindowOpens = 0
+        router.attach(openMainWindow: { mainWindowOpens += 1 })
 
-        router.summon(.open(conversation))
+        router.summon(.openConversation(address))
         router.summon(newChat)
 
-        #expect(opened.count == 2)
-        #expect(opened.first == conversation)
-        guard case .newChat = opened.last else { Issue.record("expected a new-chat window"); return }
+        #expect(mainWindowOpens == 2)
 
         let window = Window()
-        router.register(window.screen, id: window.id)
+        window.register(in: router)
         router.setKey(screen: window.id)
         #expect(window.performed == [newChat])
 
-        router.summon(.open(.newChat(slot: window.id)))
-        #expect(opened.count == 3)
-        #expect(window.performed == [newChat])
+        router.summon(.openConversation(address))
+        #expect(mainWindowOpens == 3)
+        #expect(window.performed == [newChat, .openConversation(address)])
     }
 
-    @Test func aNewConversationWindowClaimsItsItemOnlyOnce() {
+    @Test func receivingAConversationEventDeliversToTheOpenWindowWithoutOpeningAnother() {
         let router = router()
-        let value = ConversationWindowValue.conversation(address)
+        let window = Window()
+        var mainWindowOpens = 0
+        router.attach(openMainWindow: { mainWindowOpens += 1 })
+        window.register(in: router)
+        router.setActive(true, screen: window.id)
+
         let opening = ConversationSearchOpening(itemKey: "key", findTerm: nil)
-        var opened: [ConversationWindowValue] = []
-        router.attach(openWindow: { opened.append($0) })
-        let first = Window()
-        let second = Window()
-        for window in [first, second] {
-            router.register(window.screen, id: window.id)
-            router.setActive(true, screen: window.id)
-        }
-        router.receive(.open(value, opening: opening))
-        #expect(opened == [value])
-        #expect(first.performed.isEmpty && second.performed.isEmpty)
-        #expect(router.claimOpening(for: .newChat(slot: UUID())) == nil)
-        #expect(router.claimOpening(for: value) == opening)
-        #expect(router.claimOpening(for: value) == nil)
+        router.receive(.openConversation(address, opening: opening))
+
+        #expect(window.performed == [.openConversation(address, opening: opening)])
+        #expect(mainWindowOpens == 0)
     }
 
     @Test func anOpenedMacWindowKeepsTheFocusedWindowKey() {
         let router = router()
         let focused = Window()
         let restored = Window()
-        router.register(focused.screen, id: focused.id)
-        router.register(restored.screen, id: restored.id)
+        focused.register(in: router)
+        restored.register(in: router)
         router.setKey(screen: focused.id)
         router.setOpen(screen: restored.id)
 
@@ -138,26 +128,24 @@ struct ExternalEventRouterTests {
         #expect(restored.performed == [newChat])
     }
 
-    @Test func aQuickActionGoesToTheKeyScreen() {
+    @Test func anUnregisteredKeyWindowStillDeliversEventsToTheRegisteredMainWindow() {
         let router = router()
-        let first = Window()
-        let second = Window()
-        for window in [first, second] {
-            router.register(window.screen, id: window.id)
-            router.setActive(true, screen: window.id)
-        }
+        let main = Window()
+        let quickEntryID = UUID()
+        main.register(in: router)
+        router.setOpen(screen: main.id)
+        router.setKey(screen: quickEntryID)
 
-        router.receive(newChat)
+        router.receive(.openConversation(address))
 
-        #expect(first.performed.isEmpty)
-        #expect(second.performed == [newChat])
+        #expect(main.performed == [.openConversation(address)])
     }
 
     @Test func aNotificationTapWaitsForNavigationAndNeverExpires() {
         let router = router()
         let window = Window()
         let tap = ExternalEvent.completionNotificationTap(payloadJSON: "{}")
-        router.register(window.screen, id: window.id)
+        window.register(in: router)
         router.setActive(true, screen: window.id)
 
         router.receive(tap)
@@ -169,52 +157,5 @@ struct ExternalEventRouterTests {
 
         #expect(window.performed == [tap])
         #expect(!router.hasPendingCompletionTap)
-    }
-
-    @Test func openingAnAddressFocusesTheScreenPresentingIt() {
-        let router = router()
-        let presenting = Window()
-        let key = Window()
-        presenting.presented = [.conversation(address)]
-        for window in [presenting, key] {
-            router.register(window.screen, id: window.id)
-            router.setActive(true, screen: window.id)
-        }
-
-        router.receive(.open(.conversation(address)))
-
-        #expect(presenting.performed == [.open(.conversation(address))])
-        #expect(key.performed.isEmpty)
-    }
-
-    @Test func theOnlyScreenNavigatesEvenWhenWindowsCanBeOpened() {
-        let router = router()
-        let only = Window()
-        var opened: [ConversationWindowValue] = []
-        router.attach(openWindow: { opened.append($0) })
-        router.register(only.screen, id: only.id)
-        router.setActive(true, screen: only.id)
-
-        router.receive(.open(.conversation(address)))
-
-        #expect(only.performed == [.open(.conversation(address))])
-        #expect(opened.isEmpty)
-    }
-
-    @Test func anUnpresentedAddressOpensAWindowWhenSeveralScreensExist() {
-        let router = router()
-        let first = Window()
-        let second = Window()
-        var opened: [ConversationWindowValue] = []
-        router.attach(openWindow: { opened.append($0) })
-        for window in [first, second] {
-            router.register(window.screen, id: window.id)
-            router.setActive(true, screen: window.id)
-        }
-
-        router.receive(.open(.conversation(address)))
-
-        #expect(opened == [.conversation(address)])
-        #expect(first.performed.isEmpty && second.performed.isEmpty)
     }
 }

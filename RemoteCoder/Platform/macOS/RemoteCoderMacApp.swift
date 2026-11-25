@@ -8,10 +8,11 @@ struct RemoteCoderMacApp: App {
     private var app: RemoteCoderAppModel { delegate.app }
 
     var body: some Scene {
-        WindowGroup("RemoteCoder", id: "main", for: ConversationWindowValue.self) { $value in
-            WindowRoot(app: app, environment: environment, value: $value)
+        Window("RemoteCoder", id: "main") {
+            WindowRoot(app: app, environment: environment)
         }
         .defaultSize(width: 1100, height: 760)
+        .handlesExternalEvents(matching: ["*"])
         .commands {
             ChatCommands(shortcuts: delegate.shortcuts)
             InterfaceZoomCommands(zoom: delegate.zoom)
@@ -55,7 +56,6 @@ private struct AppEnvironment: ViewModifier {
 private struct WindowRoot: View {
     let app: RemoteCoderAppModel
     let environment: AppEnvironment
-    @Binding var value: ConversationWindowValue?
 
     var body: some View {
         Group {
@@ -63,16 +63,17 @@ private struct WindowRoot: View {
             if ProcessInfo.processInfo.arguments.contains("-html-visual-fixture") {
                 HTMLVisualFixture()
             } else {
-                ChatRootView(workspace: app.workspace, sceneValue: $value)
+                ChatRootView(workspace: app.workspace)
             }
             #else
-            ChatRootView(workspace: app.workspace, sceneValue: $value)
+            ChatRootView(workspace: app.workspace)
             #endif
         }
             .modifier(environment)
             .modifier(SceneLifecycle(app: app))
             .frame(minWidth: 720, minHeight: 520)
             .modifier(WindowOpeners(events: app.workspace.events))
+            .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
     }
 }
 
@@ -82,7 +83,6 @@ private struct WindowOpeners: ViewModifier {
 
     func body(content: Content) -> some View {
         content.onAppear {
-            events.attach(openWindow: { openWindow(value: $0) })
             events.attach(openMainWindow: { openWindow(id: "main") })
         }
     }

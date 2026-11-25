@@ -8,7 +8,6 @@ final class AttentionCenter {
     enum Action: Sendable {
         case open(ConversationAddress)
         case newChat
-        case newWindow
         case showApp
     }
 
@@ -53,13 +52,11 @@ final class AttentionCenter {
         NSApplication.shared.activate()
         switch action {
         case .open(let address):
-            workspace.events.summon(.open(.conversation(address)))
+            workspace.events.summon(.openConversation(address))
         case .newChat:
             workspace.events.summon(.quickAction(RemoteCoderQuickActionRequest(action: .newChat)))
-        case .newWindow:
-            workspace.events.summon(.open(.newChat(slot: UUID())))
         case .showApp:
-            if !workspace.hasOpenWindow { workspace.events.openMainWindow() }
+            workspace.events.openMainWindow()
         }
     }
 

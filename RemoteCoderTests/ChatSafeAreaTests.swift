@@ -17,7 +17,7 @@ struct ChatSafeAreaTests {
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let hosted = HostedWindow(scene: scene)
         let controller = UIHostingController(rootView:
-            ChatRootView(workspace: fixture.workspace, sceneValue: .constant(nil))
+            ChatRootView(workspace: fixture.workspace)
                 .environment(fixture.workspace.settings)
                 .environment(fixture.workspace.modelPickerPreferences)
                 .environment(AppThemeStore())
@@ -125,7 +125,7 @@ struct ChatSafeAreaTests {
         defer { hosted.close() }
         let window = try #require(host.view.window)
         host.view.layoutIfNeeded()
-        let chat = fixture.workspace.attachWindow(opening: nil)
+        let chat = fixture.workspace.attachWindow()
         defer { fixture.workspace.detachWindow(chat) }
         let context = ChatLayoutContext(window: chat)
         #expect(ChatLayoutContext(window: nil).description.contains("thread=unknown"))
