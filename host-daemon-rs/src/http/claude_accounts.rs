@@ -290,6 +290,19 @@ fn map_directory(value: Value) -> Result<Directory> {
         active_route,
         route_options,
     } = inventory.codex.unwrap_or_default();
+    ensure!(
+        inventory.claude.route.as_ref().is_none_or(|route| matches!(
+            route.kind.as_str(),
+            "subscription" | "copilot" | "openrouter"
+        )),
+        "Unknown legacy Claude route"
+    );
+    ensure!(
+        route
+            .as_ref()
+            .is_none_or(|route| matches!(route.kind.as_str(), "subscription" | "copilot")),
+        "Unknown legacy Codex route"
+    );
     Ok(Directory {
         automatic: inventory.claude.automatic,
         models,
