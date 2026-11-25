@@ -227,6 +227,51 @@ struct ChatRootEventTests {
     }
 
     @Test
+    func closingAndReopeningMainWindowCancelsPendingUncachedConversationLink() async throws {
+        let gateway = try FakeGatewayServer()
+        let port = try await gateway.start()
+        await gateway.holdThreadRead()
+        let fixture = await WorkspaceFixture(miniGatewayPort: port)
+        defer {
+            await gateway.releaseHeldThreadRead()
+            await fixture.cleanUp()
+            await gateway.stop()
+        }
+        let workspace = fixture.workspace
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let hosted = HostedWindow(scene: scene)
+        let controller = UIHostingController(rootView: ChatRootView(workspace: workspace)
+            .environment(workspace.settings)
+            .environment(workspace.modelPickerPreferences)
+            .environment(AppThemeStore())
+            .environment(\.scenePhase, .active)
+            .environment(\.horizontalSizeClass, .compact))
+        hosted.show(controller)
+        defer { controller.view.endEditing(true); hosted.close() }
+        try #require(await waitUntil { workspace.keyWindow.isAttached && workspace.events.keyScreenID == workspace.keyWindow.id })
+
+        let main = workspace.keyWindow
+        let mainMini = try #require(main.screen(for: .init(hostID: fixture.mini.id)))
+        let chatA = try fixture.thread("chat-a", updatedAt: 10)
+        mainMini.resumeConversation(chatA)
+        try #require(mainMini.activeSessionID == "chat-a")
+
+        let link = RemoteCoderDeepLinks.url(for: RemoteCoderConversationLink(hostID: fixture.mini.id, threadID: "chat-b"))
+        #expect(workspace.openDeepLink(link))
+        await gateway.waitForHeldThreadRead()
+
+        workspace.detachWindow(main)
+        let reopened = workspace.attachMainWindow()
+        #expect(reopened === main)
+
+        await gateway.releaseHeldThreadRead()
+        try await Task.sleep(for: .milliseconds(150))
+
+        #expect(workspace.isShowingConversation(at: ConversationAddress(hostID: fixture.mini.id, threadID: "chat-a"),
+                                                on: reopened.selectedScreen))
+    }
+
+    @Test
     func anEndedVoiceCallsPresentationIsDroppedWithoutOpeningAChat() async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }

@@ -77,6 +77,7 @@ final class ChatWindowModel {
     func detach() {
         cancelComposerFocus()
         search.cancel()
+        for screen in screens.values { screen.cancelPendingConversationOpen() }
         isAttached = false
         attachmentGeneration = UUID()
     }
