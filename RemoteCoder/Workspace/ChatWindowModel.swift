@@ -9,6 +9,7 @@ final class ChatWindowModel {
     let isPrimary: Bool
     private(set) var selectedTarget: ExecutionTarget?
     private(set) var isAttached = false
+    @ObservationIgnored private(set) var attachmentGeneration = UUID()
     private(set) var isVisible = true
     private(set) var isHistoryDrawerOpen = false
     var showsHistoryDrawer: Bool { isHistoryDrawerOpen && isVisible }
@@ -69,6 +70,7 @@ final class ChatWindowModel {
     }
 
     func attach() {
+        if !isAttached { attachmentGeneration = UUID() }
         isAttached = true
     }
 
@@ -76,6 +78,7 @@ final class ChatWindowModel {
         cancelComposerFocus()
         search.cancel()
         isAttached = false
+        attachmentGeneration = UUID()
     }
 
     func select(_ target: ExecutionTarget?) {

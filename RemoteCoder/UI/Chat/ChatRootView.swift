@@ -133,9 +133,11 @@ struct ChatRootView: View {
             }
         }
         let id = UUID()
+        let attachmentGeneration = window.attachmentGeneration
         let task = Task { @MainActor in
             defer { if eventPreparation?.id == id { eventPreparation = nil } }
             guard !Task.isCancelled, eventPreparation?.id == id, window.isAttached,
+                  window.attachmentGeneration == attachmentGeneration,
                   workspace.navigationGeneration == admittedGeneration else { return }
             do {
                 if case .completionNotificationTap(let payload) = event {
@@ -144,6 +146,7 @@ struct ChatRootView: View {
                     try await workspace.prepareWindowForExternalEvent(event, in: window, admittedGeneration: admittedGeneration)
                     try Task.checkCancellation()
                     guard eventPreparation?.id == id, window.isAttached,
+                          window.attachmentGeneration == attachmentGeneration,
                           workspace.navigationGeneration == admittedGeneration else { throw CancellationError() }
                     openingEvent = ChatOpeningEvent(event: event, generation: admittedGeneration)
                 }
@@ -403,7 +406,7 @@ private struct ChatScreen: View {
         showDirectoryPicker = false
         closeSettingsSheet()
 
-        guard let destination = workspace.startNewConversation(onHostID: screen.hostID) else { return nil }
+        guard let destination = workspace.startNewConversation(onHostID: screen.hostID, in: window) else { return nil }
 
         // If we were in voice mode, give the cover a moment to dismiss before focusing.
         window.requestComposerFocus(for: destination) {
@@ -914,12 +917,12 @@ private struct ChatScreen: View {
     private func startNewChat(onHostID hostID: UUID) {
         guard !workspace.refusesSwitchWhileDictating else { return presentDictationRefusal() }
         dismissComposerFocus()
-        workspace.startNewConversation(onHostID: hostID)
+        workspace.startNewConversation(onHostID: hostID, in: window)
         closeHistoryDrawer()
     }
 
     private func startNewChatInHome() {
-        guard let destination = workspace.startNewConversation(onHostID: screen.hostID) else { return }
+        guard let destination = workspace.startNewConversation(onHostID: screen.hostID, in: window) else { return }
         Task { await destination.updateWorkingDirectoryToRemoteHome() }
     }
 

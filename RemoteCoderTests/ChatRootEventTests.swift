@@ -139,6 +139,94 @@ struct ChatRootEventTests {
     }
 
     @Test
+    func newChatFromRouterTargetsMainWindowWithoutDisturbingQuickEntry() async throws {
+        let fixture = await WorkspaceFixture()
+        defer { await fixture.cleanUp() }
+        let workspace = fixture.workspace
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let hosted = HostedWindow(scene: scene)
+        let controller = UIHostingController(rootView: ChatRootView(workspace: workspace)
+            .environment(workspace.settings)
+            .environment(workspace.modelPickerPreferences)
+            .environment(AppThemeStore())
+            .environment(\.scenePhase, .active)
+            .environment(\.horizontalSizeClass, .compact))
+        hosted.show(controller)
+        defer { controller.view.endEditing(true); hosted.close() }
+        try #require(await waitUntil { workspace.keyWindow.isAttached && workspace.events.keyScreenID == workspace.keyWindow.id })
+
+        let main = workspace.keyWindow
+        let mainMini = try #require(main.screen(for: .init(hostID: fixture.mini.id)))
+        mainMini.resumeConversation(try fixture.thread("chat-a", updatedAt: 10))
+        try #require(mainMini.activeSessionID == "chat-a")
+
+        let quickEntry = workspace.attachDraftWindow(slot: UUID())
+        defer { workspace.detachWindow(quickEntry) }
+        let quickEntryScreen = try #require(quickEntry.selectedScreen)
+        try #require(await quickEntryScreen.prepareDraft())
+        let quickEntryDraftID = quickEntryScreen.newChatDraftID
+        quickEntryScreen.input = "QuickEntry draft"
+        workspace.setWindowKey(quickEntry)
+        #expect(workspace.keyWindow === quickEntry)
+
+        workspace.events.receive(.quickAction(.init(action: .newChat)))
+
+        #expect(await waitUntil { main.selectedScreen?.activeSessionID == nil })
+        #expect(quickEntryScreen.newChatDraftID == quickEntryDraftID)
+        #expect(quickEntryScreen.input == "QuickEntry draft")
+    }
+
+    @Test
+    func closingAndReopeningMainWindowCancelsPendingNotificationCommit() async throws {
+        var headerContinuation: CheckedContinuation<ConversationHeader, Error>?
+        var headerReadStarted = false
+        let fixture = await WorkspaceFixture(loadConversationHeader: { _, _ in
+            try await withCheckedThrowingContinuation { continuation in
+                headerReadStarted = true
+                headerContinuation = continuation
+            }
+        })
+        defer { await fixture.cleanUp() }
+        let workspace = fixture.workspace
+        let main = workspace.attachMainWindow()
+        defer { workspace.detachWindow(main) }
+        let mainMini = try #require(main.screen(for: .init(hostID: fixture.mini.id)))
+        let chatA = try fixture.thread("chat-a", updatedAt: 10)
+        let chatB = try fixture.thread("chat-b", updatedAt: 20)
+        mainMini.activeConversation = chatA
+
+        let notificationTask = Task {
+            await workspace.handleCompletionNotificationTap(
+                payload: TaskCompletionNotificationPayload(
+                    eventID: "completion:chat-b",
+                    source: .codex,
+                    outcome: nil,
+                    conversationID: nil,
+                    sessionID: "chat-b",
+                    hostID: fixture.mini.id,
+                    promptPreview: "Done",
+                    messagePreview: "Ready",
+                    workingDirectory: nil,
+                    createdAtUnixSeconds: 1_790_000_000,
+                    questionItemID: nil
+                ),
+                in: main
+            )
+        }
+        try #require(await waitUntil { headerReadStarted })
+
+        workspace.detachWindow(main)
+        let reopened = workspace.attachMainWindow()
+        #expect(reopened === main)
+
+        headerContinuation?.resume(returning: chatB)
+        await notificationTask.value
+
+        #expect(workspace.isShowingConversation(at: ConversationAddress(hostID: fixture.mini.id, threadID: "chat-a"),
+                                                on: reopened.selectedScreen))
+    }
+
+    @Test
     func anEndedVoiceCallsPresentationIsDroppedWithoutOpeningAChat() async throws {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }

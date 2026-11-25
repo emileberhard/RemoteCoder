@@ -527,7 +527,12 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     func detachWindow(_ window: ChatWindowModel) {
         window.detach()
         events.unregister(id: window.id)
-        if !window.isPrimary {
+        if window.isPrimary {
+            notificationNavigationTask?.cancel()
+            notificationNavigationTask = nil
+            conversationSwitch?.cancel()
+            conversationSwitch = nil
+        } else {
             windows.removeAll { $0 === window }
             for screen in window.removeAllScreens() { screen.close() }
         }
@@ -757,7 +762,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         var voiceScreen = voiceCallOwner ?? selected
         if !voiceScreen.target.realtimeVoice.isActive {
             if startsFreshChat {
-                guard let destination = newConversationDestination(preferredHostID: voiceScreen.hostID) else {
+                guard let destination = newConversationDestination(preferredHostID: voiceScreen.hostID, in: primaryWindow) else {
                     throw VoiceCallUnavailable(message: "Add a gateway host before starting Voice Mode.")
                 }
                 voiceScreen = destination
@@ -1452,7 +1457,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     func switchConversation(to address: ConversationAddress, opening: ConversationSearchOpening? = nil,
                             in window: ChatWindowModel? = nil) -> ConversationSwitchOutcome {
         let targetWindow = window ?? keyWindow
-        let requiresAttached = window != nil
+        let requiredAttachment = window?.attachmentGeneration
         let address = ConversationAddress(hostID: settings.canonicalHostID(address.hostID), threadID: address.threadID)
         let span = PerfBuild.span("switch.request"); defer { span.end() }
         let isShowing = isShowingConversation(at: address, on: targetWindow.selectedScreen)
@@ -1462,7 +1467,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         conversationSwitch = Task { [weak self, weak targetWindow] in
             guard let self, let targetWindow, !Task.isCancelled,
                   navigationIsCurrent(committedGeneration),
-                  !requiresAttached || targetWindow.isAttached else { return }
+                  attachmentIsCurrent(requiredAttachment, for: targetWindow) else { return }
             let span = PerfBuild.span("switch.commit"); defer { span.end() }
             conversationSwitch = nil
             guard !refusesSwitchWhileDictating(in: targetWindow)
@@ -1563,12 +1568,13 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     @discardableResult
-    func startNewConversation(onHostID hostID: UUID) -> ChatScreenModel? {
-        let source = selectedScreen
+    func startNewConversation(onHostID hostID: UUID, in window: ChatWindowModel? = nil) -> ChatScreenModel? {
+        let targetWindow = window ?? keyWindow
+        let source = targetWindow.selectedScreen
         let preferredID = NewChatDefaults.preferredModelID(defaults: defaults)
         let provider = preferredID.map { newConversationTarget(preferredHostID: hostID)?.modelCatalog.provider(forModelID: $0)
             ?? AgentProvider.provider(forModelID: $0) } ?? .codex
-        guard let destination = startNewConversation(provider: provider, preferredHostID: hostID) else { return nil }
+        guard let destination = startNewConversation(provider: provider, preferredHostID: hostID, in: targetWindow) else { return nil }
         if source?.hostID == destination.hostID, let directory = source?.workingDirectory {
             destination.suggestWorkingDirectory(directory)
         }
@@ -1576,13 +1582,14 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     @discardableResult
-    func startNewConversation(provider: AgentProvider, preferredHostID: UUID?) -> ChatScreenModel? {
-        guard let destination = newConversationDestination(preferredHostID: preferredHostID) else { return nil }
+    func startNewConversation(provider: AgentProvider, preferredHostID: UUID?, in window: ChatWindowModel? = nil) -> ChatScreenModel? {
+        let targetWindow = window ?? keyWindow
+        guard let destination = newConversationDestination(preferredHostID: preferredHostID, in: targetWindow) else { return nil }
         destination.startNewConversation()
         if destination.currentAgentProvider != provider {
             destination.selectDefaultModel(for: provider)
         }
-        select(target: destination.executionTarget)
+        select(target: destination.executionTarget, in: targetWindow)
         return destination
     }
 
@@ -1616,6 +1623,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     func prepareWindowForExternalEvent(_ event: ExternalEvent, in window: ChatWindowModel, admittedGeneration: UUID) async throws {
         try Task.checkCancellation()
+        let attachmentGeneration = window.attachmentGeneration
         guard !isQuiescing, window.isAttached, navigationGeneration == admittedGeneration else { throw CancellationError() }
         let generation = admittedGeneration
         var destination = readyTarget(for: event, in: window)
@@ -1626,7 +1634,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             destination = readyTarget(for: event, in: window)
         }
         try Task.checkCancellation()
-        guard !isQuiescing, window.isAttached, navigationGeneration == generation else { throw CancellationError() }
+        guard !isQuiescing, window.isAttached, window.attachmentGeneration == attachmentGeneration,
+              navigationGeneration == generation else { throw CancellationError() }
         guard let destination, destination.acceptsWork else {
             if case .presentVoiceCall = event { throw CancellationError() }
             if case .openConversation = event {
@@ -1669,8 +1678,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         return nil
     }
 
-    private func newConversationDestination(preferredHostID: UUID?) -> ChatScreenModel? {
-        newConversationTarget(preferredHostID: preferredHostID).flatMap { keyWindow.screen(for: $0.target) }
+    private func newConversationDestination(preferredHostID: UUID?, in window: ChatWindowModel) -> ChatScreenModel? {
+        newConversationTarget(preferredHostID: preferredHostID).flatMap { window.screen(for: $0.target) }
     }
 
     private func newConversationTarget(preferredHostID: UUID?) -> ChatTargetModel? {
@@ -1828,20 +1837,21 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     func handleCompletionNotificationTap(payloadJSON: String, in window: ChatWindowModel? = nil) async {
         let targetWindow = window ?? primaryWindow
-        let requiresAttached = window != nil
+        let requiredAttachment = window?.attachmentGeneration
         await runNotificationNavigation { [weak self, weak targetWindow] generation in
             let delivery = await ForegroundNotificationPresentation.prepare(payloadJSON: payloadJSON, title: "", body: "")
             guard let self, let targetWindow, self.navigationIsCurrent(generation),
-                  !requiresAttached || targetWindow.isAttached else { return }
+                  self.attachmentIsCurrent(requiredAttachment, for: targetWindow) else { return }
             guard let payload = delivery.payload else {
                 guard await self.dismissCoverForNotification(payload: nil, generation: generation) else { return }
-                guard self.navigationIsCurrent(generation), !requiresAttached || targetWindow.isAttached else { return }
+                guard self.navigationIsCurrent(generation),
+                      self.attachmentIsCurrent(requiredAttachment, for: targetWindow) else { return }
                 self.logger.error("notification tap payload unreadable field=\(delivery.decodingFailure ?? "root")")
                 self.notificationRoutingError = "This notification has no readable conversation identity. Open History to choose a conversation."
                 return
             }
             await self.routeCompletionNotification(payload, generation: generation, in: targetWindow,
-                                                   requiresAttached: requiresAttached)
+                                                   requiredAttachment: requiredAttachment)
         }
     }
 
@@ -1859,11 +1869,11 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     func handleCompletionNotificationTap(payload: TaskCompletionNotificationPayload, in window: ChatWindowModel? = nil) async {
         let targetWindow = window ?? primaryWindow
-        let requiresAttached = window != nil
+        let requiredAttachment = window?.attachmentGeneration
         await runNotificationNavigation { [weak self, weak targetWindow] generation in
             guard let self, let targetWindow else { return }
             await self.routeCompletionNotification(payload, generation: generation, in: targetWindow,
-                                                   requiresAttached: requiresAttached)
+                                                   requiredAttachment: requiredAttachment)
         }
     }
 
@@ -1882,19 +1892,24 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         !isQuiescing && !Task.isCancelled && navigationGeneration == generation
     }
 
+    private func attachmentIsCurrent(_ requiredAttachment: UUID?, for window: ChatWindowModel) -> Bool {
+        guard let requiredAttachment else { return true }
+        return window.isAttached && window.attachmentGeneration == requiredAttachment
+    }
+
     private func routeCompletionNotification(_ payload: TaskCompletionNotificationPayload, generation: UUID,
-                                             in window: ChatWindowModel, requiresAttached: Bool) async {
+                                             in window: ChatWindowModel, requiredAttachment: UUID?) async {
         _ = notifications.consume(payload)
         notifications.dismiss()
         guard await dismissCoverForNotification(payload: payload, generation: generation) else { return }
-        guard navigationIsCurrent(generation), !requiresAttached || window.isAttached else { return }
+        guard navigationIsCurrent(generation), attachmentIsCurrent(requiredAttachment, for: window) else { return }
         guard let sessionID = payload.sessionID, !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             notificationRoutingError = "This notification has no conversation identity. Open History to choose a conversation."
             return
         }
 
         await accountMigration?.value
-        guard navigationIsCurrent(generation), !requiresAttached || window.isAttached else { return }
+        guard navigationIsCurrent(generation), attachmentIsCurrent(requiredAttachment, for: window) else { return }
         guard let target = TaskCompletionRouting.resolve(
             payloadHostID: settings.canonicalHostID(payload.hostID),
             targets: models.map(\.target)
@@ -1913,7 +1928,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             // Reading may finish after a newer user navigation. It cannot
             // mutate either model selection or question focus until fenced.
             let thread = try await loadConversationHeader(owner, address.threadID)
-            guard navigationIsCurrent(generation), !requiresAttached || window.isAttached,
+            guard navigationIsCurrent(generation), attachmentIsCurrent(requiredAttachment, for: window),
                   thread.id == address.threadID,
                   !owner.isRetired, model(for: target.hostID) === owner else { return }
             isCommittingNotificationNavigation = true
@@ -1925,7 +1940,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
                 ownerScreen?.requestQuestionFocus(itemID: itemID)
             }
         } catch {
-            guard navigationIsCurrent(generation), !requiresAttached || window.isAttached else { return }
+            guard navigationIsCurrent(generation), attachmentIsCurrent(requiredAttachment, for: window) else { return }
             notificationRoutingError = "Couldn't open the notification conversation: \(error.localizedDescription)"
         }
     }
