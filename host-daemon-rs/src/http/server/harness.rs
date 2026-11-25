@@ -294,11 +294,19 @@ async fn claude_accounts_routes_require_authorization_without_codex_availability
         use axum::response::IntoResponse;
         assert_eq!(headers[header::AUTHORIZATION], "Bearer fixture-key");
         if body["provider"] == "codex" {
-            assert!(body["account"] == "copilot" || body["account"].is_null());
             let mut routed = inventory(serde_json::Value::Null);
-            routed["codex"]["route"] = serde_json::json!({
-                "kind": if body["account"].is_null() { "subscription" } else { "copilot" }
-            });
+            match (body.get("route"), body.get("account")) {
+                (Some(route), None) => {
+                    assert!(route == "chatgpt" || route == "openrouter");
+                    routed["codex"]["active_route"] = serde_json::json!({"kind": route});
+                }
+                (None, Some(account)) if account.is_null() || account == "copilot" => {
+                    routed["codex"]["route"] = serde_json::json!({
+                        "kind": if account.is_null() { "subscription" } else { "copilot" }
+                    });
+                }
+                _ => panic!("Invalid Codex route request: {body}"),
+            }
             return Json(routed).into_response();
         }
         assert_eq!(body["provider"], "claude");
@@ -423,7 +431,13 @@ async fn claude_accounts_routes_require_authorization_without_codex_availability
         let value: serde_json::Value = response.json().await.unwrap();
         assert_eq!(value["error"]["code"], code);
     }
-    for (route, status) in [("copilot", 200), ("subscription", 200), ("chatgpt", 400)] {
+    for (route, status, response_field) in [
+        ("copilot", 200, "codexRoute"),
+        ("subscription", 200, "codexRoute"),
+        ("chatgpt", 200, "codexRouteId"),
+        ("openrouter", 200, "codexRouteId"),
+        ("invalid route id", 400, ""),
+    ] {
         let response = client
             .put(format!("http://{address}/codex/route"))
             .bearer_auth(OPERATOR)
@@ -434,7 +448,7 @@ async fn claude_accounts_routes_require_authorization_without_codex_availability
         assert_eq!(response.status().as_u16(), status);
         let value: serde_json::Value = response.json().await.unwrap();
         if status == 200 {
-            assert_eq!(value["codexRoute"], route);
+            assert_eq!(value[response_field], route);
             assert_eq!(value["automatic"], "second");
         } else {
             assert_eq!(value["error"]["code"], "invalid_request");
