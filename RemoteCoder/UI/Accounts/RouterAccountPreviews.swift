@@ -6,16 +6,17 @@ private enum RouterAccountFixture {
     static let now = Date.now.timeIntervalSince1970
     enum AutomaticState { case split, unified, exhausted }
 
-    static func list(route: ClaudeRoute, codexRoute: CodexRoute) -> ClaudeRouterAccountList {
+    static func list(route: RouterRoute, codexRoute: RouterRoute) -> ClaudeRouterAccountList {
         ClaudeRouterAccountList(automatic: "max", preference: route == .subscription ? "max" : nil, accounts: [
             account(id: "max", label: "max@example.com", fiveHour: 38, weekly: 61),
             account(id: "pro", label: "pro@example.com", fiveHour: 4, weekly: 22),
-        ], route: route, codexRoute: codexRoute, copilot: CopilotRouterAccount(
+        ], route: route, codexRoute: codexRoute, claudeRouteOptions: [.subscription, .anthropic, .copilot, .openrouter],
+            codexRouteOptions: [.subscription, .chatgpt, .copilot, .openrouter], copilot: CopilotRouterAccount(
             label: "octocat", plan: "business", availability: .available, availableAt: nil, error: nil,
             budget: .init(limitUsd: 150, spentUsd: 41.2, remainingUsd: 108.8, resetsAt: now + 21 * 86_400)))
     }
 
-    static func directory(route: ClaudeRoute, codexRoute: CodexRoute = .subscription) -> RouterAccountDirectory {
+    static func directory(route: RouterRoute, codexRoute: RouterRoute = .subscription) -> RouterAccountDirectory {
         let directory = RouterAccountDirectory(storage: HostStorage(root: .temporaryDirectory.appending(path: "router-account-preview")),
             beginBackgroundExecution: { _ in {} }, routes: { _ in nil })
         try! directory.showPreview(list(route: route, codexRoute: codexRoute))

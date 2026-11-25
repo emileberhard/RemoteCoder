@@ -86,8 +86,7 @@ struct ClaudeUsageDetailsView: View {
         switch directory.state.choice {
         case .automatic?, nil: "Automatic"
         case .account?: directory.effectiveAccount?.label ?? "Choose Account"
-        case .copilot?: "GitHub Copilot"
-        case .openrouter?: "OpenRouter"
+        case .route(let route)?: route.title
         }
     }
 
@@ -101,11 +100,18 @@ struct ClaudeUsageDetailsView: View {
                     ForEach(directory.accounts) { account in
                         Text(menuTitle(account)).tag(ClaudeChoice?.some(.account(account.id)))
                     }
-                    if let copilot = directory.copilot, directory.state.offers(.claude(.copilot)) {
-                        Label(copilot.menuTitle, image: "CopilotMark").tag(ClaudeChoice?.some(.copilot))
+                    ForEach(directory.state.claudeRoutes, id: \.self) { route in
+                        Group {
+                            if route == .copilot, let copilot = directory.copilot {
+                                Label(copilot.menuTitle, image: "CopilotMark")
+                            } else {
+                                Text(route.title)
+                            }
+                        }
+                        .tag(ClaudeChoice?.some(.route(route)))
                     }
-                    if directory.state.choice == .openrouter {
-                        Text("OpenRouter").tag(ClaudeChoice?.some(.openrouter))
+                    if case .route(let active)? = directory.state.choice, !directory.state.claudeRoutes.contains(active) {
+                        Text(active.title).tag(ClaudeChoice?.some(.route(active))).disabled(true)
                     }
                 }
                 .pickerStyle(.inline)
@@ -138,7 +144,10 @@ struct ClaudeUsageDetailsView: View {
             }
             if let copilot {
                 UsageDetailsContent(rows: copilot.usageRows(now: .now), notice: copilot.notice, isLoading: directory.isRefreshing)
-            } else if directory.state.choice == .automatic, let list = directory.state.list, list.accounts.count > 1,
+            } else if case .route(let route)? = directory.state.choice, route != .anthropic {
+                UsageDetailsContent(rows: [], notice: "Usage unavailable", isLoading: directory.isRefreshing)
+            } else if let list = directory.state.list, list.accounts.count > 1,
+                      directory.state.choice == .automatic || directory.state.choice == .route(.anthropic),
                       list.models != nil {
                 ClaudeAutomaticUsageView(list: list)
             } else {

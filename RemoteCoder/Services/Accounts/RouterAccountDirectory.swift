@@ -28,7 +28,7 @@ final class RouterAccountDirectory {
     var copilot: CopilotRouterAccount? { state.copilot }
     var effectiveAccount: ClaudeRouterAccount? {
         switch state.choice {
-        case .copilot?, .openrouter?: nil
+        case .route(let route)? where route != .anthropic: nil
         default: accounts.first { $0.id == (state.preference ?? state.automatic) }
         }
     }
@@ -216,8 +216,7 @@ final class RouterAccountDirectory {
     private func submit(_ selection: RouterSelection, client: AccountAPIClient) async throws -> ClaudeRouterAccountList {
         switch selection {
         case .claude(let choice):
-            guard let preference = ClaudeAccountPreference(choice) else { throw AccountServiceError.invalidResponse }
-            return try await client.setClaudePreference(preference)
+            return try await client.setClaudePreference(ClaudeAccountPreference(choice))
         case .codex(let route):
             return try await client.setCodexRoute(route)
         }
@@ -287,7 +286,7 @@ final class RouterAccountDirectory {
 private extension RouterSelection {
     var unavailableMessage: String {
         switch self {
-        case .claude(.copilot), .codex: "Copilot unavailable."
+        case .claude(.route(let route)), .codex(let route): "\(route.title) unavailable."
         case .claude: "Claude account unavailable."
         }
     }

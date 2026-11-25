@@ -108,11 +108,30 @@ struct ClaudeRouterAccountTests {
         #expect(throws: DecodingError.self) { try JSONDecoder().decode(ClaudeRouterAccountList.self, from: invalid) }
     }
 
+    @Test
+    func routeOptionsAreProviderSpecificAndCanContainNewRoutes() throws {
+        var directory = list(selected: "one", observed: 10, used: 20)
+        let other = RouterRoute(rawValue: "another-provider")
+        directory.claudeRouteOptions = [.subscription, .anthropic, other]
+        directory.codexRouteOptions = [.subscription, .chatgpt, .openrouter]
+        directory.claudeRouteId = other
+        directory.codexRouteId = .openrouter
+
+        let decoded = try JSONDecoder().decode(ClaudeRouterAccountList.self, from: JSONEncoder().encode(directory))
+        #expect(decoded.confirms(.claude(.route(other))))
+        #expect(decoded.offers(.claude(.route(other))))
+        #expect(!decoded.offers(.codex(other)))
+        #expect(decoded.offers(.codex(.openrouter)))
+        #expect(decoded.confirms(.codex(.openrouter)))
+        #expect(!decoded.offers(.claude(.openrouter)))
+        let request = try JSONEncoder().encode(ClaudeAccountPreference(.route(other)))
+        #expect(try JSONDecoder().decode([String: String].self, from: request) == ["route": other.rawValue])
+    }
+
     @Test(arguments: [(.automatic, .null), (.account("one"), .string("one")), (.copilot, .string("copilot"))] as [(ClaudeChoice, JSONValue)])
     func preferenceRequestPreservesAutomaticAsExplicitNull(_ choice: ClaudeChoice, _ account: JSONValue) throws {
-        let data = try JSONEncoder().encode(try #require(ClaudeAccountPreference(choice)))
+        let data = try JSONEncoder().encode(ClaudeAccountPreference(choice))
         #expect(try JSONDecoder().decode(JSONValue.self, from: data) == .object(["account": account]))
-        #expect(ClaudeAccountPreference(.openrouter) == nil)
     }
 
     @Test func routesAndCopilotStayUnknownUntilTheGatewayReportsThem() throws {

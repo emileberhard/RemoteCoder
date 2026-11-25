@@ -21,8 +21,8 @@ actor AccountAPIClient {
         try await claudeRequest(path: "claude/accounts/preference", method: "PUT", body: JSONEncoder().encode(preference))
     }
 
-    func setCodexRoute(_ route: CodexRoute) async throws -> ClaudeRouterAccountList {
-        struct Input: Encodable { let route: CodexRoute }
+    func setCodexRoute(_ route: RouterRoute) async throws -> ClaudeRouterAccountList {
+        struct Input: Encodable { let route: RouterRoute }
         return try await claudeRequest(path: "codex/route", method: "PUT", body: JSONEncoder().encode(Input(route: route)))
     }
 

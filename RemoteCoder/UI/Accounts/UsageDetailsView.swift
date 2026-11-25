@@ -65,8 +65,11 @@ struct UsageRingButton: View {
 
     var body: some View {
         let account = workspace.codexAccount
-        let copilot = workspace.accountDirectory.router.state.codexRoute == .copilot ? workspace.accountDirectory.router.copilot : nil
-        let rows = copilot?.usageRows(now: .now) ?? account?.sample.usageRows ?? []
+        let router = workspace.accountDirectory.router
+        let route = router.state.codexRoute
+        let copilot = route == .copilot ? router.copilot : nil
+        let external = route.flatMap { ($0 == .subscription || $0 == .chatgpt) ? nil : $0 }
+        let rows = external == nil ? account?.sample.usageRows ?? [] : copilot?.usageRows(now: .now) ?? []
         let status = workspace.providerStatus(of: .codex)
         Button(action: showUsage) {
             UsageRings(mark: copilot == nil ? .provider(.codex) : .copilot, rows: rows, status: status, diameter: diameter)
@@ -75,7 +78,7 @@ struct UsageRingButton: View {
         }
         .buttonStyle(ResponsiveButtonStyle(feedback: .iconPress, pressedScale: 0.96, pressedOpacity: 0.9))
         .tooltip("Show Codex usage")
-        .accessibilityLabel("Codex usage, \(copilot == nil ? account?.title ?? "no account selected" : "GitHub Copilot")")
+        .accessibilityLabel("Codex usage, \(external?.title ?? account?.title ?? "no account selected")")
         .accessibilityValue(UsageRings.accessibilityValue(rows: rows, status: status))
         .accessibilityIdentifier("usage-codex")
         .contextMenuPreviewShape(Circle())
@@ -222,14 +225,16 @@ struct UsageDetailsView: View {
 
     private var content: some View {
         let account = workspace.codexAccount
-        let copilot = router.state.codexRoute == .copilot ? router.copilot : nil
+        let route = router.state.codexRoute
+        let copilot = route == .copilot ? router.copilot : nil
+        let external = route.flatMap { ($0 == .subscription || $0 == .chatgpt) ? nil : $0 }
         return VStack(alignment: .leading, spacing: 6) {
             Button(action: onShowAllAccounts) {
-                Label(copilot == nil ? account?.title ?? "Codex" : "GitHub Copilot", systemImage: "person.2")
+                Label(external?.title ?? account?.title ?? "Codex", systemImage: "person.2")
                     .scaledFont(.headline)
             }
             .buttonStyle(.plain)
-            if router.state.offers(.codex(.copilot)) {
+            if router.state.codexRoutes.count > 1 {
                 CodexRoutePicker(router: router).padding(.vertical, 4)
                 if let error = router.error {
                     Text(error).scaledFont(.footnote).foregroundStyle(.secondary)
@@ -240,6 +245,8 @@ struct UsageDetailsView: View {
             }
             if let copilot {
                 UsageDetailsContent(rows: copilot.usageRows(now: .now), notice: copilot.notice, isLoading: router.isRefreshing)
+            } else if external != nil {
+                UsageDetailsContent(rows: [], notice: "Usage unavailable", isLoading: router.isRefreshing)
             } else {
                 AccountResetCount(resets: account?.sample.resets, isStale: account?.sample.stale ?? false)
                 UsageDetailsContent(
@@ -257,19 +264,23 @@ struct UsageDetailsView: View {
 struct CodexRoutePicker: View {
     var router: RouterAccountDirectory
 
-    private var selection: Binding<CodexRoute> {
-        Binding(get: { router.state.codexRoute ?? .subscription }, set: { route in
+    private var selection: Binding<RouterRoute?> {
+        Binding(get: { router.state.codexRoute }, set: { route in
+            guard let route else { return }
             Task { await router.select(.codex(route)) }
         })
     }
 
     var body: some View {
         Picker("Codex runs on", selection: selection.nativeSelectionFeedback()) {
-            Text("ChatGPT").tag(CodexRoute.subscription)
-            Text("Copilot").tag(CodexRoute.copilot)
+            ForEach(router.state.codexRoutes, id: \.self) { route in
+                Text(route.title).tag(Optional(route))
+            }
+            if let active = router.state.codexRoute, !router.state.codexRoutes.contains(active) {
+                Text(active.title).tag(Optional(active)).disabled(true)
+            }
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
+        .pickerStyle(.menu)
         .disabled(!router.canSelect)
         .accessibilityIdentifier("codex-route")
     }

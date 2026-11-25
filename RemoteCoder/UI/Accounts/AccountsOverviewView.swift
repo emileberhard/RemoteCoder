@@ -31,8 +31,18 @@ struct AccountsOverviewView: View {
                         ClaudeAccountSummaryRow(directory: router, account: account,
                                                 onDetails: { detailClaudeAccountID = account.id })
                     }
-                    if let copilot = router.copilot, router.state.offers(.claude(.copilot)) {
-                        CopilotAccountSummaryRow(directory: router, account: copilot)
+                    ForEach(router.state.claudeRoutes, id: \.self) { route in
+                        if route == .copilot, let copilot = router.copilot {
+                            CopilotAccountSummaryRow(directory: router, account: copilot)
+                        } else {
+                            Button {
+                                HapticService.shared.play(.selection)
+                                Task { await router.select(.claude(.route(route))) }
+                            } label: {
+                                Label(route.title, systemImage: router.state.choice == .route(route) ? "checkmark.circle.fill" : "circle")
+                            }
+                            .disabled(!router.canSelect)
+                        }
                     }
                 }
             }
@@ -43,7 +53,7 @@ struct AccountsOverviewView: View {
                 workspace.accountDirectory.groups.contains { $0.provider == provider }
             }, id: \.self) { provider in
                 Section {
-                    if provider == .codex, router.state.offers(.codex(.copilot)) {
+                    if provider == .codex, router.state.codexRoutes.count > 1 {
                         CodexRoutePicker(router: router)
                     }
                     ForEach(workspace.accountDirectory.groups.filter { $0.provider == provider }) { group in

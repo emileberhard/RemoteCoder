@@ -1,15 +1,36 @@
 import Foundation
 
-enum ClaudeRoute: String, Codable, Sendable { case subscription, openrouter, copilot }
-enum CodexRoute: String, Codable, Sendable { case subscription, copilot }
+struct RouterRoute: RawRepresentable, Codable, Hashable, Sendable {
+    let rawValue: String
+
+    static let subscription = Self(rawValue: "subscription")
+    static let chatgpt = Self(rawValue: "chatgpt")
+    static let anthropic = Self(rawValue: "anthropic")
+    static let copilot = Self(rawValue: "copilot")
+    static let openrouter = Self(rawValue: "openrouter")
+
+    var title: String {
+        switch self {
+        case .subscription: "Automatic"
+        case .chatgpt: "ChatGPT"
+        case .copilot: "Copilot"
+        case .openrouter: "OpenRouter"
+        case .anthropic: "Anthropic"
+        default: rawValue.replacingOccurrences(of: "-", with: " ").capitalized
+        }
+    }
+}
 
 enum ClaudeChoice: Hashable, Sendable {
-    case automatic, account(String), copilot, openrouter
+    case automatic, account(String), route(RouterRoute)
+
+    static let copilot = Self.route(.copilot)
+    static let openrouter = Self.route(.openrouter)
 }
 
 enum RouterSelection: Equatable, Sendable {
     case claude(ClaudeChoice)
-    case codex(CodexRoute)
+    case codex(RouterRoute)
 }
 
 struct ClaudeRouterAccountList: Codable, Equatable, Sendable {
@@ -17,16 +38,28 @@ struct ClaudeRouterAccountList: Codable, Equatable, Sendable {
     let preference: String?
     let accounts: [ClaudeRouterAccount]
     var models: [ClaudeModelAutomaticChoice]? = nil
-    var route: ClaudeRoute? = nil
-    var codexRoute: CodexRoute? = nil
+    var route: RouterRoute? = nil
+    var claudeRouteId: RouterRoute? = nil
+    var codexRoute: RouterRoute? = nil
+    var codexRouteId: RouterRoute? = nil
+    var claudeRouteOptions: [RouterRoute]? = nil
+    var codexRouteOptions: [RouterRoute]? = nil
     var copilot: CopilotRouterAccount? = nil
 
     var choice: ClaudeChoice {
-        switch route {
-        case .copilot: .copilot
-        case .openrouter: .openrouter
-        case .subscription, nil: preference.map(ClaudeChoice.account) ?? .automatic
-        }
+        if let route = claudeRouteId ?? route, route != .subscription { return .route(route) }
+        return preference.map(ClaudeChoice.account) ?? .automatic
+    }
+
+    var activeCodexRoute: RouterRoute? { codexRouteId ?? codexRoute }
+
+    var selectableClaudeRoutes: [RouterRoute] {
+        let routes = claudeRouteOptions ?? (copilot != nil && route != nil ? [.copilot] : [])
+        return routes.filter { $0 != .subscription }
+    }
+
+    var selectableCodexRoutes: [RouterRoute] {
+        codexRouteOptions ?? (copilot != nil && codexRoute != nil ? [.subscription, .copilot] : [])
     }
 
     func automaticMarks(for accountID: String) -> [String] {
@@ -42,22 +75,24 @@ struct ClaudeRouterAccountList: Codable, Equatable, Sendable {
         switch selection {
         case .claude(.automatic): true
         case .claude(.account(let id)): accounts.contains { $0.id == id }
-        case .claude(.copilot): copilot != nil && route != nil
-        case .claude(.openrouter): false
-        case .codex: copilot != nil && codexRoute != nil
+        case .claude(.route(let route)): selectableClaudeRoutes.contains(route)
+        case .codex(let route): selectableCodexRoutes.contains(route)
         }
     }
 
     func confirms(_ selection: RouterSelection) -> Bool {
         switch selection {
         case .claude(let choice): self.choice == choice
-        case .codex(let route): codexRoute == route
+        case .codex(let route): activeCodexRoute == route
         }
     }
 
     func validate() throws {
         let ids = Set(accounts.map(\.id))
-        guard ids.count == accounts.count, ids.contains(automatic), preference.map(ids.contains) ?? true,
+        guard [claudeRouteOptions, codexRouteOptions].allSatisfy({ routes in
+                  routes.map { Set($0).count == $0.count } ?? true
+              }),
+              ids.count == accounts.count, ids.contains(automatic), preference.map(ids.contains) ?? true,
               models.map({ choices in
                   Set(choices.map(\.model)).count == choices.count && choices.allSatisfy {
                       !$0.model.isEmpty && ($0.automatic.map(ids.contains) ?? true)
@@ -201,7 +236,9 @@ struct ClaudeRouterAccountState {
     var automatic: String? { list?.automatic }
     var preference: String? { list?.preference }
     var choice: ClaudeChoice? { list?.choice }
-    var codexRoute: CodexRoute? { list?.codexRoute }
+    var codexRoute: RouterRoute? { list?.activeCodexRoute }
+    var codexRoutes: [RouterRoute] { list?.selectableCodexRoutes ?? [] }
+    var claudeRoutes: [RouterRoute] { list?.selectableClaudeRoutes ?? [] }
     var copilot: CopilotRouterAccount? { list?.copilot }
 
     func offers(_ selection: RouterSelection) -> Bool { list?.offers(selection) ?? (selection == .claude(.automatic)) }
@@ -223,20 +260,23 @@ struct ClaudeRouterAccountState {
 struct ClaudeAccountPreference: Encodable, Sendable {
     let account: String?
 
-    init?(_ choice: ClaudeChoice) {
+    let route: RouterRoute?
+
+    init(_ choice: ClaudeChoice) {
         switch choice {
-        case .automatic: account = nil
-        case .account(let id): account = id
-        case .copilot: account = "copilot"
-        case .openrouter: return nil
+        case .automatic: (account, route) = (nil, nil)
+        case .account(let id): (account, route) = (id, nil)
+        case .route(.copilot): (account, route) = ("copilot", nil)
+        case .route(let route): (account, self.route) = (nil, route)
         }
     }
 
-    private enum CodingKeys: String, CodingKey { case account }
+    private enum CodingKeys: String, CodingKey { case account, route }
 
     func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
-        if let account { try values.encode(account, forKey: .account) }
+        if let route { try values.encode(route, forKey: .route) }
+        else if let account { try values.encode(account, forKey: .account) }
         else { try values.encodeNil(forKey: .account) }
     }
 }
