@@ -335,7 +335,7 @@ enum ConversationSidebarProjection {
                     needsInput: live.tier == .needsYou,
                     notifications: !host.marks.offersMute ? .unavailable : host.marks.isMuted(thread.id) ? .muted : .enabled,
                     inferenceProvider: host.providers?.routes[thread.id],
-                    canChooseInferenceProvider: host.providers?.options(for: thread.id).isEmpty == false
+                    canChooseInferenceProvider: host.providers?.offersChoice(for: thread) == true
                 )
                 slots.append(Slot(
                     row: row,

@@ -62,6 +62,7 @@ mod push;
 mod queue;
 mod renames;
 mod rpc_methods;
+pub(crate) use rpc_methods::ConversationProviderChange;
 mod side_question;
 mod subscriptions;
 mod transport;

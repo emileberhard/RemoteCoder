@@ -19,6 +19,12 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{info, warn};
 
+pub(crate) enum ConversationProviderChange {
+    Allowed,
+    Busy,
+    ExternalProvider,
+}
+
 impl Gateway {
     pub(super) async fn handle_owned_rpc(
         self: &Arc<Self>,
@@ -512,31 +518,62 @@ impl Gateway {
         self.apply_conversation_settings(settings).await
     }
 
-    pub(crate) async fn conversation_provider_change_is_idle(
+    pub(crate) async fn conversation_provider_change(
         &self,
         thread_id: &str,
-    ) -> Result<bool> {
+    ) -> Result<ConversationProviderChange> {
+        use ConversationProviderChange::{Allowed, Busy, ExternalProvider};
         if let Some(session) = crate::providers::claude::session_uuid_from_thread_id(thread_id) {
             let agent = self.claude_agent().context("Claude is unavailable")?;
-            self.claude_history
+            let thread = self
+                .claude_history
                 .read_thread_header(session.to_owned())
                 .await?;
-            return Ok(!agent.has_pending_or_active_work(thread_id).await);
+            if agent.has_pending_or_active_work(thread_id).await {
+                return Ok(Busy);
+            }
+            let selection = agent
+                .runtime_settings_snapshot(thread_id)
+                .await
+                .map_err(|error| anyhow!(error))?;
+            let model = selection
+                .as_ref()
+                .map(|selection| selection.model.as_str())
+                .or_else(|| thread["model"].as_str());
+            return Ok(
+                if model.is_some_and(|model| self.claude_model_provider(model) != Some("claude")) {
+                    ExternalProvider
+                } else {
+                    Allowed
+                },
+            );
         }
-        let thread = self
+        let read = self
             .call_control(
                 "thread/read",
                 json!({"threadId":thread_id,"includeTurns":false}),
             )
             .await?;
-        match thread
-            .pointer("/thread/status/type")
-            .and_then(Value::as_str)
-        {
-            Some("idle" | "notLoaded") => Ok(true),
-            Some("active") => Ok(false),
+        let thread = &read["thread"];
+        let provider = thread["modelProvider"]
+            .as_str()
+            .context("Codex model provider is unknown")?;
+        if provider != "openai" {
+            return Ok(ExternalProvider);
+        }
+        match thread.pointer("/status/type").and_then(Value::as_str) {
+            Some("idle" | "notLoaded") => Ok(Allowed),
+            Some("active") => Ok(Busy),
             _ => bail!("Codex conversation activity is unknown"),
         }
+    }
+
+    fn claude_model_provider(&self, model: &str) -> Option<&str> {
+        self.external_providers
+            .as_ref()
+            .and_then(|external| external.owner(model))
+            .map(|provider| provider.id())
+            .or_else(|| crate::providers::claude::exec::is_native_model(model).then_some("claude"))
     }
 
     async fn apply_conversation_settings(&self, settings: ConversationSettingsUpdate) -> RpcResult {
@@ -1128,15 +1165,9 @@ impl Gateway {
         if let Some(phase) = phase {
             phase.complete();
         }
-        let model_provider = thread["model"].as_str().and_then(|model| {
-            self.external_providers
-                .as_ref()
-                .and_then(|external| external.owner(model))
-                .map(|provider| provider.id())
-                .or_else(|| {
-                    crate::providers::claude::exec::is_native_model(model).then_some("claude")
-                })
-        });
+        let model_provider = thread["model"]
+            .as_str()
+            .and_then(|model| self.claude_model_provider(model));
         thread["modelProvider"] = json!(model_provider);
         let mut response = serde_json::json!({
             "thread": thread,
@@ -1327,16 +1358,9 @@ impl Gateway {
             .map(|mut result| {
                 if let Some(rows) = result["data"].as_array_mut() {
                     for row in rows {
-                        let provider = row["model"].as_str().and_then(|model| {
-                            self.external_providers
-                                .as_ref()
-                                .and_then(|external| external.owner(model))
-                                .map(|provider| provider.id())
-                                .or_else(|| {
-                                    crate::providers::claude::exec::is_native_model(model)
-                                        .then_some("claude")
-                                })
-                        });
+                        let provider = row["model"]
+                            .as_str()
+                            .and_then(|model| self.claude_model_provider(model));
                         row["modelProvider"] = json!(provider);
                     }
                 }

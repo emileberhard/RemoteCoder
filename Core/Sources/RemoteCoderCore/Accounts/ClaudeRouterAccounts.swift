@@ -38,6 +38,13 @@ struct ConversationProviderChoices: Codable, Equatable, Sendable {
     let claude: [RouterRoute]
     let codex: [RouterRoute]
 
+    func offersChoice(for thread: ConversationHeader) -> Bool {
+        if routes[thread.id] != nil { return true }
+        let nativeProvider = AgentProvider.provider(forThreadID: thread.id) == .claude ? "claude" : "openai"
+        return (thread.modelProvider == nil || thread.modelProvider == nativeProvider)
+            && !options(for: thread.id).isEmpty
+    }
+
     func options(for threadID: String) -> [RouterRoute] {
         AgentProvider.provider(forThreadID: threadID) == .claude ? claude : codex
     }

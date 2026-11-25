@@ -1,5 +1,6 @@
 use super::server::{HttpState, auth::Authorized};
 use crate::accounts::types::UsageWindow;
+use crate::gateway::ConversationProviderChange;
 use crate::providers::claude::valid_id;
 use crate::providers::router::RouterError;
 use crate::time::parse_rfc3339_unix_seconds as timestamp;
@@ -519,6 +520,11 @@ fn thread_routes_response(result: Result<Value>) -> Response {
                 "route_not_supported",
                 "The inference router does not support conversation overrides",
             ),
+            Some(RouterError::Refused { status: 409, .. }) => error(
+                StatusCode::CONFLICT,
+                "route_capacity_exhausted",
+                "The inference router has reached its override limit. Clear an existing override to add another.",
+            ),
             _ => error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "router_unavailable",
@@ -569,11 +575,19 @@ pub(super) async fn set_thread_route(
     };
     match state
         .gateway
-        .conversation_provider_change_is_idle(&request.thread_id)
+        .conversation_provider_change(&request.thread_id)
         .await
     {
-        Ok(true) => {}
-        Ok(false) => {
+        Ok(ConversationProviderChange::Allowed) => {}
+        Ok(ConversationProviderChange::ExternalProvider) if request.route.is_null() => {}
+        Ok(ConversationProviderChange::ExternalProvider) => {
+            return error(
+                StatusCode::FORBIDDEN,
+                "route_not_supported",
+                "This conversation uses a provider configured on its host",
+            );
+        }
+        Ok(ConversationProviderChange::Busy) => {
             return error(
                 StatusCode::CONFLICT,
                 "conversation_busy",
