@@ -109,9 +109,9 @@ private struct AvailabilityChatFixture: View {
 private extension ConversationHistoryActions {
     static var preview: Self {
         Self(open: { _ in .changed }, openSearch: { _ in .changed }, askSearch: {}, pin: { _ in }, rename: { _ in },
-             regenerateName: { _ in }, unpin: { _ in }, fork: { _ in }, moveUnder: { _ in }, markRead: { _ in },
+             regenerateName: { _ in }, unpin: { _ in }, fork: { _ in }, moveUnder: { _ in }, chooseInferenceProvider: { _ in }, markRead: { _ in },
              markUnread: { _ in }, mute: { _ in }, unmute: { _ in }, settle: { _ in }, unsettle: { _ in }, openDraft: { _ in }, discardDraft: { _ in },
-             startNew: { _ in }, showSettings: {}, focusComposer: {}, chooseInferenceProvider: { _ in })
+             startNew: { _ in }, showSettings: {}, focusComposer: {})
     }
 }
 #endif
