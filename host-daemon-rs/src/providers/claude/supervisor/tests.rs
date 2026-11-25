@@ -956,15 +956,16 @@ async fn account_changes_require_a_new_claude_process() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(launches.len(), 3);
+    let thread_header = format!("X-Llm-Router-Thread: {thread}");
     assert_eq!(
         launches[0]["accountHeader"],
-        "X-Llm-Router-Claude-Preference: first"
+        format!("X-Llm-Router-Claude-Preference: first\n{thread_header}")
     );
     assert_eq!(
         launches[1]["accountHeader"],
-        "X-Llm-Router-Claude-Preference: second"
+        format!("X-Llm-Router-Claude-Preference: second\n{thread_header}")
     );
-    assert!(launches[2]["accountHeader"].is_null());
+    assert_eq!(launches[2]["accountHeader"], thread_header);
     assert!(
         launches
             .iter()

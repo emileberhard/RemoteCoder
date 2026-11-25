@@ -246,17 +246,38 @@ pub(super) async fn exchange(
 #[tokio::test]
 async fn claude_accounts_routes_require_authorization_without_codex_availability() {
     let harness = LanHarness::start().await;
-    for (method, path, body) in [
-        ("GET", "/claude/accounts", ""),
-        ("GET", "/conversation/provider", ""),
+    for (method, path, body, failure) in [
+        ("GET", "/claude/accounts", "", "router_unavailable"),
+        (
+            "GET",
+            "/conversation/provider",
+            "",
+            "installation_unavailable",
+        ),
         (
             "PUT",
             "/conversation/provider",
             r#"{"threadId":"12345678-1234-1234-1234-123456789abc","route":"openrouter"}"#,
+            "conversation_unavailable",
         ),
-        ("PUT", "/claude/accounts/preference", "{\"account\":null}"),
-        ("POST", "/claude/accounts/refresh", "{}"),
-        ("PUT", "/codex/route", "{\"route\":\"copilot\"}"),
+        (
+            "PUT",
+            "/claude/accounts/preference",
+            "{\"account\":null}",
+            "router_unavailable",
+        ),
+        (
+            "POST",
+            "/claude/accounts/refresh",
+            "{}",
+            "router_unavailable",
+        ),
+        (
+            "PUT",
+            "/codex/route",
+            "{\"route\":\"copilot\"}",
+            "router_unavailable",
+        ),
     ] {
         let head = format!(
             "{method} {path} HTTP/1.1\r\nHost: {HOST}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -273,7 +294,7 @@ async fn claude_accounts_routes_require_authorization_without_codex_availability
         let (status, response) = exchange(&mut stream, &head, body.as_bytes()).await;
         assert_eq!(status, 503);
         let value: serde_json::Value = serde_json::from_slice(&response).unwrap();
-        assert_eq!(value["error"]["code"], "router_unavailable");
+        assert_eq!(value["error"]["code"], failure);
     }
     use axum::{
         Json,

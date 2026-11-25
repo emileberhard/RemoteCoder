@@ -695,7 +695,9 @@ mod tests {
         for launch in &launches {
             assert_eq!(
                 launch["accountHeader"],
-                "X-Llm-Router-Claude-Preference: emileberhard388"
+                format!(
+                    "X-Llm-Router-Claude-Preference: emileberhard388\nX-Llm-Router-Thread: {THREAD}"
+                )
             );
             assert_eq!(launch["providerManaged"], "1");
         }
