@@ -250,6 +250,8 @@ The drawer's **Inference Provider** action applies to the exact conversation on
 its gateway. **Use Default** inherits the shared setting, and **Automatic**
 explicitly chooses automatic routing for that conversation. An override adds a
 marker in the drawer. The gateway checks the exact conversation before a write.
+Chats on host-configured inference providers use their host setting. A saved
+override can be cleared while the router is rebuilding its provider catalog.
 llm-router is the only durable owner. The gateway supplies its native Codex
 installation identity and projects Claude's exact conversation into the
 runtime's authenticated request. Codex turns, prewarm and compaction use the

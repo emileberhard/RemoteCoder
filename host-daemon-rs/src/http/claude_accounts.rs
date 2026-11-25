@@ -493,17 +493,25 @@ pub(super) async fn directory(State(state): State<HttpState>, _: Authorized) -> 
     response(state.router.get("accounts").await)
 }
 
-async fn thread_routes_path(state: &HttpState) -> String {
-    if let Some(home) = state.gateway.codex_home()
-        && let Ok(value) = tokio::fs::read_to_string(home.join("installation_id")).await
-        && let Some(id) = crate::ids::parse_uuid(value.trim())
-    {
-        return format!(
-            "accounts/thread-routes?installation={}",
-            crate::ids::format_uuid(id)
-        );
-    }
-    "accounts/thread-routes".into()
+async fn thread_routes_path(state: &HttpState) -> Result<String> {
+    let Some(home) = state.gateway.codex_home() else {
+        return Ok("accounts/thread-routes".into());
+    };
+    let value = tokio::fs::read_to_string(home.join("installation_id")).await?;
+    let id = crate::ids::parse_uuid(value.trim())
+        .ok_or_else(|| anyhow::anyhow!("Codex installation identity is invalid"))?;
+    Ok(format!(
+        "accounts/thread-routes?installation={}",
+        crate::ids::format_uuid(id)
+    ))
+}
+
+fn thread_installation_unavailable() -> Response {
+    error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "installation_unavailable",
+        "This gateway could not verify the Codex installation",
+    )
 }
 
 fn thread_routes_response(result: Result<Value>) -> Response {
@@ -535,7 +543,10 @@ fn thread_routes_response(result: Result<Value>) -> Response {
 }
 
 pub(super) async fn thread_routes(State(state): State<HttpState>, _: Authorized) -> Response {
-    thread_routes_response(state.router.get(&thread_routes_path(&state).await).await)
+    let Ok(path) = thread_routes_path(&state).await else {
+        return thread_installation_unavailable();
+    };
+    thread_routes_response(state.router.get(&path).await)
 }
 
 #[derive(Deserialize)]
@@ -602,7 +613,9 @@ pub(super) async fn set_thread_route(
             );
         }
     }
-    let path = thread_routes_path(&state).await;
+    let Ok(path) = thread_routes_path(&state).await else {
+        return thread_installation_unavailable();
+    };
     thread_routes_response(
         state
             .router
