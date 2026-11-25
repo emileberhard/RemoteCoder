@@ -495,9 +495,12 @@ pub(super) async fn directory(State(state): State<HttpState>, _: Authorized) -> 
 async fn thread_routes_path(state: &HttpState) -> String {
     if let Some(home) = state.gateway.codex_home()
         && let Ok(value) = tokio::fs::read_to_string(home.join("installation_id")).await
-        && let Ok(id) = uuid::Uuid::parse_str(value.trim())
+        && let Some(id) = crate::ids::parse_uuid(value.trim())
     {
-        return format!("accounts/thread-routes?installation={id}");
+        return format!(
+            "accounts/thread-routes?installation={}",
+            crate::ids::format_uuid(id)
+        );
     }
     "accounts/thread-routes".into()
 }
@@ -543,7 +546,7 @@ pub(super) async fn set_thread_route(
 ) -> Response {
     let claude_id = crate::providers::claude::session_uuid_from_thread_id(&request.thread_id);
     let id = claude_id.unwrap_or(&request.thread_id);
-    if !uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id)
+    if !crate::ids::parse_uuid(id).is_some_and(|parsed| crate::ids::format_uuid(parsed) == id)
         || !(request.route.is_null() || request.route.as_str().is_some_and(valid_id))
     {
         return error(

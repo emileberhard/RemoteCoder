@@ -218,7 +218,7 @@ pub(crate) fn command_on_route(
                 }
                 if let Some(thread) = thread_id.filter(|thread| {
                     super::session_uuid_from_thread_id(thread)
-                        .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+                        .is_some_and(crate::ids::is_session_uuid)
                 }) {
                     headers.push(format!("X-Llm-Router-Thread: {thread}"));
                 }

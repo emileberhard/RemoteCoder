@@ -121,7 +121,7 @@ async fn external_command_uses_only_the_selected_provider_credentials() {
         context: 200000,
     };
     let command =
-        crate::providers::claude::exec::command_on_route(&home.settings, &[], &route, None)
+        crate::providers::claude::exec::command_on_route(&home.settings, &[], &route, None, None)
             .unwrap();
     let env = command
         .as_std()
@@ -148,12 +148,13 @@ async fn external_command_uses_only_the_selected_provider_credentials() {
             &home.settings,
             &[],
             &route,
-            Some("example")
+            Some("example"),
+            None,
         )
         .is_err()
     );
     let command =
-        crate::providers::claude::exec::command_on_route(&home.settings, &[], &route, None)
+        crate::providers::claude::exec::command_on_route(&home.settings, &[], &route, None, None)
             .unwrap();
     assert!(
         command
