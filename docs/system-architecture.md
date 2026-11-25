@@ -137,13 +137,12 @@ Rules:
   in-process for both transcript links and system `onOpenURL` deliveries so
   clicking a conversation link switches in place instead of opening another
   window. `QuickEntry` attaches a temporary `ChatWindowModel` on its fixed draft
-  slot (`attachWindow(draftSlot:)`) without registering as an event screen.
+  slot (`attachDraftWindow(slot:)`) without registering as an event screen.
 - **Workspace flows take the originating screen.** Send and question answers receive the `ChatScreenModel` that started
   them, never the key window's selection.
 - **The workspace routes events to screens.** `ExternalEventRouter` holds one
-  event and delivers it once to the active registered screen (falling back to
-  the registered main screen if an unregistered surface such as `QuickEntry` is
-  key). Quick actions and deep links expire after 60 s; a
+  event and delivers it once to the registered active main screen while
+  separately tracking `keyScreenID` for `QuickEntry`. Quick actions and deep links expire after 60 s; a
   completion-notification tap does not, and waits until navigation is ready.
   The stable `ChatRootView` owns registration and window activity even
   while its selected screen is loading or unavailable. The selected screen supplies
@@ -3216,8 +3215,8 @@ focus or issuing a competing jump.
 Ask an agent starts an ordinary new chat with the query and asks it to use
 its available conversation-search tools and return verified links. Every agent
 already knows the link format, the cluster's host IDs and its own link from the
-gateway's conversation-links context (`host-daemon-rs/AGENTS.md`). `ChatRootView` accepts
-`remotecoder://chat/conversation?host=<hostId>&thread=<threadId>&item=<itemKey>` through
-`ExternalEventRouter`. The optional `item` uses the same locate path. The
-configured host must resolve uniquely. A new window claims its matching item
-once from the router's existing pending event.
+gateway's conversation-links context (`host-daemon-rs/AGENTS.md`). `ChatWorkspaceModel.openDeepLink(_:)` accepts
+`remotecoder://chat/conversation?host=<hostId>&thread=<threadId>&item=<itemKey>` from both
+transcript links and `ChatRootView.onOpenURL`, routing through `ExternalEventRouter` into the
+single main window. The optional `item` uses the same locate path. The configured host must
+resolve uniquely.

@@ -46,11 +46,7 @@ final class RemoteCoderMacAppDelegate: NSObject, NSApplicationDelegate, UNUserNo
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag || !app.workspace.isMainWindowOpen {
-            app.workspace.events.openMainWindow()
-            return false
-        }
-        return true
+        !app.workspace.events.openMainWindow()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

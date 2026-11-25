@@ -25,8 +25,8 @@ final class ExternalEventRouter {
 
     static let maximumAge: TimeInterval = 60
 
-    @ObservationIgnored private var screens: [UUID: @MainActor (ExternalEvent) -> Void] = [:]
-    @ObservationIgnored private var activeScreens: Set<UUID> = []
+    @ObservationIgnored private var mainScreen: (id: UUID, perform: @MainActor (ExternalEvent) -> Void)?
+    @ObservationIgnored private var activeMainScreenID: UUID?
     private(set) var keyScreenID: UUID?
     @ObservationIgnored private var pending: Pending?
     @ObservationIgnored private var isNavigationReady = false
@@ -53,38 +53,35 @@ final class ExternalEventRouter {
     }
 
     func register(id: UUID, perform: @escaping @MainActor (ExternalEvent) -> Void) {
-        screens[id] = perform
+        mainScreen = (id, perform)
         deliverPending()
     }
 
     func unregister(id: UUID) {
-        screens[id] = nil
-        activeScreens.remove(id)
-        if keyScreenID == id {
-            keyScreenID = activeScreens.first
-            deliverPending()
-        }
+        if mainScreen?.id == id { mainScreen = nil }
+        if activeMainScreenID == id { activeMainScreenID = nil }
+        if keyScreenID == id { keyScreenID = activeMainScreenID }
     }
 
     func setActive(_ isActive: Bool, screen id: UUID) {
         if isActive {
-            activeScreens.insert(id)
+            activeMainScreenID = id
             keyScreenID = id
             deliverPending()
         } else {
-            activeScreens.remove(id)
-            if keyScreenID == id { keyScreenID = activeScreens.first }
+            if activeMainScreenID == id { activeMainScreenID = nil }
+            if keyScreenID == id { keyScreenID = activeMainScreenID }
         }
     }
 
     func setOpen(screen id: UUID) {
-        activeScreens.insert(id)
-        if keyScreen == nil { keyScreenID = id }
+        activeMainScreenID = id
+        if keyScreenID == nil { keyScreenID = id }
         deliverPending()
     }
 
     func setKey(screen id: UUID) {
-        activeScreens.insert(id)
+        if mainScreen?.id == id { activeMainScreenID = id }
         keyScreenID = id
         deliverPending()
     }
@@ -104,16 +101,19 @@ final class ExternalEventRouter {
         receive(event)
         if let mainWindowOpener {
             mainWindowOpener()
-        } else if screens.isEmpty {
+        } else if mainScreen == nil {
             logger.error("No window has attached a window opener; the main window cannot open.")
         }
     }
 
-    func openMainWindow() {
+    @discardableResult
+    func openMainWindow() -> Bool {
         guard let mainWindowOpener else {
-            return logger.error("No window has attached a window opener; the main window cannot open.")
+            logger.error("No window has attached a window opener; the main window cannot open.")
+            return false
         }
         mainWindowOpener()
+        return true
     }
 
     private func deliverPending() {
@@ -124,16 +124,9 @@ final class ExternalEventRouter {
             return
         }
         if case .completionNotificationTap = held.event, !isNavigationReady { return }
-        guard let id = keyScreen else { return }
+        guard let mainScreen, activeMainScreenID == mainScreen.id else { return }
         pending = nil
-        screens[id]?(held.event)
-    }
-
-    private var keyScreen: UUID? {
-        if let keyScreenID, screens[keyScreenID] != nil, activeScreens.contains(keyScreenID) {
-            return keyScreenID
-        }
-        return activeScreens.first { screens[$0] != nil }
+        mainScreen.perform(held.event)
     }
 }
 

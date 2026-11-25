@@ -345,8 +345,11 @@ struct HTMLVisualInline: View {
             await source.renderer.run(expansion, reference: reference, key: key,
                 document: { try await source.documents.document(reference) },
                 replies: replies?.channel(for: replyKey) ?? .detached(sent: nil),
-                open: { [expandedAnchor, expandedScope, files, openURL] in
-                    Self.open($0, files: files, openURL: openURL, anchor: expandedAnchor, scope: expandedScope)
+                open: { [expandedAnchor, expandedScope, files, openURL] request in
+                    if case .link(let url) = request, RemoteCoderDeepLinks.conversation(from: url) != nil {
+                        presentation = .dismissing(expansion)
+                    }
+                    Self.open(request, files: files, openURL: openURL, anchor: expandedAnchor, scope: expandedScope)
                 },
                 onPinChange: { _ in })
         }

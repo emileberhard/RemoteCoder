@@ -78,7 +78,7 @@ final class QuickEntry {
     private func open() {
         guard let display = NSScreen.main else { return }
         let front = workspace.selectedScreen
-        let window = workspace.attachWindow(draftSlot: Self.draftSlot)
+        let window = workspace.attachDraftWindow(slot: Self.draftSlot)
         if let front, let screen = window.selectedScreen, screen.executionTarget == front.executionTarget,
            let folder = front.workingDirectory, screen.workingDirectory != folder {
             screen.suggestWorkingDirectory(folder)

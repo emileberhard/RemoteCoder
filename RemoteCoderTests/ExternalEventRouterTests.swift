@@ -77,13 +77,16 @@ struct ExternalEventRouterTests {
 
     @Test func summoningOpensTheMainWindowAndDeliversTheLatestEvent() {
         let router = router()
+        #expect(!router.openMainWindow())
         var mainWindowOpens = 0
         router.attach(openMainWindow: { mainWindowOpens += 1 })
+        #expect(router.openMainWindow())
+        #expect(mainWindowOpens == 1)
 
         router.summon(.openConversation(address))
         router.summon(newChat)
 
-        #expect(mainWindowOpens == 2)
+        #expect(mainWindowOpens == 3)
 
         let window = Window()
         window.register(in: router)
@@ -91,7 +94,7 @@ struct ExternalEventRouterTests {
         #expect(window.performed == [newChat])
 
         router.summon(.openConversation(address))
-        #expect(mainWindowOpens == 3)
+        #expect(mainWindowOpens == 4)
         #expect(window.performed == [newChat, .openConversation(address)])
     }
 
@@ -110,35 +113,21 @@ struct ExternalEventRouterTests {
         #expect(mainWindowOpens == 0)
     }
 
-    @Test func anOpenedMacWindowKeepsTheFocusedWindowKey() {
-        let router = router()
-        let focused = Window()
-        let restored = Window()
-        focused.register(in: router)
-        restored.register(in: router)
-        router.setKey(screen: focused.id)
-        router.setOpen(screen: restored.id)
-
-        router.receive(newChat)
-        #expect(focused.performed == [newChat])
-        #expect(restored.performed.isEmpty)
-
-        router.setKey(screen: restored.id)
-        router.receive(newChat)
-        #expect(restored.performed == [newChat])
-    }
-
-    @Test func anUnregisteredKeyWindowStillDeliversEventsToTheRegisteredMainWindow() {
+    @Test func anUnregisteredKeySurfaceStillDeliversEventsToTheMainWindowAndRestoresKeyOnClose() {
         let router = router()
         let main = Window()
         let quickEntryID = UUID()
         main.register(in: router)
         router.setOpen(screen: main.id)
         router.setKey(screen: quickEntryID)
+        #expect(router.keyScreenID == quickEntryID)
 
         router.receive(.openConversation(address))
-
         #expect(main.performed == [.openConversation(address)])
+
+        router.unregister(id: quickEntryID)
+        router.setActive(false, screen: quickEntryID)
+        #expect(router.keyScreenID == main.id)
     }
 
     @Test func aNotificationTapWaitsForNavigationAndNeverExpires() {

@@ -69,7 +69,7 @@ struct ChatRootView: View {
         }
         .onAppear {
             if window == nil {
-                window = workspace.attachWindow()
+                window = workspace.attachMainWindow()
             }
         }
         .onDisappear {
@@ -107,7 +107,6 @@ struct ChatRootView: View {
 
     private func registerWithEventRouter(_ window: ChatWindowModel) {
         workspace.events.register(id: window.id) { event in
-            if workspace.keyWindow !== window { workspace.setWindowKey(window) }
             perform(event, in: window)
         }
     }
@@ -140,7 +139,7 @@ struct ChatRootView: View {
                   workspace.navigationGeneration == admittedGeneration else { return }
             do {
                 if case .completionNotificationTap(let payload) = event {
-                    await workspace.handleCompletionNotificationTap(payloadJSON: payload)
+                    await workspace.handleCompletionNotificationTap(payloadJSON: payload, in: window)
                 } else {
                     try await workspace.prepareWindowForExternalEvent(event, in: window, admittedGeneration: admittedGeneration)
                     try Task.checkCancellation()
@@ -381,12 +380,11 @@ private struct ChatScreen: View {
             break
         #endif
         case .openConversation(let address, let opening):
-            if workspace.keyWindow !== window { workspace.setWindowKey(window) }
             selectConversation(address, opening: opening)
         case .sharedItems(let id):
             openNewChatWithKeyboard()?.receiveSharedItems(id)
         case .completionNotificationTap(let payloadJSON):
-            Task { await workspace.handleCompletionNotificationTap(payloadJSON: payloadJSON) }
+            Task { await workspace.handleCompletionNotificationTap(payloadJSON: payloadJSON, in: window) }
         }
     }
 
@@ -778,7 +776,7 @@ private struct ChatScreen: View {
         PerfHarness.shared.willSelectRow(address)
         #endif
         #endif
-        let outcome = workspace.switchConversation(to: address, opening: opening)
+        let outcome = workspace.switchConversation(to: address, opening: opening, in: window)
         #if RC_PERF_HARNESS
         #if os(iOS)
         if outcome != .changed { PerfHarness.shared.cancelRowSelection() }

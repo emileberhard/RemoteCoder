@@ -367,17 +367,29 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     }
 
     func select(target: ExecutionTarget) {
+        select(target: target, in: keyWindow)
+    }
+
+    func select(target: ExecutionTarget, in window: ChatWindowModel) {
         guard !isQuiescing else { return }
-        supersedePendingNavigation()
+        if isCommittingNotificationNavigation {
+            window.cancelComposerFocus()
+        } else {
+            supersedePendingNavigation()
+        }
         guard model(for: target.hostID) != nil else { return }
-        choose(target)
+        choose(target, in: window)
         applyVisibility()
         prepare(target: target)
     }
 
+    private func choose(_ target: ExecutionTarget, in window: ChatWindowModel) {
+        window.select(target)
+        if keyWindow === window { mirrorKeySelection() }
+    }
+
     private func choose(_ target: ExecutionTarget) {
-        keyWindow.select(target)
-        mirrorKeySelection()
+        choose(target, in: keyWindow)
     }
 
     private func mirrorKeySelection() {
@@ -488,15 +500,16 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         windows.first { $0.id == events.keyScreenID } ?? windows.first { $0.isAttached } ?? windows[0]
     }
 
-    func attachWindow(draftSlot: UUID? = nil) -> ChatWindowModel {
-        let window: ChatWindowModel
-        if let draftSlot {
-            window = windows.first { $0.id == draftSlot } ?? addWindow(id: draftSlot)
-        } else if let primary = windows.first(where: { $0.isPrimary && !$0.isAttached }) {
-            window = primary
-        } else {
-            window = addWindow(id: UUID())
-        }
+    func attachMainWindow() -> ChatWindowModel {
+        let window = primaryWindow
+        window.attach()
+        applyVisibility()
+        logger.notice("window attached \(self.windowDiagnostics(window))")
+        return window
+    }
+
+    func attachDraftWindow(slot: UUID) -> ChatWindowModel {
+        let window = windows.first { $0.id == slot } ?? addWindow(id: slot)
         window.attach()
         applyVisibility()
         logger.notice("window attached \(self.windowDiagnostics(window))")
@@ -580,7 +593,7 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
 
     var hasMultipleHosts: Bool { settings.hosts.count > 1 }
 
-    var isMainWindowOpen: Bool { windows.first(where: \.isPrimary)?.isAttached == true }
+    private var primaryWindow: ChatWindowModel { windows[0] }
 
     private func applyModelPickerPreferences(for provider: AgentProvider, previousModelVisibility: ModelVisibility) {
         for model in models { model.applyModelPickerPreferences(for: provider, previousModelVisibility: previousModelVisibility) }
@@ -1336,10 +1349,12 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
     /// Selecting a row selects its owning host. Re-selecting the conversation
     /// that host already has open only switches the visible model.
     @discardableResult
-    func selectConversation(at address: ConversationAddress, opening: ConversationSearchOpening? = nil) -> Task<Void, Never>? {
-        guard let screen = screen(for: address.hostID) else { return nil }
+    func selectConversation(at address: ConversationAddress, opening: ConversationSearchOpening? = nil,
+                            in window: ChatWindowModel? = nil) -> Task<Void, Never>? {
+        let targetWindow = window ?? keyWindow
+        guard let screen = targetWindow.screen(for: address.target) else { return nil }
         let alreadyOpen = screen.openThreadID == address.threadID
-        select(target: address.target)
+        select(target: address.target, in: targetWindow)
         guard alreadyOpen == false || opening != nil else { return nil }
         #if os(macOS) && RC_PERF_HARNESS
         if let fixture = screen.target.switchFixtures[address.threadID] {
@@ -1428,20 +1443,31 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         case refusedWhileDictating, unchanged, changed
     }
 
-    var refusesSwitchWhileDictating: Bool { selectedModel?.voice.isRecording == true }
+    var refusesSwitchWhileDictating: Bool { refusesSwitchWhileDictating(in: keyWindow) }
 
-    func switchConversation(to address: ConversationAddress, opening: ConversationSearchOpening? = nil) -> ConversationSwitchOutcome {
+    private func refusesSwitchWhileDictating(in window: ChatWindowModel) -> Bool {
+        window.selectedTarget.flatMap { model(for: $0.hostID) }?.voice.isRecording == true
+    }
+
+    func switchConversation(to address: ConversationAddress, opening: ConversationSearchOpening? = nil,
+                            in window: ChatWindowModel? = nil) -> ConversationSwitchOutcome {
+        let targetWindow = window ?? keyWindow
+        let requiresAttached = window != nil
         let address = ConversationAddress(hostID: settings.canonicalHostID(address.hostID), threadID: address.threadID)
         let span = PerfBuild.span("switch.request"); defer { span.end() }
-        let isShowing = isShowingConversation(at: address, on: selectedScreen)
-        if (!isShowing || opening != nil), refusesSwitchWhileDictating { return .refusedWhileDictating }
+        let isShowing = isShowingConversation(at: address, on: targetWindow.selectedScreen)
+        if (!isShowing || opening != nil), refusesSwitchWhileDictating(in: targetWindow) { return .refusedWhileDictating }
         supersedePendingNavigation()
-        conversationSwitch = Task { [weak self] in
-            guard let self, !Task.isCancelled else { return }
+        let committedGeneration = navigationGeneration
+        conversationSwitch = Task { [weak self, weak targetWindow] in
+            guard let self, let targetWindow, !Task.isCancelled,
+                  navigationIsCurrent(committedGeneration),
+                  !requiresAttached || targetWindow.isAttached else { return }
             let span = PerfBuild.span("switch.commit"); defer { span.end() }
             conversationSwitch = nil
-            guard !refusesSwitchWhileDictating || (opening == nil && isShowingConversation(at: address, on: selectedScreen)) else { return }
-            selectConversation(at: address, opening: opening)
+            guard !refusesSwitchWhileDictating(in: targetWindow)
+                || (opening == nil && isShowingConversation(at: address, on: targetWindow.selectedScreen)) else { return }
+            selectConversation(at: address, opening: opening, in: targetWindow)
         }
         return isShowing ? .unchanged : .changed
     }
@@ -1800,18 +1826,22 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         notifications.receive(delivery, applicationIsActive: applicationIsActive, isOpen: notificationIsOpen)
     }
 
-    func handleCompletionNotificationTap(payloadJSON: String) async {
-        await runNotificationNavigation { [weak self] generation in
+    func handleCompletionNotificationTap(payloadJSON: String, in window: ChatWindowModel? = nil) async {
+        let targetWindow = window ?? primaryWindow
+        let requiresAttached = window != nil
+        await runNotificationNavigation { [weak self, weak targetWindow] generation in
             let delivery = await ForegroundNotificationPresentation.prepare(payloadJSON: payloadJSON, title: "", body: "")
-            guard let self, self.navigationIsCurrent(generation) else { return }
+            guard let self, let targetWindow, self.navigationIsCurrent(generation),
+                  !requiresAttached || targetWindow.isAttached else { return }
             guard let payload = delivery.payload else {
                 guard await self.dismissCoverForNotification(payload: nil, generation: generation) else { return }
-                guard self.navigationIsCurrent(generation) else { return }
+                guard self.navigationIsCurrent(generation), !requiresAttached || targetWindow.isAttached else { return }
                 self.logger.error("notification tap payload unreadable field=\(delivery.decodingFailure ?? "root")")
                 self.notificationRoutingError = "This notification has no readable conversation identity. Open History to choose a conversation."
                 return
             }
-            await self.routeCompletionNotification(payload, generation: generation)
+            await self.routeCompletionNotification(payload, generation: generation, in: targetWindow,
+                                                   requiresAttached: requiresAttached)
         }
     }
 
@@ -1827,9 +1857,13 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         launchRestore.settle(recording: openLocation)
     }
 
-    func handleCompletionNotificationTap(payload: TaskCompletionNotificationPayload) async {
-        await runNotificationNavigation { [weak self] generation in
-            await self?.routeCompletionNotification(payload, generation: generation)
+    func handleCompletionNotificationTap(payload: TaskCompletionNotificationPayload, in window: ChatWindowModel? = nil) async {
+        let targetWindow = window ?? primaryWindow
+        let requiresAttached = window != nil
+        await runNotificationNavigation { [weak self, weak targetWindow] generation in
+            guard let self, let targetWindow else { return }
+            await self.routeCompletionNotification(payload, generation: generation, in: targetWindow,
+                                                   requiresAttached: requiresAttached)
         }
     }
 
@@ -1848,18 +1882,19 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
         !isQuiescing && !Task.isCancelled && navigationGeneration == generation
     }
 
-    private func routeCompletionNotification(_ payload: TaskCompletionNotificationPayload, generation: UUID) async {
+    private func routeCompletionNotification(_ payload: TaskCompletionNotificationPayload, generation: UUID,
+                                             in window: ChatWindowModel, requiresAttached: Bool) async {
         _ = notifications.consume(payload)
         notifications.dismiss()
         guard await dismissCoverForNotification(payload: payload, generation: generation) else { return }
-        guard navigationIsCurrent(generation) else { return }
+        guard navigationIsCurrent(generation), !requiresAttached || window.isAttached else { return }
         guard let sessionID = payload.sessionID, !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             notificationRoutingError = "This notification has no conversation identity. Open History to choose a conversation."
             return
         }
 
         await accountMigration?.value
-        guard navigationIsCurrent(generation) else { return }
+        guard navigationIsCurrent(generation), !requiresAttached || window.isAttached else { return }
         guard let target = TaskCompletionRouting.resolve(
             payloadHostID: settings.canonicalHostID(payload.hostID),
             targets: models.map(\.target)
@@ -1878,18 +1913,19 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             // Reading may finish after a newer user navigation. It cannot
             // mutate either model selection or question focus until fenced.
             let thread = try await loadConversationHeader(owner, address.threadID)
-            guard navigationIsCurrent(generation), thread.id == address.threadID,
+            guard navigationIsCurrent(generation), !requiresAttached || window.isAttached,
+                  thread.id == address.threadID,
                   !owner.isRetired, model(for: target.hostID) === owner else { return }
             isCommittingNotificationNavigation = true
             defer { isCommittingNotificationNavigation = false }
-            let ownerScreen = keyWindow.screen(for: owner.target)
+            let ownerScreen = window.screen(for: owner.target)
             ownerScreen?.resumeConversation(thread)
-            select(target: address.target)
+            select(target: address.target, in: window)
             if let itemID = payload.questionItemID {
                 ownerScreen?.requestQuestionFocus(itemID: itemID)
             }
         } catch {
-            guard navigationIsCurrent(generation) else { return }
+            guard navigationIsCurrent(generation), !requiresAttached || window.isAttached else { return }
             notificationRoutingError = "Couldn't open the notification conversation: \(error.localizedDescription)"
         }
     }

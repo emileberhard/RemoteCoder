@@ -2157,9 +2157,9 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
     `ChatRootView.onOpenURL` and `ConversationTranscriptView`'s `openURL`
     action so in-app conversation links switch in the current window without
     bouncing through LaunchServices. The router holds the
-    latest event in memory for at most 60 s and delivers it once, to the
-    key screen while its scene is `.active` (falling back to the registered
-    main screen if an unregistered surface such as `QuickEntry` is briefly key).
+    latest event in memory for at most 60 s and delivers it once to the
+    registered active main screen while separately tracking `keyScreenID` for
+    `QuickEntry`.
     A completion-notification tap does not expire; it waits
     for navigation to be ready. There is no app-group event queue: shared
     files wait in the share inbox, and only their share id travels as an event.
@@ -2201,7 +2201,7 @@ The gateway side is in `host-daemon-rs/AGENTS.md`; both paths are in
   or TCC grant; a global `NSEvent` monitor would need Accessibility. The Chat
   settings toggle registers and unregisters it, and `stop()` runs on
   termination. Each opening attaches its own `ChatWindowModel` on a fixed draft
-  slot (`attachWindow(draftSlot:)`), makes it the key window while the
+  slot (`attachDraftWindow(slot:)`), makes it the key window while the
   non-activating `FloatingPanel` is key (`setWindowKey`), sends through
   `workspace.send(from:)` and detaches it on close. Open in Window delivers
   `.openConversation(address)` through `summon`; the panel's screen never

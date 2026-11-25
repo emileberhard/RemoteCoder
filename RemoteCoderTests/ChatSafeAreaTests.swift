@@ -125,7 +125,7 @@ struct ChatSafeAreaTests {
         defer { hosted.close() }
         let window = try #require(host.view.window)
         host.view.layoutIfNeeded()
-        let chat = fixture.workspace.attachWindow()
+        let chat = fixture.workspace.attachMainWindow()
         defer { fixture.workspace.detachWindow(chat) }
         let context = ChatLayoutContext(window: chat)
         #expect(ChatLayoutContext(window: nil).description.contains("thread=unknown"))

@@ -16,7 +16,7 @@ struct VoiceModePresentationTests {
         let fixture = await WorkspaceFixture()
         defer { await fixture.cleanUp() }
         let workspace = fixture.workspace
-        let window = workspace.attachWindow()
+        let window = workspace.attachMainWindow()
         defer { workspace.detachWindow(window) }
         let screen = try #require(window.screen(for: .init(hostID: fixture.book.id)))
         let voice = screen.target.realtimeVoice
