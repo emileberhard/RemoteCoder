@@ -1605,7 +1605,8 @@ entrypoint linked above.
   weekly allowance; the inner 5-hour arc appears only while on pace to run out.
   - When a router is configured, Claude subscriptions come from llm-router, deduplicated by router account ID
     across hosts. The newest successful router list is authoritative wholesale.
-    The app owns quota staleness. Selection publishes only after
+    Within a refresh, a gateway that reports route options takes precedence over
+    one that omits them. The app owns quota staleness. Selection publishes only after
     router confirmation and never changes a conversation's host-default target.
     Failover's active account is distinct from the selected preference.
   - Native Claude uses its CLI login; router mode delegates account creation,

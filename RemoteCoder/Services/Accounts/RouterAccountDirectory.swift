@@ -93,6 +93,7 @@ final class RouterAccountDirectory {
             defer { finish(operationID: operationID, fence: fence) }
             var failures: Set<String> = []
             var succeeded = false
+            var receivedRouteOptions = false
             let configured = hosts
             for offset in stride(from: 0, to: configured.count, by: 3) {
                 let batch = configured[offset..<min(configured.count, offset + 3)]
@@ -112,9 +113,12 @@ final class RouterAccountDirectory {
                     for await (host, result) in group {
                         guard !Task.isCancelled, revision == fence else { group.cancelAll(); return }
                         do {
-                            try state.accept(result.get())
+                            let inventory = try result.get()
+                            guard !receivedRouteOptions || inventory.reportsRouteOptions else { continue }
+                            try state.accept(inventory)
                             respondingHostID = host.id
                             succeeded = true
+                            receivedRouteOptions = inventory.reportsRouteOptions
                         } catch is CancellationError { continue }
                         catch { failures.insert("\(host.displayName): \(error.localizedDescription)") }
                     }
@@ -166,13 +170,13 @@ final class RouterAccountDirectory {
                     continue
                 }
                 guard !Task.isCancelled, revision == fence else { return }
+                guard available.offers(selection) else {
+                    failures.insert("\(host.displayName): \(selection.unavailableMessage)")
+                    continue
+                }
                 do { try state.accept(available) }
                 catch { self.error = error.localizedDescription; return }
                 respondingHostID = host.id
-                guard available.offers(selection) else {
-                    error = selection.unavailableMessage
-                    return
-                }
                 do {
                     let response = try await submit(selection, client: client)
                     guard !Task.isCancelled, revision == fence else { return }
@@ -193,6 +197,7 @@ final class RouterAccountDirectory {
                         do {
                             let confirmed = try await readback.claudeAccounts()
                             guard !Task.isCancelled, revision == fence else { return }
+                            guard !available.reportsRouteOptions || confirmed.reportsRouteOptions else { continue }
                             try state.accept(confirmed)
                             respondingHostID = readbackHost.id
                             self.error = confirmed.confirms(selection) ? nil : selectionError

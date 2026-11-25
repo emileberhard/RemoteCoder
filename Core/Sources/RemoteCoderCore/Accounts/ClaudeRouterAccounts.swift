@@ -53,6 +53,8 @@ struct ClaudeRouterAccountList: Codable, Equatable, Sendable {
 
     var activeCodexRoute: RouterRoute? { codexRouteId ?? codexRoute }
 
+    var reportsRouteOptions: Bool { claudeRouteOptions != nil || codexRouteOptions != nil }
+
     var selectableClaudeRoutes: [RouterRoute] {
         let routes = claudeRouteOptions ?? (copilot != nil && route != nil ? [.copilot] : [])
         return routes.filter { $0 != .subscription }
