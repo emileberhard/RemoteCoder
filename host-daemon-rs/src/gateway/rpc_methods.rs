@@ -512,6 +512,33 @@ impl Gateway {
         self.apply_conversation_settings(settings).await
     }
 
+    pub(crate) async fn conversation_provider_change_is_idle(
+        &self,
+        thread_id: &str,
+    ) -> Result<bool> {
+        if let Some(session) = crate::providers::claude::session_uuid_from_thread_id(thread_id) {
+            let agent = self.claude_agent().context("Claude is unavailable")?;
+            self.claude_history
+                .read_thread_header(session.to_owned())
+                .await?;
+            return Ok(!agent.has_pending_or_active_work(thread_id).await);
+        }
+        let thread = self
+            .call_control(
+                "thread/read",
+                json!({"threadId":thread_id,"includeTurns":false}),
+            )
+            .await?;
+        match thread
+            .pointer("/thread/status/type")
+            .and_then(Value::as_str)
+        {
+            Some("idle" | "notLoaded") => Ok(true),
+            Some("active") => Ok(false),
+            _ => bail!("Codex conversation activity is unknown"),
+        }
+    }
+
     async fn apply_conversation_settings(&self, settings: ConversationSettingsUpdate) -> RpcResult {
         // Starting/replacing voice and publishing its settings share one order.
         // Settings never own the media connection or the agent's turn lifetime.

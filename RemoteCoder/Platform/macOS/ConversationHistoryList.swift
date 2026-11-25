@@ -419,6 +419,9 @@ struct ConversationSourceRow: View, Equatable {
                     Image(systemName: "bell.slash")
                         .accessibilityLabel("Muted")
                 }
+                if let route = row.inferenceProvider {
+                    ConversationProviderMark(route: route)
+                }
                 if row.forkSource != nil {
                     Image(systemName: "arrow.triangle.branch")
                         .accessibilityLabel("Forked conversation")

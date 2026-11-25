@@ -1,5 +1,10 @@
 # Gateway Agent Context
 
+llm-router owns conversation provider overrides. The gateway validates the
+conversation on writes, scopes Codex settings to its native installation and
+projects the Claude thread into the authenticated runtime request. Keep one
+durable copy and preserve the exact identity across compaction and recovery.
+
 Maintainers: configured hosts, devices and private operational prerequisites live
 in the [private operations entrypoint](https://github.com/emileberhard/RemoteCoder-deploy/blob/main/AGENTS.md).
 

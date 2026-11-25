@@ -11,6 +11,7 @@ struct ConversationHistoryActions {
     let unpin: (ConversationAddress) -> Void
     let fork: (ConversationAddress) -> Void
     let moveUnder: (ConversationAddress) -> Void
+    let chooseInferenceProvider: (ConversationSidebarRow) -> Void
     let markRead: ([ConversationAddress]) -> Void
     let markUnread: (ConversationAddress) -> Void
     let mute: (ConversationAddress) -> Void
@@ -37,6 +38,9 @@ struct ConversationHistoryActions {
             items.append(ContextMenuItem(title: "Regenerate Name", systemImage: "wand.and.sparkles") { regenerateName(row.address) })
         }
         items.append(ContextMenuItem(title: "Move under…", systemImage: "person.2") { moveUnder(row.address) })
+        if row.canChooseInferenceProvider {
+            items.append(ContextMenuItem(title: "Inference Provider…", systemImage: ConversationProviderMark.symbol) { chooseInferenceProvider(row) })
+        }
         items.append(readToggle(for: row))
         if let toggle = muteToggle(for: row) { items.append(toggle) }
         items.append(ContextMenuItem(title: "Fork", systemImage: "arrow.triangle.branch") { fork(row.address) })

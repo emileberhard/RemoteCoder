@@ -33,6 +33,16 @@ enum RouterSelection: Equatable, Sendable {
     case codex(RouterRoute)
 }
 
+struct ConversationProviderChoices: Codable, Equatable, Sendable {
+    let routes: [String: RouterRoute]
+    let claude: [RouterRoute]
+    let codex: [RouterRoute]
+
+    func options(for threadID: String) -> [RouterRoute] {
+        AgentProvider.provider(forThreadID: threadID) == .claude ? claude : codex
+    }
+}
+
 struct ClaudeRouterAccountList: Codable, Equatable, Sendable {
     let automatic: String
     let preference: String?

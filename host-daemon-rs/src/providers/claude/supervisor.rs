@@ -636,7 +636,6 @@ impl ClaudeSupervisor {
 
     /// Exact per-thread admission. A warm idle runtime is
     /// harmless, while a reserved start, active turn, or background task is not.
-    #[cfg(test)]
     pub(crate) async fn has_pending_or_active_work(&self, thread_id: &str) -> bool {
         let starting = || {
             self.starting

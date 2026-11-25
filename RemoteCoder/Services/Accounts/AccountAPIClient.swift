@@ -26,6 +26,15 @@ actor AccountAPIClient {
         return try await claudeRequest(path: "codex/route", method: "PUT", body: JSONEncoder().encode(Input(route: route)))
     }
 
+    func conversationProviders() async throws -> ConversationProviderChoices {
+        try await request(path: "conversation/provider", method: "GET")
+    }
+
+    func setConversationProvider(_ route: RouterRoute?, threadID: String) async throws -> ConversationProviderChoices {
+        let body = try JSONEncoder().encode(["threadId": threadID, "route": route?.rawValue])
+        return try await request(path: "conversation/provider", method: "PUT", body: body)
+    }
+
     func redeemCodexReset(account: ProviderAccountSnapshot, attempt: ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult {
         struct Input: Encodable { let resetId: String; let idempotencyKey: String; let generation: UInt64 }
         return try await redemptionRequest(path: "accounts/\(account.id)/resets/redeem", accountName: attempt.accountName,
@@ -76,7 +85,7 @@ actor AccountAPIClient {
         if !query.isEmpty { components.queryItems = query }
         guard let url = components.url else { throw AccountServiceError.invalidResponse }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData,
-                                 timeoutInterval: path.hasPrefix("claude/") || path == "codex/route" ? 15 : 100)
+                                 timeoutInterval: path.hasPrefix("claude/") || path == "codex/route" || path == "conversation/provider" ? 15 : 100)
         request.httpShouldHandleCookies = false
         request.httpMethod = method
         request.httpBody = body

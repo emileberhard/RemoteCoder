@@ -248,6 +248,7 @@ async fn claude_accounts_routes_require_authorization_without_codex_availability
     let harness = LanHarness::start().await;
     for (method, path, body) in [
         ("GET", "/claude/accounts", ""),
+        ("GET", "/conversation/provider", ""),
         ("PUT", "/claude/accounts/preference", "{\"account\":null}"),
         ("POST", "/claude/accounts/refresh", "{}"),
         ("PUT", "/codex/route", "{\"route\":\"copilot\"}"),

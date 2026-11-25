@@ -1079,7 +1079,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
             settlementEdits: model.conversationList.settlementEdits,
             canLoadMore: model.conversationList.canLoadOlder,
             hasDiscardedHeaders: model.conversationList.hasDiscardedHeaders,
-            unloadedPins: model.conversationList.unloadedPinnedThreads
+            unloadedPins: model.conversationList.unloadedPinnedThreads,
+            providers: accountDirectory.router.conversationProviders[model.hostID]
         )
     }
 

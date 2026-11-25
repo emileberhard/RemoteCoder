@@ -177,7 +177,7 @@ pub(crate) fn is_native_model(model: &str) -> bool {
 /// `args` is the complete argument vector; callers own argv construction so there
 /// is exactly one place per call site to audit.
 pub(crate) fn command(settings: &ClaudeSettings, args: &[String]) -> Result<ClaudeCommand> {
-    command_on_route(settings, args, &Route::Default, None)
+    command_on_route(settings, args, &Route::Default, None, None)
 }
 
 pub(crate) fn command_on_route(
@@ -185,6 +185,7 @@ pub(crate) fn command_on_route(
     args: &[String],
     route: &Route,
     claude_account: Option<&str>,
+    thread_id: Option<&str>,
 ) -> Result<ClaudeCommand> {
     debug_assert!(
         !args.iter().any(|arg| arg == "--bare"),
@@ -211,11 +212,18 @@ pub(crate) fn command_on_route(
                 let key = router
                     .key()
                     .map_err(|error| Error::other(error.to_string()))?;
+                let mut headers = Vec::new();
                 if let Some(account) = claude_account {
-                    cmd.env(
-                        "ANTHROPIC_CUSTOM_HEADERS",
-                        format!("X-Llm-Router-Claude-Preference: {account}"),
-                    );
+                    headers.push(format!("X-Llm-Router-Claude-Preference: {account}"));
+                }
+                if let Some(thread) = thread_id.filter(|thread| {
+                    super::session_uuid_from_thread_id(thread)
+                        .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+                }) {
+                    headers.push(format!("X-Llm-Router-Thread: {thread}"));
+                }
+                if !headers.is_empty() {
+                    cmd.env("ANTHROPIC_CUSTOM_HEADERS", headers.join("\n"));
                 }
                 cmd.env("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
                 cmd.env("ANTHROPIC_BASE_URL", router.inference_base());
@@ -289,7 +297,7 @@ mod tests {
             (None, None),
         ] {
             let command =
-                command_on_route(&fixture.settings, &[], &Route::Default, account).unwrap();
+                command_on_route(&fixture.settings, &[], &Route::Default, account, None).unwrap();
             let header = command
                 .as_std()
                 .get_envs()
@@ -307,7 +315,7 @@ mod tests {
         }
         let mut settings = fixture.settings.clone();
         settings.router = None;
-        assert!(command_on_route(&settings, &[], &Route::Default, Some("example")).is_err());
+        assert!(command_on_route(&settings, &[], &Route::Default, Some("example"), None).is_err());
     }
 
     #[test]

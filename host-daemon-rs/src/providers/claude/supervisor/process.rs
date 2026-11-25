@@ -285,6 +285,7 @@ impl ClaudeSupervisor {
             &[],
             route,
             request.claude_account.as_deref(),
+            Some(&request.thread_id),
         )?;
         launch.apply_env(&mut command);
         command.env(SEND_USER_MESSAGE_ENV, "1");

@@ -147,6 +147,11 @@ struct ConversationRow: View, Equatable {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Muted")
             }
+            if let route = row.inferenceProvider {
+                ConversationProviderMark(route: route)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             if let count = row.questionCount, count > 0 {
                 HStack(spacing: 2) {
                     Image(systemName: "questionmark.bubble")

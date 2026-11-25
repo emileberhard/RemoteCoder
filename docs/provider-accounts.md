@@ -246,6 +246,16 @@ Claude account creation, removal and credential management remain in llm-router.
 Configuration, transport and router failures return typed errors with actionable
 messages. See [Subscription usage](usage-status.md) for observation semantics.
 
+The drawer's **Inference Provider** action applies to the exact conversation on
+its gateway. **Use Default** inherits the shared setting, and **Automatic**
+explicitly chooses automatic routing for that conversation. An override adds a
+marker in the drawer. The gateway checks the exact conversation before a write.
+llm-router is the only durable owner. The gateway supplies its native Codex
+installation identity and projects Claude's exact conversation into the
+runtime's authenticated request. Codex turns, prewarm and compaction use the
+native Responses thread identity. A fork and a separate Codex child inherit the
+default. Work inside a Claude runtime uses that conversation's route.
+
 Each account carries `resets: null | {state, observedAt, available, offers, error}`.
 `state` is `known` or `unavailable`; timestamps are Unix seconds. `available`
 is the provider count, independent of the possibly capped offer list. A null

@@ -491,6 +491,111 @@ fn response(result: Result<Value>) -> Response {
 pub(super) async fn directory(State(state): State<HttpState>, _: Authorized) -> Response {
     response(state.router.get("accounts").await)
 }
+
+async fn thread_routes_path(state: &HttpState) -> String {
+    if let Some(home) = state.gateway.codex_home()
+        && let Ok(value) = tokio::fs::read_to_string(home.join("installation_id")).await
+        && let Ok(id) = uuid::Uuid::parse_str(value.trim())
+    {
+        return format!("accounts/thread-routes?installation={id}");
+    }
+    "accounts/thread-routes".into()
+}
+
+fn thread_routes_response(result: Result<Value>) -> Response {
+    match result {
+        Ok(value) => ([(header::CACHE_CONTROL, "no-store")], Json(value)).into_response(),
+        Err(failure) => match failure.downcast_ref::<RouterError>() {
+            Some(RouterError::Refused { status: 403, .. }) => error(
+                StatusCode::FORBIDDEN,
+                "route_not_available",
+                "This provider is unavailable for this conversation",
+            ),
+            Some(RouterError::Refused { status: 404, .. }) => error(
+                StatusCode::NOT_FOUND,
+                "route_not_supported",
+                "The inference router does not support conversation overrides",
+            ),
+            _ => error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "router_unavailable",
+                "Conversation provider settings are unavailable",
+            ),
+        },
+    }
+}
+
+pub(super) async fn thread_routes(State(state): State<HttpState>, _: Authorized) -> Response {
+    thread_routes_response(state.router.get(&thread_routes_path(&state).await).await)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ThreadRoutePreference {
+    thread_id: String,
+    route: Value,
+}
+
+pub(super) async fn set_thread_route(
+    State(state): State<HttpState>,
+    _: Authorized,
+    Json(request): Json<ThreadRoutePreference>,
+) -> Response {
+    let claude_id = crate::providers::claude::session_uuid_from_thread_id(&request.thread_id);
+    let id = claude_id.unwrap_or(&request.thread_id);
+    if !uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id)
+        || !(request.route.is_null() || request.route.as_str().is_some_and(valid_id))
+    {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Choose a valid conversation and provider",
+        );
+    }
+    let _lifecycle = if claude_id.is_some() {
+        let Some(agent) = state.gateway.claude_agent() else {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "provider_unavailable",
+                "Claude is unavailable on this gateway",
+            );
+        };
+        Some(agent.lock_lifecycle(&request.thread_id).await)
+    } else {
+        None
+    };
+    match state
+        .gateway
+        .conversation_provider_change_is_idle(&request.thread_id)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            return error(
+                StatusCode::CONFLICT,
+                "conversation_busy",
+                "Change the provider after the current turn finishes",
+            );
+        }
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "conversation_unavailable",
+                "This gateway could not verify the conversation",
+            );
+        }
+    }
+    let path = thread_routes_path(&state).await;
+    thread_routes_response(
+        state
+            .router
+            .put(
+                &path,
+                json!({"thread_id":request.thread_id,"route":request.route}),
+            )
+            .await,
+    )
+}
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub(super) enum Preference {

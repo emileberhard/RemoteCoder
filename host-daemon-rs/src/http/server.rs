@@ -262,6 +262,12 @@ fn router(state: HttpState) -> Router {
         .route("/ws", get(ws))
         .route("/claude/accounts", get(claude_accounts::directory))
         .route(
+            "/conversation/provider",
+            get(claude_accounts::thread_routes)
+                .put(claude_accounts::set_thread_route)
+                .layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
             "/claude/accounts/preference",
             put(claude_accounts::prefer).layer(DefaultBodyLimit::max(4096)),
         )

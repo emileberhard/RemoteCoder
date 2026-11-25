@@ -102,7 +102,7 @@ impl ClaudeSupervisor {
             question,
         ]
         .map(str::to_owned);
-        let mut command = claude_exec::command_on_route(&self.settings, &args, &route, None)
+        let mut command = claude_exec::command_on_route(&self.settings, &args, &route, None, None)
             .map_err(|error| format!("failed to prepare claude: {error}"))?;
         command
             .current_dir(cwd)

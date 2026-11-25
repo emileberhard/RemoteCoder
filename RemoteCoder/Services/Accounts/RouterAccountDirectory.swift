@@ -7,6 +7,7 @@ final class RouterAccountDirectory {
     private(set) var isRefreshing = false
     private(set) var isSelecting = false
     private(set) var error: String?
+    private(set) var conversationProviders: [UUID: ConversationProviderChoices] = [:]
     let resetRedemptions: AccountResetRedemptions
     @ObservationIgnored private var hosts: [GatewayHostConfiguration] = []
     @ObservationIgnored private var clients: [UUID: AccountAPIClient] = [:]
@@ -16,6 +17,8 @@ final class RouterAccountDirectory {
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var operationID: UUID?
     @ObservationIgnored private var refreshProbesUsage = false
+    @ObservationIgnored private var providerReadIDs: [UUID: UUID] = [:]
+    @ObservationIgnored private var providerWrites: Set<UUID> = []
 
     init(storage: HostStorage,
          beginBackgroundExecution: @escaping AccountResetRedemptions.BeginBackgroundExecution,
@@ -41,6 +44,10 @@ final class RouterAccountDirectory {
         }
         guard connectionChanged else { hosts = configured; return false }
         stopReading()
+        providerReadIDs.removeAll()
+        conversationProviders = conversationProviders.filter { id, _ in
+            configured.contains { next in next.id == id && hosts.contains { $0.id == id && $0.hasSameConnection(as: next) } }
+        }
         for previous in hosts where !configured.contains(where: { $0.id == previous.id && $0.hasSameConnection(as: previous) }) {
             resetRedemptions.retire(hostID: previous.id)
         }
@@ -60,6 +67,38 @@ final class RouterAccountDirectory {
             error = nil
         }
         return true
+    }
+
+    func refreshConversationProviders() async {
+        await withTaskGroup(of: (UUID, UUID, ConversationProviderChoices?).self) { group in
+            for (host, client) in clients where !providerWrites.contains(host) {
+                let readID = UUID()
+                providerReadIDs[host] = readID
+                group.addTask { (host, readID, try? await client.conversationProviders()) }
+            }
+            for await (host, readID, options) in group {
+                guard !Task.isCancelled else { return }
+                guard providerReadIDs[host] == readID else { continue }
+                if conversationProviders[host] != options { conversationProviders[host] = options }
+            }
+        }
+    }
+
+    func setConversationProvider(_ route: RouterRoute?, for address: ConversationAddress) async throws {
+        guard let client = clients[address.hostID],
+              let current = conversationProviders[address.hostID],
+              route.map(current.options(for: address.threadID).contains) ?? true else {
+            throw AccountServiceError.rejected("This provider is unavailable for the conversation.")
+        }
+        guard providerWrites.insert(address.hostID).inserted else {
+            throw AccountServiceError.rejected("A provider selection is already in progress on this gateway.")
+        }
+        providerReadIDs.removeValue(forKey: address.hostID)
+        defer { providerWrites.remove(address.hostID) }
+        let confirmed = try await client.setConversationProvider(route, threadID: address.threadID)
+        guard clients[address.hostID] === client else { throw CancellationError() }
+        conversationProviders[address.hostID] = confirmed
+        guard confirmed.routes[address.threadID] == route else { throw AccountServiceError.invalidResponse }
     }
 
     func requestRead() {

@@ -14,6 +14,7 @@ struct ConversationHistoryView: View {
     @Binding var notice: DrawerNotice?
 
     @State private var movingAgent: ConversationAddress?
+    @State private var providerConversation: ConversationSidebarRow?
     @State private var sidebar: ConversationSidebarSnapshot?
     #if os(iOS)
     @State private var rising: Set<String> = []
@@ -42,6 +43,12 @@ struct ConversationHistoryView: View {
             .sheet(item: $movingAgent) {
                 AgentPlacementPicker(agent: $0, workspace: workspace)
                     .chatPresentationDiagnostics("sheet-move-agent")
+            }
+            .sheet(item: $providerConversation) { row in
+                ConversationProviderPicker(address: row.address, directory: workspace.accountDirectory.router)
+            }
+            .task(id: isVisible) {
+                if isVisible { await workspace.accountDirectory.router.refreshConversationProviders() }
             }
             .safeAreaInset(edge: .top) {
                 if isVisible {
@@ -190,6 +197,7 @@ struct ConversationHistoryView: View {
             },
             fork: onFork,
             moveUnder: { movingAgent = $0 },
+            chooseInferenceProvider: { providerConversation = $0 },
             markRead: { addresses in
                 workspace.markRead(addresses)
                 HapticService.shared.play(.toggleOff)

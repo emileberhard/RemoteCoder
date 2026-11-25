@@ -30,6 +30,8 @@ struct ConversationSidebarRow: Identifiable, Equatable, Sendable {
     var isProbablyDone = false
     var needsInput = false
     var notifications: Notifications = .unavailable
+    var inferenceProvider: RouterRoute? = nil
+    var canChooseInferenceProvider = false
 
     enum Settlement: Equatable, Sendable {
         case unavailable
@@ -204,6 +206,7 @@ struct ConversationSidebarHostInput {
     var canLoadMore = false
     var hasDiscardedHeaders = false
     var unloadedPins: [UnloadedPinnedConversation] = []
+    var providers: ConversationProviderChoices? = nil
 
     var target: ExecutionTarget { ExecutionTarget(hostID: hostID) }
 }
@@ -330,7 +333,9 @@ enum ConversationSidebarProjection {
                     settlement: !host.marks.offersSettlement ? .unavailable : isSettled ? .settled : .unsettled,
                     isProbablyDone: !live.isLive && !isSettled && host.marks.isProbablyDone(thread),
                     needsInput: live.tier == .needsYou,
-                    notifications: !host.marks.offersMute ? .unavailable : host.marks.isMuted(thread.id) ? .muted : .enabled
+                    notifications: !host.marks.offersMute ? .unavailable : host.marks.isMuted(thread.id) ? .muted : .enabled,
+                    inferenceProvider: host.providers?.routes[thread.id],
+                    canChooseInferenceProvider: host.providers?.options(for: thread.id).isEmpty == false
                 )
                 slots.append(Slot(
                     row: row,
