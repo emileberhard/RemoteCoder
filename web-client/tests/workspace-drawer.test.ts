@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { targetKey } from "../src/execution-context";
 import { object } from "../src/protocol/boundary";
 import { favoriteFolders } from "../src/workspace/favorite-folder";
@@ -178,20 +178,33 @@ test("sidebar history distinguishes loading, partial failure and successfully em
   expect(workspace.getSnapshot().sidebar.hostStates[0]?.errors).toContain("Codex history offline");
 });
 
-test("Workspace caches sidebar projection across unrelated and streamed text publications", async () => {
+test("Workspace caches sidebar projection across unrelated and streamed usage publications", async () => {
   const { workspace, harness } = await setup();
   await workspace.selectConversation({ hostId: "mini", threadId: "shared" });
-  harness.emit("turn/started", { threadId: "shared", turn: { id: "live" } });
-  const first = workspace.getSnapshot().sidebar;
-  workspace.report("unrelated");
-  expect(workspace.getSnapshot().sidebar).toBe(first);
-  harness.emit("thread/tokenUsage/updated", {
-    threadId: "shared",
-    tokenUsage: { total: { totalTokens: 10000 }, last: { totalTokens: 745 }, modelContextWindow: 1000 },
-  });
-  await new Promise((resolve) => setTimeout(resolve, 90));
-  expect(workspace.getSnapshot().sidebar).toBe(first);
-  expect(workspace.contextWindowUsage).toMatchObject({ usedTokens: 745, usedPercent: 75, level: "amber" });
+  const clock = spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 0, 1, 0, 0, 30));
+  try {
+    harness.emit("turn/started", { threadId: "shared", turn: { id: "live" } });
+    const first = workspace.getSnapshot().sidebar;
+    workspace.report("unrelated");
+    expect(workspace.getSnapshot().sidebar).toBe(first);
+    const published = deferred<void>();
+    const unsubscribe = workspace.subscribe(() => {
+      if (workspace.contextWindowUsage?.usedTokens === 745) published.resolve();
+    });
+    try {
+      harness.emit("thread/tokenUsage/updated", {
+        threadId: "shared",
+        tokenUsage: { total: { totalTokens: 10000 }, last: { totalTokens: 745 }, modelContextWindow: 1000 },
+      });
+      await published.promise;
+    } finally {
+      unsubscribe();
+    }
+    expect(workspace.getSnapshot().sidebar).toBe(first);
+    expect(workspace.contextWindowUsage).toMatchObject({ usedTokens: 745, usedPercent: 75, level: "amber" });
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 test("marks actions use the exact owning host, remain optimistic, and regenerate header and history titles", async () => {
