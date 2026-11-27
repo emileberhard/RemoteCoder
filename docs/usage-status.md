@@ -172,12 +172,13 @@ refresh fails. The app classifies every failure as not submitted, unconfirmed
 or refused (`ResetSubmissionCertainty`). Connect failures and the gateway's
 pre-dispatch codes (`redeem_in_progress`, `redeem_unconfirmed_pending` and the
 gateway-unavailable codes, `router_retry_later` included) mean this call
-submitted nothing. Only the gateway's refusal codes (`account_not_found`,
-`reset_account_unbound`, `reset_account_changed`, `reset_credential_unavailable`,
-`router_unauthorized`, `router_request_refused`, `invalid_request`) are
-definite refusals. Every other response, including 504 `redeem_unconfirmed`,
-unknown codes and bodies without a gateway error, and a possibly submitted
-transport failure is unconfirmed. After a timeout or connection loss following submission, retrying the same key
+submitted nothing, as does 502 `router_unauthorized` (that gateway's own router
+key). Only the gateway's specific refusals (404 `account_not_found`, 409
+`reset_account_unbound` or `reset_account_changed`, 503
+`reset_credential_unavailable`, 400 `invalid_request`) are definite. Every
+other response, including 504 `redeem_unconfirmed`, the generic
+`router_request_refused`, unknown codes and bodies without a gateway error, and
+a possibly submitted transport failure is unconfirmed. After a timeout or connection loss following submission, retrying the same key
 through either host is safe: configured routes use the same account owner and the
 providers deduplicate by key. A fresh attempt uses a new key.
 
@@ -222,10 +223,9 @@ retired enrollment endpoints, without a refresh precheck.
 
 An unconfirmed attempt created within the last ten minutes resumes by itself
 with the same key on each foreground account refresh (never the refresh that
-follows an outcome): Codex before its host reads, from cached inventory, and
-Claude after its router read. Retries that may have submitted are limited to
-three per launch; one that no gateway submitted does not count,
-so an app restart or connection loss finishes the redemption without a second
+follows an outcome) that was not cancelled or outlived by a stop: Codex before
+and after its host reads, Claude after its router read. A same-key retry cannot
+spend a second credit and the ten-minute window bounds the retries, so an app restart or connection loss finishes the redemption without a second
 credit. Older attempts and attempts saved before creation times were recorded
 wait for Retry. A retry that no gateway submitted leaves the attempt unconfirmed
 rather than turning it into a refusal. The app log records each submission,

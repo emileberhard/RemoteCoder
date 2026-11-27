@@ -162,7 +162,9 @@ final class AccountDirectory {
             return (host.host, account, client)
         }
         guard !gateways.isEmpty else {
-            let inventoried = hosts.contains { $0.error == nil && !$0.accounts.isEmpty && !$0.accounts.contains(where: \.stale) }
+            let inventoried = hosts.contains { host in
+                host.error == nil && host.accounts.contains { $0.provider == .codex && !$0.stale }
+            }
             let message = "Codex account unavailable."
             throw inventoried ? ResetRedemptionError.rejected(message) : ResetRedemptionError.unavailable(message)
         }
@@ -188,12 +190,16 @@ final class AccountDirectory {
     }
 
     func refresh(interactive: Bool = false) async {
+        let codexFence = resetRedemptions.revision
         let claudeFence = router.resetRedemptions.revision
         await resetRedemptions.restore()
-        resumeResets(fence: resetRedemptions.revision)
+        resumeResets(fence: codexFence)
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.router.refresh(interactive: interactive, resumingResetsWithin: claudeFence) }
-            group.addTask { await self.refreshCodex(interactive: interactive) }
+            group.addTask {
+                await self.refreshCodex(interactive: interactive)
+                await self.resumeResets(fence: codexFence)
+            }
         }
     }
 

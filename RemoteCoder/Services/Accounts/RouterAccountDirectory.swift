@@ -326,6 +326,7 @@ final class RouterAccountDirectory {
 
     func refresh(interactive: Bool, resumingResetsWithin fence: UUID) async {
         await refresh(interactive: interactive)
+        guard !Task.isCancelled else { return }
         resetRedemptions.resume(now: .now, fence: fence, operation: { [weak self] _, attempt in
             guard let self else { throw CancellationError() }
             return try await submitReset(attempt: attempt)

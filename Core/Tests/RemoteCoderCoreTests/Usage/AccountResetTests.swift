@@ -148,7 +148,7 @@ struct AccountResetTests {
                 == [book, linux, mini])
     }
 
-    @Test @MainActor func onlyRecentUnconfirmedAttemptsResumeAndOnlyAFewTimes() async throws {
+    @Test @MainActor func onlyRecentUnconfirmedAttemptsResumeAndOnlyWhileAdmitted() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let storage = HostStorage(root: root)
@@ -173,13 +173,19 @@ struct AccountResetTests {
         let stale = redemptions.revision
         redemptions.stop()
         redemptions.resume(now: now, fence: stale, operation: operation, refresh: {})
-        #expect(resumed.isEmpty)
-        for _ in 0..<5 {
+        #expect(redemptions.states["codex:recent"]?.isSubmitting == false)
+        let cancelled = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            redemptions.resume(now: now, fence: redemptions.revision, operation: operation, refresh: {})
+        }
+        await cancelled.value
+        #expect(redemptions.states["codex:recent"]?.isSubmitting == false)
+        for _ in 0..<3 {
             redemptions.resume(now: now, fence: redemptions.revision, operation: operation, refresh: {})
             redemptions.resume(now: now, fence: redemptions.revision, operation: operation, refresh: {})
             while redemptions.states.values.contains(where: \.isSubmitting) { await Task.yield() }
         }
-        #expect(resumed == Array(repeating: "codex:recent", count: 4))
+        #expect(resumed == Array(repeating: "codex:recent", count: 3))
         #expect(redemptions.states["codex:recent"]?.canRetry == true)
         #expect(redemptions.states["codex:recent"]?.canForget == false)
         #expect(!ResetRedemptionAttempt(resetId: "one", title: "Full reset", idempotencyKey: UUID(), hostID: hostID,
@@ -349,12 +355,13 @@ struct AccountResetTests {
         (409, "reset_account_unbound", .refused),
         (409, "reset_account_changed", .refused),
         (503, "reset_credential_unavailable", .refused),
-        (502, "router_unauthorized", .refused),
+        (502, "router_unauthorized", .notSubmitted),
         (503, "router_key_unavailable", .notSubmitted),
         (503, "router_unavailable", .notSubmitted),
         (503, "gateway_stopping", .notSubmitted),
         (503, "router_retry_later", .notSubmitted),
-        (502, "router_request_refused", .refused),
+        (502, "router_request_refused", .unconfirmed),
+        (504, "account_not_found", .unconfirmed),
         (500, "future_code", .unconfirmed),
         (504, "upstream_timeout", .unconfirmed),
         (400, "invalid_request", .refused),

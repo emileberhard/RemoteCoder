@@ -1625,7 +1625,8 @@ entrypoint linked above.
     gateway submitted nothing or left the outcome unconfirmed
     (`ResetSubmissionCertainty`); a later refusal never downgrades an unconfirmed
     result. `AccountResetRedemptions.resume` admits unconfirmed attempts younger
-    than ten minutes after foreground account refreshes, at most three times.
+    than ten minutes from uncancelled foreground refreshes within the owner's
+    revision; unknown gateway responses count as unconfirmed.
     A definitely refused retry keeps Retry and adds Forget.
     Missing accounts and host changes only cancel work, preserving same-key
     Retry. Forget preserves the unknown outcome in copy. Claude reset
