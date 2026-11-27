@@ -363,6 +363,7 @@ struct AccountResetTests {
         (503, "gateway_stopping", .notSubmitted),
         (504, "router_unavailable", .unconfirmed),
         (429, "accounts_busy", .notSubmitted),
+        (503, "accounts_busy", .unconfirmed),
         (503, "router_retry_later", .notSubmitted),
         (502, "router_request_refused", .unconfirmed),
         (504, "account_not_found", .unconfirmed),
