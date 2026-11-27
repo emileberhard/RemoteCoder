@@ -26,7 +26,8 @@ actor ResetRedemptionStore {
         if !retired.isEmpty {
             for (key, attempt) in retired {
                 loaded[key] = ResetRedemptionAttempt(resetId: attempt.resetId, title: attempt.title, idempotencyKey: attempt.idempotencyKey,
-                    hostID: attempt.hostID, gatewayAccountID: "default-codex", accountName: attempt.accountName)
+                    hostID: attempt.hostID, gatewayAccountID: "default-codex", accountName: attempt.accountName,
+                    createdAt: attempt.createdAt)
             }
             try write(loaded)
         }

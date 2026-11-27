@@ -174,8 +174,13 @@ After a timeout or connection loss following submission, retrying the same key
 through either host is safe: configured routes use the same account owner and the
 providers deduplicate by key. A fresh attempt uses a new key.
 
-Codex redeems through the host default and refreshes its account after an
-effective or unconfirmed outcome. Claude starts
+Every attempt is submitted through the configured gateways in order: connected
+ones first, then the attempt's own host. It moves to the next gateway with the
+same key when the request never reached a gateway, the gateway could not reach
+the router (a gateway-unavailable refusal or 404/503 without a router error), or
+the outcome is unconfirmed. A definite refusal stops there, except that once any
+gateway left the outcome unconfirmed the attempt stays unconfirmed. Codex
+refreshes its account after an effective or unconfirmed outcome. Claude starts
 a Claude-only router refresh after returning the outcome. Refresh completion
 can lag the response; the gateway does not invent refilled usage.
 
@@ -200,11 +205,21 @@ name the account and ask for an agent to reconnect its router grant.
 Claude redemption, independently of account preference selection. Their
 `AccountResetRedemptions` saves one unresolved attempt per subscription in a
 device-local provider ledger before submission. It records the account name,
-offer, idempotency key, gateway host and exact gateway account ID. Persisted and
-submitted keys use the same lowercase UUID string. Retry keeps that exact host,
-account, offer and key. Gateway route failover retains its mutation rule: fail over only when the
-request provably never reached the gateway. Codex uses `default-codex`, including
-retries restored from retired enrollment endpoints, without a refresh precheck.
+offer, idempotency key, preferred gateway host, exact gateway account ID and
+creation time. Persisted and submitted keys use the same lowercase UUID string.
+Retry keeps the account, offer and key and may reach the router through any
+configured gateway that lists the account. Within one gateway, route failover
+retains its mutation rule: fail over only when the request provably never
+reached the gateway. Codex uses `default-codex`, including retries restored from
+retired enrollment endpoints, without a refresh precheck.
+
+An unconfirmed attempt created within the last ten minutes resumes by itself
+with the same key after each account refresh, at most three times per launch,
+so an app restart or connection loss finishes the redemption without a second
+credit. Older attempts and attempts saved before creation times were recorded
+wait for Retry. A retry that no gateway submitted leaves the attempt unconfirmed
+rather than turning it into a refusal. The app log records each submission,
+each gateway that failed it, and its outcome.
 
 Only gateway 504 `redeem_unconfirmed` or a possibly submitted transport failure
 makes a fresh attempt unconfirmed. Other HTTP errors are definite refusals,
@@ -222,8 +237,8 @@ An in-flight attempt holds the platform's bounded background-execution assertion
 and survives scene backgrounding. Termination, system execution expiry or
 retirement of its own host cancels it without losing the saved key. Changes to
 other hosts leave it running. A provider result never changes allowances
-optimistically. Every outcome requests fresh usage; Codex refreshes only the
-attempt's host, and Claude refresh waits for an active preference selection
+optimistically. Every outcome requests fresh usage; Codex refreshes every
+configured host, and Claude refresh waits for an active preference selection
 without canceling it.
 
 ## Presentation and validation

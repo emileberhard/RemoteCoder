@@ -18,14 +18,14 @@ private enum RouterAccountFixture {
 
     static func directory(route: RouterRoute, codexRoute: RouterRoute = .subscription) -> RouterAccountDirectory {
         let directory = RouterAccountDirectory(storage: HostStorage(root: .temporaryDirectory.appending(path: "router-account-preview")),
-            beginBackgroundExecution: { _ in {} }, routes: { _ in nil })
+            beginBackgroundExecution: { _ in {} }, routes: { _ in nil }, isConnected: { _ in false })
         try! directory.showPreview(list(route: route, codexRoute: codexRoute))
         return directory
     }
 
     static func automaticDirectory(_ state: AutomaticState) -> RouterAccountDirectory {
         let directory = RouterAccountDirectory(storage: HostStorage(root: .temporaryDirectory.appending(path: "router-automatic-preview")),
-            beginBackgroundExecution: { _ in {} }, routes: { _ in nil })
+            beginBackgroundExecution: { _ in {} }, routes: { _ in nil }, isConnected: { _ in false })
         let accounts = [
             automaticAccount(id: "emileberhard388", fiveHour: nil, weekly: 68, fable: state == .unified ? 25 : 100),
             automaticAccount(id: "tent62-latch", fiveHour: 100, weekly: 15, fable: state == .exhausted ? 100 : 25),

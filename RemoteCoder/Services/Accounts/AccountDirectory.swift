@@ -32,6 +32,7 @@ final class AccountDirectory {
     @ObservationIgnored private let store: AccountDirectoryStore
     @ObservationIgnored private var clients: [UUID: AccountAPIClient] = [:]
     @ObservationIgnored private let routes: @MainActor @Sendable (GatewayHostConfiguration) -> GatewayRoutes?
+    @ObservationIgnored private let isConnected: @MainActor @Sendable (UUID) -> Bool
     @ObservationIgnored private var epochs: [UUID: UUID] = [:]
     @ObservationIgnored private var tasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var taskIDs: [UUID: UUID] = [:]
@@ -40,9 +41,12 @@ final class AccountDirectory {
 
     init(defaults: UserDefaults, storage: HostStorage = .live,
          beginBackgroundExecution: @escaping AccountResetRedemptions.BeginBackgroundExecution,
-         routes: @escaping @MainActor @Sendable (GatewayHostConfiguration) -> GatewayRoutes?) {
+         routes: @escaping @MainActor @Sendable (GatewayHostConfiguration) -> GatewayRoutes?,
+         isConnected: @escaping @MainActor @Sendable (UUID) -> Bool) {
         self.routes = routes
-        router = RouterAccountDirectory(storage: storage, beginBackgroundExecution: beginBackgroundExecution, routes: routes)
+        self.isConnected = isConnected
+        router = RouterAccountDirectory(storage: storage, beginBackgroundExecution: beginBackgroundExecution, routes: routes,
+                                        isConnected: isConnected)
         resetRedemptions = AccountResetRedemptions(storage: storage, provider: .codex, beginBackgroundExecution: beginBackgroundExecution)
         store = AccountDirectoryStore(storage: storage)
         names = AccountNameStore(defaults: defaults)
@@ -132,41 +136,53 @@ final class AccountDirectory {
             gatewayAccountID: row.account.id, offer: offer,
             operation: { [weak self] attempt in
                 guard let self else { throw CancellationError() }
-                let (client, account) = try resetSession(groupID: groupID, attempt: attempt)
-                guard !account.stale, account.resets?.state == .known,
-                      account.resets?.offers?.contains(offer) == true, offer.canUse(now: .now) else {
+                guard let sample = groups.first(where: { $0.id == groupID })?.sample, !sample.stale,
+                      sample.resets?.state == .known, sample.resets?.offers?.contains(offer) == true,
+                      offer.canUse(now: .now) else {
                     throw ResetRedemptionError.rejected("Reset offer changed. Refresh this account.")
                 }
-                try Task.checkCancellation()
-                return try await client.redeemCodexReset(account: account, attempt: attempt)
-            }, refresh: { [weak self] in await self?.refreshAfterReset(hostID: row.host.id) })
+                return try await submitCodexReset(groupID: groupID, attempt: attempt)
+            }, refresh: { [weak self] in await self?.refreshAfterReset() })
     }
 
     func retryReset(groupID: String) async {
-        guard let attempt = resetRedemptions.states[groupID]?.attempt else { return }
         await resetRedemptions.retry(accountID: groupID,
             operation: { [weak self] attempt in
                 guard let self else { throw CancellationError() }
-                let (client, account) = try resetSession(groupID: groupID, attempt: attempt)
-                try Task.checkCancellation()
-                return try await client.redeemCodexReset(account: account, attempt: attempt)
-            }, refresh: { [weak self] in await self?.refreshAfterReset(hostID: attempt.hostID) })
+                return try await submitCodexReset(groupID: groupID, attempt: attempt)
+            }, refresh: { [weak self] in await self?.refreshAfterReset() })
     }
 
-    private func resetSession(groupID: String, attempt: ResetRedemptionAttempt) throws -> (AccountAPIClient, ProviderAccountSnapshot) {
-        guard let host = hosts.first(where: { $0.id == attempt.hostID }),
-              let account = host.accounts.first(where: { $0.id == attempt.gatewayAccountID && $0.provider == .codex }),
-              account.identity.map({ AgentProvider.codex.groupID(for: $0) }) == groupID,
-              let client = clients[attempt.hostID] else {
-            throw AccountServiceError.rejected("Codex account unavailable.")
+    private func submitCodexReset(groupID: String, attempt: ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult {
+        typealias Gateway = (host: GatewayHostConfiguration, account: ProviderAccountSnapshot, client: AccountAPIClient)
+        let gateways = hosts.compactMap { host -> Gateway? in
+            guard let account = host.accounts.first(where: { $0.id == attempt.gatewayAccountID && $0.provider == .codex }),
+                  account.identity.map({ AgentProvider.codex.groupID(for: $0) }) == groupID,
+                  let client = clients[host.id] else { return nil }
+            return (host.host, account, client)
         }
-        return (client, account)
+        guard !gateways.isEmpty else { throw AccountServiceError.rejected("Codex account unavailable.") }
+        let ranked = ResetRedemptionFailover.ranked(gateways, preferred: attempt.hostID, id: \.host.id, isConnected: isConnected)
+        return try await ResetRedemptionFailover.submit(through: ranked, name: { $0.host.displayName }) { gateway in
+            try await gateway.client.redeemCodexReset(account: gateway.account, attempt: attempt)
+        }
     }
 
-    private func refreshAfterReset(hostID: UUID) async {
-        tasks.removeValue(forKey: hostID)?.cancel()
-        taskIDs.removeValue(forKey: hostID)
-        await refresh(hostID: hostID, interactive: true)
+    private func resumeResets() {
+        for groupID in resetRedemptions.claimResumable(now: .now) {
+            Task { [weak self] in await self?.retryReset(groupID: groupID) }
+        }
+    }
+
+    private func refreshAfterReset() async {
+        let ids = hosts.map(\.id)
+        for hostID in ids {
+            tasks.removeValue(forKey: hostID)?.cancel()
+            taskIDs.removeValue(forKey: hostID)
+        }
+        await withTaskGroup(of: Void.self) { group in
+            for id in ids { group.addTask { await self.refresh(hostID: id, interactive: true) } }
+        }
     }
 
     func refresh(interactive: Bool = false) async {
@@ -184,6 +200,7 @@ final class AccountDirectory {
                 for id in batch { group.addTask { await self.refresh(hostID: id, interactive: interactive) } }
             }
         }
+        resumeResets()
     }
 
     func refresh(hostID: UUID, interactive: Bool = false) async {

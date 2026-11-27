@@ -12,6 +12,7 @@ final class RouterAccountDirectory {
     @ObservationIgnored private var hosts: [GatewayHostConfiguration] = []
     @ObservationIgnored private var clients: [UUID: AccountAPIClient] = [:]
     @ObservationIgnored private let routes: @MainActor @Sendable (GatewayHostConfiguration) -> GatewayRoutes?
+    @ObservationIgnored private let isConnected: @MainActor @Sendable (UUID) -> Bool
     private var respondingHostID: UUID?
     @ObservationIgnored private var revision = UUID()
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -22,8 +23,10 @@ final class RouterAccountDirectory {
 
     init(storage: HostStorage,
          beginBackgroundExecution: @escaping AccountResetRedemptions.BeginBackgroundExecution,
-         routes: @escaping @MainActor @Sendable (GatewayHostConfiguration) -> GatewayRoutes?) {
+         routes: @escaping @MainActor @Sendable (GatewayHostConfiguration) -> GatewayRoutes?,
+         isConnected: @escaping @MainActor @Sendable (UUID) -> Bool) {
         self.routes = routes
+        self.isConnected = isConnected
         resetRedemptions = AccountResetRedemptions(storage: storage, provider: .claude, beginBackgroundExecution: beginBackgroundExecution)
     }
 
@@ -167,6 +170,7 @@ final class RouterAccountDirectory {
             if succeeded {
                 error = nil
                 resetRedemptions.retainAccounts(Set(accounts.map(\.id)))
+                resumeResets()
             }
             else {
                 respondingHostID = nil
@@ -309,11 +313,20 @@ final class RouterAccountDirectory {
     }
 
     private func submitReset(attempt: ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult {
-        guard accounts.contains(where: { $0.id == attempt.gatewayAccountID }), let client = clients[attempt.hostID] else {
+        let gateways = hosts.compactMap { host in clients[host.id].map { (host: host, client: $0) } }
+        guard accounts.contains(where: { $0.id == attempt.gatewayAccountID }), !gateways.isEmpty else {
             throw AccountServiceError.rejected("Claude account unavailable.")
         }
-        try Task.checkCancellation()
-        return try await client.redeemClaudeReset(accountID: attempt.gatewayAccountID, attempt: attempt)
+        let ranked = ResetRedemptionFailover.ranked(gateways, preferred: attempt.hostID, id: \.host.id, isConnected: isConnected)
+        return try await ResetRedemptionFailover.submit(through: ranked, name: { $0.host.displayName }) { gateway in
+            try await gateway.client.redeemClaudeReset(accountID: attempt.gatewayAccountID, attempt: attempt)
+        }
+    }
+
+    private func resumeResets() {
+        for accountID in resetRedemptions.claimResumable(now: .now) {
+            Task { [weak self] in await self?.retryReset(accountID: accountID) }
+        }
     }
 
     private func refreshAfterReset() async {

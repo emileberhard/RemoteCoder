@@ -12,7 +12,7 @@ struct RouterAccountDirectoryTests {
                                             authToken: "test-token", transport: .trustedNetwork)
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
-        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated)
+        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated, isConnected: { _ in true })
         defer { directory.stopReading() }
         await gateway.setClaudeAccounts(list(selected: "one"), selection: list(selected: "two"), failsSelection: true)
         directory.reconcile([host])
@@ -44,7 +44,7 @@ struct RouterAccountDirectoryTests {
         await gateway.holdClaudeRead()
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
-        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated)
+        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated, isConnected: { _ in true })
         defer { directory.stopReading() }
         directory.reconcile([GatewayHostConfiguration(id: UUID(), name: "Test gateway", hostname: "127.0.0.1",
             port: port, authToken: "test-token", transport: .trustedNetwork)])
@@ -68,7 +68,7 @@ struct RouterAccountDirectoryTests {
         await second.failClaudeRead(true)
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
-        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated)
+        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated, isConnected: { _ in true })
         defer { directory.stopReading() }
         directory.reconcile([configuration(name: "Mini", port: firstPort), configuration(name: "Book", port: secondPort)])
         await directory.refresh(interactive: false)
@@ -101,7 +101,7 @@ struct RouterAccountDirectoryTests {
         await second.failClaudeRead(true)
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
-        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated)
+        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated, isConnected: { _ in true })
         defer { directory.stopReading() }
         var preferred = configuration(name: "Mini", port: firstPort)
         let fallback = configuration(name: "Book", port: secondPort)
@@ -129,7 +129,7 @@ struct RouterAccountDirectoryTests {
         await gateway.setClaudeAccounts(list(selected: "one"), selection: list(selected: "two"), failsSelection: false)
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
-        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated)
+        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated, isConnected: { _ in true })
         defer { directory.stopReading() }
         directory.reconcile([configuration(name: "Mini", port: port)])
         await directory.refresh(interactive: false)
@@ -146,7 +146,7 @@ struct RouterAccountDirectoryTests {
         let gateway = try FakeGatewayServer()
         let port = try await gateway.start()
         let temporary = TemporaryHostStorage()
-        let owner = AccountDirectory(defaults: temporary.defaults, storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated)
+        let owner = AccountDirectory(defaults: temporary.defaults, storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated, isConnected: { _ in true })
         let directory = owner.router
         defer { owner.stopForeground(); temporary.cleanUp(); Task { await gateway.stop() } }
         await gateway.setClaudeAccounts(list(selected: "one"), selection: nil, failsSelection: false)
@@ -177,7 +177,7 @@ struct RouterAccountDirectoryTests {
         defer { Task { await gateway.stop() } }
         let temporary = TemporaryHostStorage()
         defer { temporary.cleanUp() }
-        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated)
+        let directory = RouterAccountDirectory(storage: temporary.storage, beginBackgroundExecution: { _ in {} }, routes: GatewayRoutes.isolated, isConnected: { _ in true })
         defer { directory.stopReading() }
         directory.reconcile([configuration(name: "Mini", port: port)])
         await gateway.setClaudeAccounts(list(selected: "one"), selection: nil, failsSelection: false)

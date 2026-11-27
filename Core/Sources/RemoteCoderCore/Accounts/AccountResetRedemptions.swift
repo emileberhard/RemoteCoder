@@ -13,6 +13,8 @@ final class AccountResetRedemptions {
     @ObservationIgnored private var taskIDs: [String: UUID] = [:]
     @ObservationIgnored private var hostIDs: Set<UUID>?
     @ObservationIgnored private var revision = UUID()
+    @ObservationIgnored private var resumptions: [UUID: Int] = [:]
+    @ObservationIgnored private let log = AppLogger(category: "AccountResets")
 
     init(storage: HostStorage, provider: AgentProvider, beginBackgroundExecution: @escaping BeginBackgroundExecution) {
         store = ResetRedemptionStore(storage: storage, provider: provider)
@@ -52,9 +54,19 @@ final class AccountResetRedemptions {
         await run(accountID: accountID, attempt: attempt, operation: operation, refresh: refresh)
     }
 
+    func claimResumable(now: Date) -> [String] {
+        states.compactMap { accountID, state in
+            guard case .unconfirmed(let attempt, _) = state, attempt.canResume(now: now),
+                  resumptions[attempt.idempotencyKey, default: 0] < 3 else { return nil }
+            resumptions[attempt.idempotencyKey, default: 0] += 1
+            return accountID
+        }.sorted()
+    }
+
     private func run(accountID: String, attempt: ResetRedemptionAttempt,
                      operation: @escaping @MainActor (ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult,
                      refresh: @escaping @MainActor () async -> Void) async {
+        log.notice("reset submission started account=\(accountID) reset=\(attempt.resetId) key=\(attempt.canonicalIdempotencyKey.prefix(8))")
         let taskID = UUID()
         taskIDs[accountID] = taskID
         let task = Task { @MainActor [weak self] in
@@ -84,10 +96,13 @@ final class AccountResetRedemptions {
                 let result = try await operation(attempt)
                 next.resolve(result, key: attempt.idempotencyKey)
             } catch {
-                let unconfirmed = (error as? ResetRedemptionError)?.isUnconfirmed ?? (error is CancellationError)
+                let failure = error as? ResetRedemptionError
+                let unsubmittedRetry = failure?.isUnavailable == true && attempt == next.retryingAttempt
+                let unconfirmed = unsubmittedRetry || (failure?.isUnconfirmed ?? (error is CancellationError))
                 next.fail(error.localizedDescription, key: attempt.idempotencyKey, unconfirmed: unconfirmed)
             }
             guard !Task.isCancelled, taskIDs[accountID] == taskID else { return }
+            log.notice("reset submission finished account=\(accountID) key=\(attempt.canonicalIdempotencyKey.prefix(8)) state=\(next.message ?? "none")")
             if !next.isUnresolved {
                 do { try await store.resolve(accountID: accountID, key: attempt.idempotencyKey) }
                 catch {
@@ -106,7 +121,8 @@ final class AccountResetRedemptions {
         tasks.removeValue(forKey: accountID)?.cancel()
         taskIDs.removeValue(forKey: accountID)
         if let key = states[accountID]?.attempt?.idempotencyKey {
-            states[accountID]?.fail("Reset unconfirmed", key: key, unconfirmed: true)
+            log.notice("reset submission cancelled account=\(accountID) key=\(key.uuidString.lowercased().prefix(8))")
+            states[accountID]?.fail(ResetRedemptionState.unconfirmedMessage, key: key, unconfirmed: true)
         }
     }
 

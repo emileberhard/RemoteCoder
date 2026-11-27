@@ -54,8 +54,13 @@ struct ResetRedemptionAttempt: Codable, Equatable, Sendable {
     let hostID: UUID
     let gatewayAccountID: String
     let accountName: String
+    let createdAt: Date?
 
     var canonicalIdempotencyKey: String { idempotencyKey.uuidString.lowercased() }
+
+    func canResume(now: Date) -> Bool {
+        createdAt.map { now.timeIntervalSince($0) < 600 } ?? false
+    }
 
     func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
@@ -65,6 +70,7 @@ struct ResetRedemptionAttempt: Codable, Equatable, Sendable {
         try values.encode(hostID, forKey: .hostID)
         try values.encode(gatewayAccountID, forKey: .gatewayAccountID)
         try values.encode(accountName, forKey: .accountName)
+        try values.encodeIfPresent(createdAt, forKey: .createdAt)
     }
 }
 
@@ -94,12 +100,19 @@ enum AccountResetMessages {
         }
     }
 
+    static func gatewayUnavailable(code: String?) -> Bool {
+        switch code {
+        case "gateway_stopping", "accounts_busy", "router_unavailable", "router_stopping", "router_key_unavailable",
+             "router_retry_later", "account_management_unavailable": true
+        default: false
+        }
+    }
+
     static func refusal(code: String?) -> String {
         switch code {
         case "reauthorization_required", "reset_credential_missing", "reset_credential_unavailable", "codex_credential_unavailable":
             "Sign-in needed. Ask an agent to reconnect this account."
-        case "gateway_stopping", "accounts_busy", "router_unavailable", "router_stopping", "router_key_unavailable",
-             "router_retry_later", "account_management_unavailable": "Gateway unavailable. Try again shortly."
+        case let code where gatewayUnavailable(code: code): "Gateway unavailable. Try again shortly."
         case "reset_account_changed": "Account changed. Refresh it before using a reset."
         case "noCredit": "No resets left. Refresh this account."
         case "already_used", "alreadyRedeemed": "Reset already used. Refresh this account."
@@ -112,16 +125,21 @@ enum AccountResetMessages {
 }
 
 enum ResetRedemptionError: LocalizedError, Sendable {
-    case unconfirmed(String), rejected(String)
+    case unconfirmed(String), rejected(String), unavailable(String)
 
     var errorDescription: String? {
         switch self {
-        case .unconfirmed(let message), .rejected(let message): message
+        case .unconfirmed(let message), .rejected(let message), .unavailable(let message): message
         }
     }
 
     var isUnconfirmed: Bool {
         if case .unconfirmed = self { return true }
+        return false
+    }
+
+    var isUnavailable: Bool {
+        if case .unavailable = self { return true }
         return false
     }
 }
@@ -142,6 +160,10 @@ enum ResetRedemptionState: Equatable, Sendable {
         }
     }
     var isUnresolved: Bool { attempt != nil }
+    var retryingAttempt: ResetRedemptionAttempt? {
+        if case .retrying(let attempt) = self { return attempt }
+        return nil
+    }
     var isSubmitting: Bool {
         switch self {
         case .submitting, .retrying: true
@@ -169,13 +191,16 @@ enum ResetRedemptionState: Equatable, Sendable {
     }
 
     init(restoring attempt: ResetRedemptionAttempt) {
-        self = .unconfirmed(attempt, "Reset unconfirmed")
+        self = .unconfirmed(attempt, ResetRedemptionState.unconfirmedMessage)
     }
+
+    static let unconfirmedMessage = "Reset not confirmed. Retrying can't use a second reset."
 
     mutating func begin(offer: AccountResetOffer, key: UUID, hostID: UUID, gatewayAccountID: String, accountName: String) -> ResetRedemptionAttempt? {
         guard !isUnresolved else { return nil }
         let attempt = ResetRedemptionAttempt(resetId: offer.id, title: offer.displayTitle, idempotencyKey: key,
-                                             hostID: hostID, gatewayAccountID: gatewayAccountID, accountName: accountName)
+                                             hostID: hostID, gatewayAccountID: gatewayAccountID, accountName: accountName,
+                                             createdAt: .now)
         self = .submitting(attempt)
         return attempt
     }
@@ -202,5 +227,36 @@ enum ResetRedemptionState: Equatable, Sendable {
         else if case .retrying = self {
             self = .retryRefused(attempt, message + " The original outcome is still unknown.")
         } else { self = .failed(message) }
+    }
+}
+
+enum ResetRedemptionFailover {
+    @MainActor
+    static func ranked<Gateway>(_ gateways: [Gateway], preferred: UUID, id: (Gateway) -> UUID,
+                                isConnected: (UUID) -> Bool) -> [Gateway] {
+        func rank(_ gateway: Gateway) -> Int { (isConnected(id(gateway)) ? 2 : 0) + (id(gateway) == preferred ? 1 : 0) }
+        return gateways.enumerated().sorted { left, right in
+            (rank(left.element), right.offset) > (rank(right.element), left.offset)
+        }.map(\.element)
+    }
+
+    @MainActor
+    static func submit<Gateway>(through gateways: [Gateway], name: (Gateway) -> String,
+                                _ send: (Gateway) async throws -> AccountResetRedemptionResult) async throws -> AccountResetRedemptionResult {
+        let log = AppLogger(category: "AccountResets")
+        var failure: ResetRedemptionError?
+        for gateway in gateways {
+            try Task.checkCancellation()
+            do { return try await send(gateway) }
+            catch let error as ResetRedemptionError {
+                log.notice("reset submission through \(name(gateway)) failed: \(error.localizedDescription)")
+                switch error {
+                case .rejected: throw failure?.isUnconfirmed == true ? failure! : error
+                case .unconfirmed: failure = error
+                case .unavailable: if failure?.isUnconfirmed != true { failure = error }
+                }
+            }
+        }
+        throw failure ?? ResetRedemptionError.unavailable("No gateway is available. Try again shortly.")
     }
 }

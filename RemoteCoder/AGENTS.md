@@ -1618,9 +1618,14 @@ entrypoint linked above.
     shows nothing.
   - `AccountDirectory` owns Codex reset redemption; `RouterAccountDirectory`
     owns Claude redemption. Their `AccountResetRedemptions` persists one pending
-    attempt per subscription before submission. Retry retains its host, offer
-    and host-default gateway account ID across restarts; keys serialize as lowercase
-    UUID strings. A definitely refused retry keeps Retry and adds Forget.
+    attempt per subscription before submission. Retry retains its offer, key and
+    host-default gateway account ID across restarts; keys serialize as lowercase
+    UUID strings. `ResetRedemptionFailover` submits through connected gateways
+    first, then the attempt's host, moving on with the same key only when that
+    gateway did not submit or left the outcome unconfirmed; an unconfirmed result
+    is never downgraded to a refusal. Unconfirmed attempts younger than ten
+    minutes resume automatically after account refreshes, at most three times.
+    A definitely refused retry keeps Retry and adds Forget.
     Missing accounts and host changes only cancel work, preserving same-key
     Retry. Forget preserves the unknown outcome in copy. Claude reset
     freshness uses the reset observation, separately from inference usage.

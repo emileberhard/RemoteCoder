@@ -167,7 +167,8 @@ final class ChatWorkspaceModel: LaunchRestoreHost {
                 execution.release()
             }
             return { execution.release() }
-        }) { [targets] in targets.routes(for: $0) }
+        }, routes: { [targets] in targets.routes(for: $0) },
+            isConnected: { [targets] in targets.model(for: $0)?.isGatewayConnected == true })
         self.accountDirectory = accountDirectory
         modelPickerPreferences.onChange = { [weak self] provider, previous in
             self?.applyModelPickerPreferences(for: provider, previousModelVisibility: previous)

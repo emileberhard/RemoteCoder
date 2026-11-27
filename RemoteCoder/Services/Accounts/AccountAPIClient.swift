@@ -109,8 +109,9 @@ actor AccountAPIClient {
     }
 
     private func redemptionRequest(path: String, accountName: String, body: Data) async throws -> AccountResetRedemptionResult {
-        guard let routes = await routes() else { throw AccountServiceError.unavailable(host.displayName) }
-        guard let base = host.gatewayHTTPBaseURL() else { throw AccountServiceError.invalidResponse }
+        guard let routes = await routes(), let base = host.gatewayHTTPBaseURL() else {
+            throw ResetRedemptionError.unavailable(AccountServiceError.unavailable(host.displayName).localizedDescription)
+        }
         var request = URLRequest(url: base.appending(path: path), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 45)
         request.httpShouldHandleCookies = false
         request.httpMethod = "POST"
@@ -124,28 +125,31 @@ actor AccountAPIClient {
             (data, rawResponse) = try await routes.send(request, traffic: .mutation) { try await $1.data(for: $0) }
         } catch {
             if ResetSubmissionCertainty.transport(error) == .unconfirmed {
-                throw ResetRedemptionError.unconfirmed("Reset unconfirmed: \(error.localizedDescription)")
+                throw ResetRedemptionError.unconfirmed(ResetRedemptionState.unconfirmedMessage)
             }
-            throw ResetRedemptionError.rejected(error.localizedDescription)
+            throw ResetRedemptionError.unavailable(error.localizedDescription)
         }
         guard let response = rawResponse as? HTTPURLResponse else {
-            throw ResetRedemptionError.unconfirmed("Reset unconfirmed: invalid gateway response.")
+            throw ResetRedemptionError.unconfirmed(ResetRedemptionState.unconfirmedMessage)
         }
         guard (200..<300).contains(response.statusCode) else {
             let failure = data.count <= 2 * 1_024 * 1_024 ? try? JSONDecoder().decode(RouterFailure.self, from: data) : nil
             if ResetSubmissionCertainty.response(status: response.statusCode, code: failure?.error.code) == .unconfirmed {
-                throw ResetRedemptionError.unconfirmed("Reset unconfirmed")
+                throw ResetRedemptionError.unconfirmed(ResetRedemptionState.unconfirmedMessage)
             }
             let code = failure?.error.code
+            if AccountResetMessages.gatewayUnavailable(code: code) || (code == nil && [404, 503].contains(response.statusCode)) {
+                throw ResetRedemptionError.unavailable(AccountResetMessages.refusal(code: code ?? "account_management_unavailable"))
+            }
             if ["reauthorization_required", "reset_credential_missing", "reset_credential_unavailable", "codex_credential_unavailable"].contains(code ?? "") {
                 throw ResetRedemptionError.rejected(AccountResetMessages.unavailable(code: "reauthorization_required", accountName: accountName))
             }
             throw ResetRedemptionError.rejected(AccountResetMessages.refusal(code: code))
         }
         guard data.count <= 2 * 1_024 * 1_024 else {
-            throw ResetRedemptionError.unconfirmed("Reset unconfirmed: invalid gateway response.")
+            throw ResetRedemptionError.unconfirmed(ResetRedemptionState.unconfirmedMessage)
         }
         do { return try JSONDecoder().decode(AccountResetRedemptionResult.self, from: data) }
-        catch { throw ResetRedemptionError.unconfirmed("Reset unconfirmed: invalid gateway response.") }
+        catch { throw ResetRedemptionError.unconfirmed(ResetRedemptionState.unconfirmedMessage) }
     }
 }
