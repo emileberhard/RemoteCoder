@@ -12,7 +12,7 @@ final class AccountResetRedemptions {
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var taskIDs: [String: UUID] = [:]
     @ObservationIgnored private var hostIDs: Set<UUID>?
-    @ObservationIgnored private var revision = UUID()
+    @ObservationIgnored private(set) var revision = UUID()
     @ObservationIgnored private var resumptions: [UUID: Int] = [:]
     @ObservationIgnored private let log = AppLogger(category: "AccountResets")
 
@@ -54,10 +54,10 @@ final class AccountResetRedemptions {
         await run(accountID: accountID, attempt: attempt, operation: operation, refresh: refresh)
     }
 
-    func resume(now: Date,
+    func resume(now: Date, fence: UUID,
                 operation: @escaping @MainActor (String, ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult,
                 refresh: @escaping @MainActor () async -> Void) {
-        guard isRestored else { return }
+        guard isRestored, revision == fence else { return }
         for accountID in states.keys.sorted() {
             guard case .unconfirmed(let pending, _) = states[accountID], pending.canResume(now: now),
                   resumptions[pending.idempotencyKey, default: 0] < 3,
@@ -110,14 +110,18 @@ final class AccountResetRedemptions {
                 let failure = error as? ResetRedemptionError
                 let unsubmittedRetry = failure?.isUnavailable == true && attempt == next.retryingAttempt
                 let unconfirmed = unsubmittedRetry || (failure?.isUnconfirmed ?? (error is CancellationError))
+                if unsubmittedRetry, let charged = resumptions[attempt.idempotencyKey] {
+                    resumptions[attempt.idempotencyKey] = max(0, charged - 1)
+                }
                 next.fail(error.localizedDescription, key: attempt.idempotencyKey, unconfirmed: unconfirmed)
             }
             guard !Task.isCancelled, taskIDs[accountID] == taskID else { return }
             log.notice("reset submission finished account=\(accountID) key=\(attempt.canonicalIdempotencyKey.prefix(8)) state=\(next.message ?? "none")")
             if !next.isUnresolved {
-                resumptions.removeValue(forKey: attempt.idempotencyKey)
-                do { try await store.resolve(accountID: accountID, key: attempt.idempotencyKey) }
-                catch {
+                do {
+                    try await store.resolve(accountID: accountID, key: attempt.idempotencyKey)
+                    resumptions.removeValue(forKey: attempt.idempotencyKey)
+                } catch {
                     next = .unconfirmed(attempt, "Could not save the reset result: \(error.localizedDescription)")
                 }
             }

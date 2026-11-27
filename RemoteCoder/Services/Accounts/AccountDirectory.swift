@@ -161,15 +161,19 @@ final class AccountDirectory {
                   let client = clients[host.id] else { return nil }
             return (host.host, account, client)
         }
-        guard !gateways.isEmpty else { throw ResetRedemptionError.unavailable("Codex account unavailable.") }
+        guard !gateways.isEmpty else {
+            let inventoried = hosts.contains { $0.error == nil && !$0.accounts.isEmpty && !$0.accounts.contains(where: \.stale) }
+            let message = "Codex account unavailable."
+            throw inventoried ? ResetRedemptionError.rejected(message) : ResetRedemptionError.unavailable(message)
+        }
         let ranked = ResetRedemptionFailover.ranked(gateways, preferred: attempt.hostID, id: \.host.id, isConnected: isConnected)
         return try await ResetRedemptionFailover.submit(through: ranked, name: { $0.host.displayName }) { gateway in
             try await gateway.client.redeemCodexReset(account: gateway.account, attempt: attempt)
         }
     }
 
-    private func resumeResets() {
-        resetRedemptions.resume(now: .now, operation: { [weak self] groupID, attempt in
+    private func resumeResets(fence: UUID) {
+        resetRedemptions.resume(now: .now, fence: fence, operation: { [weak self] groupID, attempt in
             guard let self else { throw CancellationError() }
             return try await submitCodexReset(groupID: groupID, attempt: attempt)
         }, refresh: { [weak self] in await self?.refreshAfterReset() })
@@ -184,12 +188,13 @@ final class AccountDirectory {
     }
 
     func refresh(interactive: Bool = false) async {
-        async let routerRefresh: Void = router.refresh(interactive: interactive)
-        await refreshCodex(interactive: interactive)
-        await routerRefresh
-        guard !Task.isCancelled else { return }
-        resumeResets()
-        router.resumeResets()
+        let claudeFence = router.resetRedemptions.revision
+        await resetRedemptions.restore()
+        resumeResets(fence: resetRedemptions.revision)
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await self.router.refresh(interactive: interactive, resumingResetsWithin: claudeFence) }
+            group.addTask { await self.refreshCodex(interactive: interactive) }
+        }
     }
 
     func refreshCodex(interactive: Bool) async {

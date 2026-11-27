@@ -78,12 +78,12 @@ enum ResetSubmissionCertainty: Equatable, Sendable {
     case refused, unconfirmed, notSubmitted
 
     static func response(status: Int, code: String?) -> Self {
-        guard let code else { return .unconfirmed }
         switch code {
-        case "redeem_unconfirmed" where status == 504: return .unconfirmed
         case "redeem_in_progress", "redeem_unconfirmed_pending": return .notSubmitted
         case let code where AccountResetMessages.gatewayUnavailable(code: code): return .notSubmitted
-        default: return .refused
+        case "account_not_found", "reset_account_unbound", "reset_account_changed", "reset_credential_unavailable",
+             "router_unauthorized", "router_request_refused", "invalid_request": return .refused
+        default: return .unconfirmed
         }
     }
 

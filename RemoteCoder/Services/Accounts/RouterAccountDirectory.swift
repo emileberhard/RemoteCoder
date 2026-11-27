@@ -313,8 +313,10 @@ final class RouterAccountDirectory {
 
     private func submitReset(attempt: ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult {
         let gateways = hosts.compactMap { host in clients[host.id].map { (host: host, client: $0) } }
-        guard accounts.contains(where: { $0.id == attempt.gatewayAccountID }), !gateways.isEmpty else {
-            throw ResetRedemptionError.unavailable("Claude account unavailable.")
+        guard !gateways.isEmpty, accounts.contains(where: { $0.id == attempt.gatewayAccountID }) else {
+            let message = "Claude account unavailable."
+            let removed = !gateways.isEmpty && error == nil && !accounts.isEmpty
+            throw removed ? ResetRedemptionError.rejected(message) : ResetRedemptionError.unavailable(message)
         }
         let ranked = ResetRedemptionFailover.ranked(gateways, preferred: attempt.hostID, id: \.host.id, isConnected: isConnected)
         return try await ResetRedemptionFailover.submit(through: ranked, name: { $0.host.displayName }) { gateway in
@@ -322,8 +324,9 @@ final class RouterAccountDirectory {
         }
     }
 
-    func resumeResets() {
-        resetRedemptions.resume(now: .now, operation: { [weak self] _, attempt in
+    func refresh(interactive: Bool, resumingResetsWithin fence: UUID) async {
+        await refresh(interactive: interactive)
+        resetRedemptions.resume(now: .now, fence: fence, operation: { [weak self] _, attempt in
             guard let self else { throw CancellationError() }
             return try await submitReset(attempt: attempt)
         }, refresh: { [weak self] in await self?.refreshAfterReset() })

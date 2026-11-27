@@ -165,16 +165,21 @@ struct AccountResetTests {
         let redemptions = AccountResetRedemptions(storage: storage, provider: .codex, beginBackgroundExecution: { _ in {} })
         await redemptions.restore()
         var resumed: [String] = []
-        let unreachable: @MainActor (String, ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult = { account, _ in
+        let operation: @MainActor (String, ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult = { account, _ in
             resumed.append(account)
-            throw ResetRedemptionError.unavailable("Gateway unavailable. Try again shortly.")
+            if resumed.count == 1 { throw ResetRedemptionError.unavailable("Gateway unavailable. Try again shortly.") }
+            throw ResetRedemptionError.unconfirmed("Reply lost")
         }
-        for _ in 0..<4 {
-            redemptions.resume(now: now, operation: unreachable, refresh: {})
-            redemptions.resume(now: now, operation: unreachable, refresh: {})
+        let stale = redemptions.revision
+        redemptions.stop()
+        redemptions.resume(now: now, fence: stale, operation: operation, refresh: {})
+        #expect(resumed.isEmpty)
+        for _ in 0..<5 {
+            redemptions.resume(now: now, fence: redemptions.revision, operation: operation, refresh: {})
+            redemptions.resume(now: now, fence: redemptions.revision, operation: operation, refresh: {})
             while redemptions.states.values.contains(where: \.isSubmitting) { await Task.yield() }
         }
-        #expect(resumed == ["codex:recent", "codex:recent", "codex:recent"])
+        #expect(resumed == Array(repeating: "codex:recent", count: 4))
         #expect(redemptions.states["codex:recent"]?.canRetry == true)
         #expect(redemptions.states["codex:recent"]?.canForget == false)
         #expect(!ResetRedemptionAttempt(resetId: "one", title: "Full reset", idempotencyKey: UUID(), hostID: hostID,
@@ -337,7 +342,7 @@ struct AccountResetTests {
 
     @Test(arguments: [
         (504, "redeem_unconfirmed", ResetSubmissionCertainty.unconfirmed),
-        (409, "redeem_unconfirmed", .refused),
+        (409, "redeem_unconfirmed", .unconfirmed),
         (409, "redeem_in_progress", .notSubmitted),
         (409, "redeem_unconfirmed_pending", .notSubmitted),
         (404, "account_not_found", .refused),
@@ -350,8 +355,9 @@ struct AccountResetTests {
         (503, "gateway_stopping", .notSubmitted),
         (503, "router_retry_later", .notSubmitted),
         (502, "router_request_refused", .refused),
-        (500, "future_code", .refused),
-        (504, "future_code", .refused),
+        (500, "future_code", .unconfirmed),
+        (504, "upstream_timeout", .unconfirmed),
+        (400, "invalid_request", .refused),
         (504, nil, .unconfirmed),
         (503, nil, .unconfirmed),
         (404, nil, .unconfirmed)

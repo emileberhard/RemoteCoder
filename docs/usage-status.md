@@ -169,12 +169,15 @@ on gateway restart. Malformed reset data affects only that account's resets.
 A redemption uses one idempotency key for the exact account and offer. The
 gateway submits once; a known outcome remains known even if the follow-up
 refresh fails. The app classifies every failure as not submitted, unconfirmed
-or refused (`ResetSubmissionCertainty`). 504 `redeem_unconfirmed`, a response
-without a gateway error body and a possibly submitted transport failure are
-unconfirmed. Connect failures and the gateway's pre-dispatch codes
-(`redeem_in_progress`, `redeem_unconfirmed_pending` and the gateway-unavailable
-codes, `router_retry_later` included) mean this call submitted nothing. Other
-gateway error responses are definite refusals. After a timeout or connection loss following submission, retrying the same key
+or refused (`ResetSubmissionCertainty`). Connect failures and the gateway's
+pre-dispatch codes (`redeem_in_progress`, `redeem_unconfirmed_pending` and the
+gateway-unavailable codes, `router_retry_later` included) mean this call
+submitted nothing. Only the gateway's refusal codes (`account_not_found`,
+`reset_account_unbound`, `reset_account_changed`, `reset_credential_unavailable`,
+`router_unauthorized`, `router_request_refused`, `invalid_request`) are
+definite refusals. Every other response, including 504 `redeem_unconfirmed`,
+unknown codes and bodies without a gateway error, and a possibly submitted
+transport failure is unconfirmed. After a timeout or connection loss following submission, retrying the same key
 through either host is safe: configured routes use the same account owner and the
 providers deduplicate by key. A fresh attempt uses a new key.
 
@@ -218,8 +221,10 @@ reached the gateway. Codex uses `default-codex`, including retries restored from
 retired enrollment endpoints, without a refresh precheck.
 
 An unconfirmed attempt created within the last ten minutes resumes by itself
-with the same key after each foreground account refresh (never the refresh that
-follows an outcome), at most three times per launch,
+with the same key on each foreground account refresh (never the refresh that
+follows an outcome): Codex before its host reads, from cached inventory, and
+Claude after its router read. Retries that may have submitted are limited to
+three per launch; one that no gateway submitted does not count,
 so an app restart or connection loss finishes the redemption without a second
 credit. Older attempts and attempts saved before creation times were recorded
 wait for Retry. A retry that no gateway submitted leaves the attempt unconfirmed
@@ -227,7 +232,9 @@ rather than turning it into a refusal. The app log records each submission,
 each gateway that failed it, and its outcome.
 
 A fresh attempt that every gateway left unsubmitted fails and frees the offer;
-`reset_account_changed` and other definite refusals do too. An unconfirmed
+`reset_account_changed` and other definite refusals do too. A retry whose
+account is missing from a loaded inventory is refused and offers Forget; while
+inventory is still unknown it stays unconfirmed. An unconfirmed
 attempt offers Retry and blocks another reset. A definitely refused retry keeps same-key Retry available and adds
 Forget attempt. Account absence, reconnection and host configuration changes
 cancel an in-flight call while retaining same-key Retry; they do not decide its
