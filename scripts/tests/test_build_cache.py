@@ -1864,6 +1864,10 @@ class DependencySeedTests(unittest.TestCase):
             ):
                 package = folder / "host-daemon-rs"
                 (package / "src").mkdir(parents=True)
+                shutil.copy2(
+                    Path(__file__).resolve().parents[2] / "rust-toolchain.toml",
+                    folder / "rust-toolchain.toml",
+                )
                 (package / "Cargo.toml").write_text(
                     '[package]\nname="remote-coder-codex-gateway"\nversion="0.0.0"\nedition="2024"\n'
                     "[dependencies]\nseed-dependency={path="
