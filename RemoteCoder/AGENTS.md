@@ -1622,9 +1622,10 @@ entrypoint linked above.
     host-default gateway account ID across restarts; keys serialize as lowercase
     UUID strings. `ResetRedemptionFailover` submits through connected gateways
     first, then the attempt's host, moving on with the same key only when that
-    gateway did not submit or left the outcome unconfirmed; an unconfirmed result
-    is never downgraded to a refusal. Unconfirmed attempts younger than ten
-    minutes resume automatically after account refreshes, at most three times.
+    gateway submitted nothing or left the outcome unconfirmed
+    (`ResetSubmissionCertainty`); a later refusal never downgrades an unconfirmed
+    result. `AccountResetRedemptions.resume` admits unconfirmed attempts younger
+    than ten minutes after foreground account refreshes, at most three times.
     A definitely refused retry keeps Retry and adds Forget.
     Missing accounts and host changes only cancel work, preserving same-key
     Retry. Forget preserves the unknown outcome in copy. Claude reset

@@ -59,7 +59,7 @@ struct ResetRedemptionAttempt: Codable, Equatable, Sendable {
     var canonicalIdempotencyKey: String { idempotencyKey.uuidString.lowercased() }
 
     func canResume(now: Date) -> Bool {
-        createdAt.map { now.timeIntervalSince($0) < 600 } ?? false
+        createdAt.map { (0..<600).contains(now.timeIntervalSince($0)) } ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -75,15 +75,21 @@ struct ResetRedemptionAttempt: Codable, Equatable, Sendable {
 }
 
 enum ResetSubmissionCertainty: Equatable, Sendable {
-    case refused, unconfirmed
+    case refused, unconfirmed, notSubmitted
 
     static func response(status: Int, code: String?) -> Self {
-        status == 504 && code == "redeem_unconfirmed" ? .unconfirmed : .refused
+        guard let code else { return .unconfirmed }
+        switch code {
+        case "redeem_unconfirmed" where status == 504: return .unconfirmed
+        case "redeem_in_progress", "redeem_unconfirmed_pending": return .notSubmitted
+        case let code where AccountResetMessages.gatewayUnavailable(code: code): return .notSubmitted
+        default: return .refused
+        }
     }
 
     static func transport(_ error: any Error) -> Self {
         guard let error = error as? URLError else { return .unconfirmed }
-        if GatewayRoute.neverReachedGateway(error) { return .refused }
+        if GatewayRoute.neverReachedGateway(error) { return .notSubmitted }
         switch error.code {
         case .badURL, .unsupportedURL: return .refused
         default: return .unconfirmed
@@ -126,6 +132,14 @@ enum AccountResetMessages {
 
 enum ResetRedemptionError: LocalizedError, Sendable {
     case unconfirmed(String), rejected(String), unavailable(String)
+
+    init(_ certainty: ResetSubmissionCertainty, message: String) {
+        switch certainty {
+        case .unconfirmed: self = .unconfirmed(ResetRedemptionState.unconfirmedMessage)
+        case .notSubmitted: self = .unavailable(message)
+        case .refused: self = .rejected(message)
+        }
+    }
 
     var errorDescription: String? {
         switch self {
@@ -244,19 +258,27 @@ enum ResetRedemptionFailover {
     static func submit<Gateway>(through gateways: [Gateway], name: (Gateway) -> String,
                                 _ send: (Gateway) async throws -> AccountResetRedemptionResult) async throws -> AccountResetRedemptionResult {
         let log = AppLogger(category: "AccountResets")
-        var failure: ResetRedemptionError?
-        for gateway in gateways {
+        var possiblySubmitted = false
+        var unavailable: ResetRedemptionError?
+        gateways: for gateway in gateways {
             try Task.checkCancellation()
-            do { return try await send(gateway) }
-            catch let error as ResetRedemptionError {
+            do {
+                let result = try await send(gateway)
+                guard possiblySubmitted, result.outcome == .refused else { return result }
+                log.notice("reset submission through \(name(gateway)) refused after an unconfirmed submission")
+                break gateways
+            } catch let error as ResetRedemptionError {
                 log.notice("reset submission through \(name(gateway)) failed: \(error.localizedDescription)")
                 switch error {
-                case .rejected: throw failure?.isUnconfirmed == true ? failure! : error
-                case .unconfirmed: failure = error
-                case .unavailable: if failure?.isUnconfirmed != true { failure = error }
+                case .rejected:
+                    if possiblySubmitted { break gateways }
+                    throw error
+                case .unconfirmed: possiblySubmitted = true
+                case .unavailable: unavailable = error
                 }
             }
         }
-        throw failure ?? ResetRedemptionError.unavailable("No gateway is available. Try again shortly.")
+        if possiblySubmitted { throw ResetRedemptionError.unconfirmed(ResetRedemptionState.unconfirmedMessage) }
+        throw unavailable ?? ResetRedemptionError.unavailable("No gateway is available. Try again shortly.")
     }
 }

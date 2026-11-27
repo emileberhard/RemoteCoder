@@ -168,19 +168,23 @@ on gateway restart. Malformed reset data affects only that account's resets.
 
 A redemption uses one idempotency key for the exact account and offer. The
 gateway submits once; a known outcome remains known even if the follow-up
-refresh fails. Only 504 `redeem_unconfirmed` means the gateway could not confirm
-submission's outcome. Other gateway error responses are definite refusals.
-After a timeout or connection loss following submission, retrying the same key
+refresh fails. The app classifies every failure as not submitted, unconfirmed
+or refused (`ResetSubmissionCertainty`). 504 `redeem_unconfirmed`, a response
+without a gateway error body and a possibly submitted transport failure are
+unconfirmed. Connect failures and the gateway's pre-dispatch codes
+(`redeem_in_progress`, `redeem_unconfirmed_pending` and the gateway-unavailable
+codes, `router_retry_later` included) mean this call submitted nothing. Other
+gateway error responses are definite refusals. After a timeout or connection loss following submission, retrying the same key
 through either host is safe: configured routes use the same account owner and the
 providers deduplicate by key. A fresh attempt uses a new key.
 
 Every attempt is submitted through the configured gateways in order: connected
 ones first, then the attempt's own host. It moves to the next gateway with the
-same key when the request never reached a gateway, the gateway could not reach
-the router (a gateway-unavailable refusal or 404/503 without a router error), or
-the outcome is unconfirmed. A definite refusal stops there, except that once any
-gateway left the outcome unconfirmed the attempt stays unconfirmed. Codex
-refreshes its account after an effective or unconfirmed outcome. Claude starts
+same key when that gateway submitted nothing or left the outcome unconfirmed.
+A definite refusal stops there. Once any gateway left the outcome unconfirmed,
+a later refusal, thrown or a `refused` outcome, leaves the attempt unconfirmed.
+Codex refreshes every configured host after an effective or unconfirmed
+outcome. Claude starts
 a Claude-only router refresh after returning the outcome. Refresh completion
 can lag the response; the gateway does not invent refilled usage.
 
@@ -214,18 +218,17 @@ reached the gateway. Codex uses `default-codex`, including retries restored from
 retired enrollment endpoints, without a refresh precheck.
 
 An unconfirmed attempt created within the last ten minutes resumes by itself
-with the same key after each account refresh, at most three times per launch,
+with the same key after each foreground account refresh (never the refresh that
+follows an outcome), at most three times per launch,
 so an app restart or connection loss finishes the redemption without a second
 credit. Older attempts and attempts saved before creation times were recorded
 wait for Retry. A retry that no gateway submitted leaves the attempt unconfirmed
 rather than turning it into a refusal. The app log records each submission,
 each gateway that failed it, and its outcome.
 
-Only gateway 504 `redeem_unconfirmed` or a possibly submitted transport failure
-makes a fresh attempt unconfirmed. Other HTTP errors are definite refusals,
-including `redeem_in_progress`, `redeem_unconfirmed_pending` and
-`reset_account_changed`. An unconfirmed attempt offers Retry and blocks another
-reset. A definitely refused retry keeps same-key Retry available and adds
+A fresh attempt that every gateway left unsubmitted fails and frees the offer;
+`reset_account_changed` and other definite refusals do too. An unconfirmed
+attempt offers Retry and blocks another reset. A definitely refused retry keeps same-key Retry available and adds
 Forget attempt. Account absence, reconnection and host configuration changes
 cancel an in-flight call while retaining same-key Retry; they do not decide its
 outcome. A retry to a missing account or host can then offer Forget.

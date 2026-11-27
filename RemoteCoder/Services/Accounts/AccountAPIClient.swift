@@ -124,27 +124,18 @@ actor AccountAPIClient {
         do {
             (data, rawResponse) = try await routes.send(request, traffic: .mutation) { try await $1.data(for: $0) }
         } catch {
-            if ResetSubmissionCertainty.transport(error) == .unconfirmed {
-                throw ResetRedemptionError.unconfirmed(ResetRedemptionState.unconfirmedMessage)
-            }
-            throw ResetRedemptionError.unavailable(error.localizedDescription)
+            throw ResetRedemptionError(ResetSubmissionCertainty.transport(error), message: error.localizedDescription)
         }
         guard let response = rawResponse as? HTTPURLResponse else {
             throw ResetRedemptionError.unconfirmed(ResetRedemptionState.unconfirmedMessage)
         }
         guard (200..<300).contains(response.statusCode) else {
             let failure = data.count <= 2 * 1_024 * 1_024 ? try? JSONDecoder().decode(RouterFailure.self, from: data) : nil
-            if ResetSubmissionCertainty.response(status: response.statusCode, code: failure?.error.code) == .unconfirmed {
-                throw ResetRedemptionError.unconfirmed(ResetRedemptionState.unconfirmedMessage)
-            }
             let code = failure?.error.code
-            if AccountResetMessages.gatewayUnavailable(code: code) || (code == nil && [404, 503].contains(response.statusCode)) {
-                throw ResetRedemptionError.unavailable(AccountResetMessages.refusal(code: code ?? "account_management_unavailable"))
-            }
-            if ["reauthorization_required", "reset_credential_missing", "reset_credential_unavailable", "codex_credential_unavailable"].contains(code ?? "") {
-                throw ResetRedemptionError.rejected(AccountResetMessages.unavailable(code: "reauthorization_required", accountName: accountName))
-            }
-            throw ResetRedemptionError.rejected(AccountResetMessages.refusal(code: code))
+            let message = ["reauthorization_required", "reset_credential_missing", "reset_credential_unavailable", "codex_credential_unavailable"]
+                .contains(code ?? "") ? AccountResetMessages.unavailable(code: "reauthorization_required", accountName: accountName)
+                : AccountResetMessages.refusal(code: code)
+            throw ResetRedemptionError(ResetSubmissionCertainty.response(status: response.statusCode, code: code), message: message)
         }
         guard data.count <= 2 * 1_024 * 1_024 else {
             throw ResetRedemptionError.unconfirmed(ResetRedemptionState.unconfirmedMessage)

@@ -161,7 +161,7 @@ final class AccountDirectory {
                   let client = clients[host.id] else { return nil }
             return (host.host, account, client)
         }
-        guard !gateways.isEmpty else { throw AccountServiceError.rejected("Codex account unavailable.") }
+        guard !gateways.isEmpty else { throw ResetRedemptionError.unavailable("Codex account unavailable.") }
         let ranked = ResetRedemptionFailover.ranked(gateways, preferred: attempt.hostID, id: \.host.id, isConnected: isConnected)
         return try await ResetRedemptionFailover.submit(through: ranked, name: { $0.host.displayName }) { gateway in
             try await gateway.client.redeemCodexReset(account: gateway.account, attempt: attempt)
@@ -169,26 +169,27 @@ final class AccountDirectory {
     }
 
     private func resumeResets() {
-        for groupID in resetRedemptions.claimResumable(now: .now) {
-            Task { [weak self] in await self?.retryReset(groupID: groupID) }
-        }
+        resetRedemptions.resume(now: .now, operation: { [weak self] groupID, attempt in
+            guard let self else { throw CancellationError() }
+            return try await submitCodexReset(groupID: groupID, attempt: attempt)
+        }, refresh: { [weak self] in await self?.refreshAfterReset() })
     }
 
     private func refreshAfterReset() async {
-        let ids = hosts.map(\.id)
-        for hostID in ids {
+        for hostID in hosts.map(\.id) {
             tasks.removeValue(forKey: hostID)?.cancel()
             taskIDs.removeValue(forKey: hostID)
         }
-        await withTaskGroup(of: Void.self) { group in
-            for id in ids { group.addTask { await self.refresh(hostID: id, interactive: true) } }
-        }
+        await refreshCodex(interactive: true)
     }
 
     func refresh(interactive: Bool = false) async {
         async let routerRefresh: Void = router.refresh(interactive: interactive)
         await refreshCodex(interactive: interactive)
         await routerRefresh
+        guard !Task.isCancelled else { return }
+        resumeResets()
+        router.resumeResets()
     }
 
     func refreshCodex(interactive: Bool) async {
@@ -200,7 +201,6 @@ final class AccountDirectory {
                 for id in batch { group.addTask { await self.refresh(hostID: id, interactive: interactive) } }
             }
         }
-        resumeResets()
     }
 
     func refresh(hostID: UUID, interactive: Bool = false) async {

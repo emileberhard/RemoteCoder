@@ -170,7 +170,6 @@ final class RouterAccountDirectory {
             if succeeded {
                 error = nil
                 resetRedemptions.retainAccounts(Set(accounts.map(\.id)))
-                resumeResets()
             }
             else {
                 respondingHostID = nil
@@ -315,7 +314,7 @@ final class RouterAccountDirectory {
     private func submitReset(attempt: ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult {
         let gateways = hosts.compactMap { host in clients[host.id].map { (host: host, client: $0) } }
         guard accounts.contains(where: { $0.id == attempt.gatewayAccountID }), !gateways.isEmpty else {
-            throw AccountServiceError.rejected("Claude account unavailable.")
+            throw ResetRedemptionError.unavailable("Claude account unavailable.")
         }
         let ranked = ResetRedemptionFailover.ranked(gateways, preferred: attempt.hostID, id: \.host.id, isConnected: isConnected)
         return try await ResetRedemptionFailover.submit(through: ranked, name: { $0.host.displayName }) { gateway in
@@ -323,10 +322,11 @@ final class RouterAccountDirectory {
         }
     }
 
-    private func resumeResets() {
-        for accountID in resetRedemptions.claimResumable(now: .now) {
-            Task { [weak self] in await self?.retryReset(accountID: accountID) }
-        }
+    func resumeResets() {
+        resetRedemptions.resume(now: .now, operation: { [weak self] _, attempt in
+            guard let self else { throw CancellationError() }
+            return try await submitReset(attempt: attempt)
+        }, refresh: { [weak self] in await self?.refreshAfterReset() })
     }
 
     private func refreshAfterReset() async {

@@ -54,18 +54,29 @@ final class AccountResetRedemptions {
         await run(accountID: accountID, attempt: attempt, operation: operation, refresh: refresh)
     }
 
-    func claimResumable(now: Date) -> [String] {
-        states.compactMap { accountID, state in
-            guard case .unconfirmed(let attempt, _) = state, attempt.canResume(now: now),
-                  resumptions[attempt.idempotencyKey, default: 0] < 3 else { return nil }
+    func resume(now: Date,
+                operation: @escaping @MainActor (String, ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult,
+                refresh: @escaping @MainActor () async -> Void) {
+        guard isRestored else { return }
+        for accountID in states.keys.sorted() {
+            guard case .unconfirmed(let pending, _) = states[accountID], pending.canResume(now: now),
+                  resumptions[pending.idempotencyKey, default: 0] < 3,
+                  let attempt = states[accountID]?.retry() else { continue }
             resumptions[attempt.idempotencyKey, default: 0] += 1
-            return accountID
-        }.sorted()
+            start(accountID: accountID, attempt: attempt, operation: { try await operation(accountID, $0) }, refresh: refresh)
+        }
     }
 
     private func run(accountID: String, attempt: ResetRedemptionAttempt,
                      operation: @escaping @MainActor (ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult,
                      refresh: @escaping @MainActor () async -> Void) async {
+        await start(accountID: accountID, attempt: attempt, operation: operation, refresh: refresh).value
+    }
+
+    @discardableResult
+    private func start(accountID: String, attempt: ResetRedemptionAttempt,
+                       operation: @escaping @MainActor (ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult,
+                       refresh: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
         log.notice("reset submission started account=\(accountID) reset=\(attempt.resetId) key=\(attempt.canonicalIdempotencyKey.prefix(8))")
         let taskID = UUID()
         taskIDs[accountID] = taskID
@@ -104,6 +115,7 @@ final class AccountResetRedemptions {
             guard !Task.isCancelled, taskIDs[accountID] == taskID else { return }
             log.notice("reset submission finished account=\(accountID) key=\(attempt.canonicalIdempotencyKey.prefix(8)) state=\(next.message ?? "none")")
             if !next.isUnresolved {
+                resumptions.removeValue(forKey: attempt.idempotencyKey)
                 do { try await store.resolve(accountID: accountID, key: attempt.idempotencyKey) }
                 catch {
                     next = .unconfirmed(attempt, "Could not save the reset result: \(error.localizedDescription)")
@@ -114,7 +126,7 @@ final class AccountResetRedemptions {
             await refresh()
         }
         tasks[accountID] = task
-        await task.value
+        return task
     }
 
     private func cancel(accountID: String) {

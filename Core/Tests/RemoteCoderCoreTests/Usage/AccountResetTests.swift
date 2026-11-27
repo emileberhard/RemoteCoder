@@ -84,7 +84,7 @@ struct AccountResetTests {
         #expect(!undated.canResume(now: .now))
     }
 
-    @Test @MainActor func failoverSkipsGatewaysThatNeverSubmittedAndKeepsTheKey() async throws {
+    @Test @MainActor func failoverSkipsGatewaysThatNeverSubmitted() async throws {
         var tried: [String] = []
         let result = try await ResetRedemptionFailover.submit(through: ["book", "linux", "mini"], name: { $0 }) { gateway in
             tried.append(gateway)
@@ -99,11 +99,16 @@ struct AccountResetTests {
     }
 
     @Test @MainActor func failoverNeverTurnsAPossibleSubmissionIntoARefusal() async {
-        let pending = await failure(["book", "mini"]) { gateway in
+        let thrown = await failure(["book", "mini"]) { gateway in
             if gateway == "book" { throw ResetRedemptionError.unconfirmed("Reply lost") }
             throw ResetRedemptionError.rejected("Another reset is pending.")
         }
-        #expect(pending?.isUnconfirmed == true)
+        #expect(thrown?.isUnconfirmed == true)
+        let answered = await failure(["book", "mini"]) { gateway in
+            if gateway == "book" { throw ResetRedemptionError.unconfirmed("Reply lost") }
+            return .init(outcome: .refused, reason: "already_used")
+        }
+        #expect(answered?.isUnconfirmed == true)
         var tried: [String] = []
         let refused = await failure(["book", "mini"]) { gateway in
             tried.append(gateway)
@@ -113,6 +118,25 @@ struct AccountResetTests {
         #expect(tried == ["book"])
         let unreachable = await failure(["book", "mini"]) { _ in throw ResetRedemptionError.unavailable("Offline") }
         #expect(unreachable?.isUnavailable == true)
+    }
+
+    @Test @MainActor func aLostReplyThenARefusalKeepsTheSavedKey() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storage = HostStorage(root: root)
+        let redemptions = AccountResetRedemptions(storage: storage, provider: .claude, beginBackgroundExecution: { _ in {} })
+        var keys: Set<String> = []
+        await redemptions.redeem(accountID: "claude-one", accountName: "One", hostID: hostID, gatewayAccountID: "claude-one",
+                                 offer: offer("one"), operation: { attempt in
+            try await ResetRedemptionFailover.submit(through: ["book", "mini"], name: { $0 }) { gateway in
+                keys.insert(attempt.canonicalIdempotencyKey + "|" + attempt.resetId)
+                if gateway == "book" { throw ResetRedemptionError.unconfirmed("Reply lost") }
+                return .init(outcome: .refused, reason: "already_used")
+            }
+        }, refresh: {})
+        #expect(keys.count == 1)
+        #expect(redemptions.states["claude-one"]?.canRetry == true)
+        #expect(try await ResetRedemptionStore(storage: storage, provider: .claude).load()["claude-one"] != nil)
     }
 
     @Test @MainActor func connectedGatewaysAreTriedFirstThenTheAttemptsOwnHost() {
@@ -140,15 +164,22 @@ struct AccountResetTests {
                              accountID: "codex:undated")
         let redemptions = AccountResetRedemptions(storage: storage, provider: .codex, beginBackgroundExecution: { _ in {} })
         await redemptions.restore()
-        #expect(redemptions.claimResumable(now: now) == ["codex:recent"])
-        await redemptions.retry(accountID: "codex:recent", operation: { _ in
+        var resumed: [String] = []
+        let unreachable: @MainActor (String, ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult = { account, _ in
+            resumed.append(account)
             throw ResetRedemptionError.unavailable("Gateway unavailable. Try again shortly.")
-        }, refresh: {})
+        }
+        for _ in 0..<4 {
+            redemptions.resume(now: now, operation: unreachable, refresh: {})
+            redemptions.resume(now: now, operation: unreachable, refresh: {})
+            while redemptions.states.values.contains(where: \.isSubmitting) { await Task.yield() }
+        }
+        #expect(resumed == ["codex:recent", "codex:recent", "codex:recent"])
         #expect(redemptions.states["codex:recent"]?.canRetry == true)
         #expect(redemptions.states["codex:recent"]?.canForget == false)
-        #expect(redemptions.claimResumable(now: now) == ["codex:recent"])
-        #expect(redemptions.claimResumable(now: now) == ["codex:recent"])
-        #expect(redemptions.claimResumable(now: now).isEmpty)
+        #expect(!ResetRedemptionAttempt(resetId: "one", title: "Full reset", idempotencyKey: UUID(), hostID: hostID,
+                                        gatewayAccountID: "default-codex", accountName: "One",
+                                        createdAt: now.addingTimeInterval(60)).canResume(now: now))
         #expect(redemptions.states["codex:undated"]?.canRetry == true)
     }
 
@@ -307,33 +338,35 @@ struct AccountResetTests {
     @Test(arguments: [
         (504, "redeem_unconfirmed", ResetSubmissionCertainty.unconfirmed),
         (409, "redeem_unconfirmed", .refused),
-        (409, "redeem_in_progress", .refused),
-        (409, "redeem_unconfirmed_pending", .refused),
+        (409, "redeem_in_progress", .notSubmitted),
+        (409, "redeem_unconfirmed_pending", .notSubmitted),
         (404, "account_not_found", .refused),
         (409, "reset_account_unbound", .refused),
         (409, "reset_account_changed", .refused),
         (503, "reset_credential_unavailable", .refused),
         (502, "router_unauthorized", .refused),
-        (503, "router_key_unavailable", .refused),
-        (503, "router_unavailable", .refused),
-        (503, "gateway_stopping", .refused),
+        (503, "router_key_unavailable", .notSubmitted),
+        (503, "router_unavailable", .notSubmitted),
+        (503, "gateway_stopping", .notSubmitted),
+        (503, "router_retry_later", .notSubmitted),
         (502, "router_request_refused", .refused),
         (500, "future_code", .refused),
         (504, "future_code", .refused),
-        (504, nil, .refused),
-        (400, nil, .refused)
+        (504, nil, .unconfirmed),
+        (503, nil, .unconfirmed),
+        (404, nil, .unconfirmed)
     ] as [(Int, String?, ResetSubmissionCertainty)])
     func gatewayOwnsSubmissionCertainty(status: Int, code: String?, expected: ResetSubmissionCertainty) {
         #expect(ResetSubmissionCertainty.response(status: status, code: code) == expected)
     }
 
     @Test(arguments: [
-        (URLError.Code.cannotFindHost, ResetSubmissionCertainty.refused),
-        (.cannotConnectToHost, .refused),
-        (.dnsLookupFailed, .refused),
-        (.notConnectedToInternet, .refused),
-        (.secureConnectionFailed, .refused),
-        (.serverCertificateUntrusted, .refused),
+        (URLError.Code.cannotFindHost, ResetSubmissionCertainty.notSubmitted),
+        (.cannotConnectToHost, .notSubmitted),
+        (.dnsLookupFailed, .notSubmitted),
+        (.notConnectedToInternet, .notSubmitted),
+        (.secureConnectionFailed, .notSubmitted),
+        (.serverCertificateUntrusted, .notSubmitted),
         (.badURL, .refused),
         (.unsupportedURL, .refused),
         (.timedOut, .unconfirmed),
