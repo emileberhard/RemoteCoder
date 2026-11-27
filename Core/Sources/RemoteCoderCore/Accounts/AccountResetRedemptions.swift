@@ -12,7 +12,8 @@ final class AccountResetRedemptions {
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var taskIDs: [String: UUID] = [:]
     @ObservationIgnored private var hostIDs: Set<UUID>?
-    @ObservationIgnored private(set) var revision = UUID()
+    @ObservationIgnored private var revision = UUID()
+    @ObservationIgnored private(set) var admission = UUID()
     @ObservationIgnored private let log = AppLogger(category: "AccountResets")
 
     init(storage: HostStorage, provider: AgentProvider, beginBackgroundExecution: @escaping BeginBackgroundExecution) {
@@ -56,7 +57,7 @@ final class AccountResetRedemptions {
     func resume(now: Date, fence: UUID,
                 operation: @escaping @MainActor (String, ResetRedemptionAttempt) async throws -> AccountResetRedemptionResult,
                 refresh: @escaping @MainActor () async -> Void) {
-        guard isRestored, revision == fence, !Task.isCancelled else { return }
+        guard isRestored, admission == fence, !Task.isCancelled else { return }
         for accountID in states.keys.sorted() {
             guard case .unconfirmed(let pending, _) = states[accountID], pending.canResume(now: now),
                   let attempt = states[accountID]?.retry() else { continue }
@@ -134,7 +135,12 @@ final class AccountResetRedemptions {
         }
     }
 
+    func revokeAdmission() {
+        admission = UUID()
+    }
+
     func stop() {
+        revokeAdmission()
         revision = UUID()
         for id in Array(tasks.keys) { cancel(accountID: id) }
     }

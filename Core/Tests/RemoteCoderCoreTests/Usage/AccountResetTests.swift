@@ -170,19 +170,21 @@ struct AccountResetTests {
             if resumed.count == 1 { throw ResetRedemptionError.unavailable("Gateway unavailable. Try again shortly.") }
             throw ResetRedemptionError.unconfirmed("Reply lost")
         }
-        let stale = redemptions.revision
-        redemptions.stop()
-        redemptions.resume(now: now, fence: stale, operation: operation, refresh: {})
-        #expect(redemptions.states["codex:recent"]?.isSubmitting == false)
+        for revoke in [redemptions.revokeAdmission, redemptions.stop] {
+            let stale = redemptions.admission
+            revoke()
+            redemptions.resume(now: now, fence: stale, operation: operation, refresh: {})
+            #expect(redemptions.states["codex:recent"]?.isSubmitting == false)
+        }
         let cancelled = Task { @MainActor in
             withUnsafeCurrentTask { $0?.cancel() }
-            redemptions.resume(now: now, fence: redemptions.revision, operation: operation, refresh: {})
+            redemptions.resume(now: now, fence: redemptions.admission, operation: operation, refresh: {})
         }
         await cancelled.value
         #expect(redemptions.states["codex:recent"]?.isSubmitting == false)
         for _ in 0..<3 {
-            redemptions.resume(now: now, fence: redemptions.revision, operation: operation, refresh: {})
-            redemptions.resume(now: now, fence: redemptions.revision, operation: operation, refresh: {})
+            redemptions.resume(now: now, fence: redemptions.admission, operation: operation, refresh: {})
+            redemptions.resume(now: now, fence: redemptions.admission, operation: operation, refresh: {})
             while redemptions.states.values.contains(where: \.isSubmitting) { await Task.yield() }
         }
         #expect(resumed == Array(repeating: "codex:recent", count: 3))
@@ -359,6 +361,8 @@ struct AccountResetTests {
         (503, "router_key_unavailable", .notSubmitted),
         (503, "router_unavailable", .notSubmitted),
         (503, "gateway_stopping", .notSubmitted),
+        (504, "router_unavailable", .unconfirmed),
+        (429, "accounts_busy", .notSubmitted),
         (503, "router_retry_later", .notSubmitted),
         (502, "router_request_refused", .unconfirmed),
         (504, "account_not_found", .unconfirmed),

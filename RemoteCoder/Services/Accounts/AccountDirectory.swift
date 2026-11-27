@@ -190,8 +190,8 @@ final class AccountDirectory {
     }
 
     func refresh(interactive: Bool = false) async {
-        let codexFence = resetRedemptions.revision
-        let claudeFence = router.resetRedemptions.revision
+        let codexFence = resetRedemptions.admission
+        let claudeFence = router.resetRedemptions.admission
         await resetRedemptions.restore()
         resumeResets(fence: codexFence)
         await withTaskGroup(of: Void.self) { group in
@@ -293,6 +293,8 @@ final class AccountDirectory {
     }
 
     func stopForeground() {
+        resetRedemptions.revokeAdmission()
+        router.resetRedemptions.revokeAdmission()
         router.stopReading()
         foreground?.cancel(); foreground = nil
         for task in tasks.values { task.cancel() }

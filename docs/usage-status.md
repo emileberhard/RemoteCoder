@@ -170,9 +170,9 @@ A redemption uses one idempotency key for the exact account and offer. The
 gateway submits once; a known outcome remains known even if the follow-up
 refresh fails. The app classifies every failure as not submitted, unconfirmed
 or refused (`ResetSubmissionCertainty`). Connect failures and the gateway's
-pre-dispatch codes (`redeem_in_progress`, `redeem_unconfirmed_pending` and the
-gateway-unavailable codes, `router_retry_later` included) mean this call
-submitted nothing, as does 502 `router_unauthorized` (that gateway's own router
+pre-dispatch answers (409 `redeem_in_progress` or `redeem_unconfirmed_pending`,
+429 `accounts_busy` and the 503 gateway-unavailable codes, `router_retry_later`
+included) mean this call submitted nothing, as does 502 `router_unauthorized` (that gateway's own router
 key). Only the gateway's specific refusals (404 `account_not_found`, 409
 `reset_account_unbound` or `reset_account_changed`, 503
 `reset_credential_unavailable`, 400 `invalid_request`) are definite. Every
@@ -223,7 +223,8 @@ retired enrollment endpoints, without a refresh precheck.
 
 An unconfirmed attempt created within the last ten minutes resumes by itself
 with the same key on each foreground account refresh (never the refresh that
-follows an outcome) that was not cancelled or outlived by a stop: Codex before
+follows an outcome) that was not cancelled and started after the last time
+foreground work stopped: Codex before
 and after its host reads, Claude after its router read. A same-key retry cannot
 spend a second credit and the ten-minute window bounds the retries, so an app restart or connection loss finishes the redemption without a second
 credit. Older attempts and attempts saved before creation times were recorded
